@@ -1,0 +1,7 @@
+{
+  "name": "CalAI - Smart Nutrition Tracker",
+  "description": "AI-powered food scanning and nutrition tracking application.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
