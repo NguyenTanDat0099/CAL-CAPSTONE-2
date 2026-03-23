@@ -1,20 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Check, ArrowRight, Flag, Zap, User, ChevronLeft, AlertTriangle, RotateCcw, Info, ArrowLeft, PlusCircle, Heart, Droplets, X } from 'lucide-react';
+import { Check, ArrowRight, Flag, Zap, User, AlertTriangle, RotateCcw, Info, ArrowLeft, PlusCircle, Heart, Droplets, X } from 'lucide-react';
 import { DietItem } from '../types';
-
-type Goal = 'lose' | 'maintain' | 'gain';
-type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active';
-type Gender = 'male' | 'female';
-
-interface UserProfile {
-  goal: Goal;
-  activityLevel: ActivityLevel;
-  gender: Gender;
-  age: number;
-  height: number;
-  weight: number;
-}
+import { UserProfile, Goal, ActivityLevel, Gender } from '../App';
 
 interface DietPlan {
   id: string;
@@ -38,7 +26,7 @@ const dietPlans: DietPlan[] = [
     calories: 2100,
     description: 'Heart-healthy fats and fresh produce. High in Omega-3 and antioxidants.',
     image: 'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?w=1200&h=800&fit=crop',
-    macros: { protein: 15, fats: 35, carbs: 50 },
+    macros: { protein: 79, fats: 82, carbs: 263 },
     suitableFor: ['lose', 'maintain'],
     about: 'The Mediterranean diet focuses on plant-based foods, such as vegetables, fruits, whole grains, legumes and nuts. It replaces butter with healthy fats, such as olive oil and canola oil, and uses herbs and spices instead of salt to flavor foods. This approach emphasizes consuming fish and poultry at least twice a week, while limiting red meat to only a few times a month.'
   },
@@ -48,7 +36,7 @@ const dietPlans: DietPlan[] = [
     calories: 1800,
     description: 'High fat, low carb metabolic state. Perfect for rapid fat loss and energy.',
     image: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=1200&h=800&fit=crop',
-    macros: { protein: 25, fats: 70, carbs: 5 },
+    macros: { protein: 113, fats: 140, carbs: 23 },
     suitableFor: ['lose'],
     about: 'The Ketogenic diet is a very low-carb, high-fat diet that shares many similarities with the Atkins and low-carb diets. It involves drastically reducing carbohydrate intake and replacing it with fat. This reduction in carbs puts your body into a metabolic state called ketosis. When this happens, your body becomes incredibly efficient at burning fat for energy.'
   },
@@ -58,7 +46,7 @@ const dietPlans: DietPlan[] = [
     calories: 1950,
     description: 'Plant-based nutritional excellence. Balanced nutrients for ethical fitness.',
     image: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=1200&h=800&fit=crop',
-    macros: { protein: 20, fats: 25, carbs: 55 },
+    macros: { protein: 98, fats: 54, carbs: 268 },
     suitableFor: ['lose', 'maintain'],
     about: 'A vegan diet contains only plants (such as vegetables, grains, nuts and fruits) and foods made from plants. Vegans do not eat foods that come from animals, including dairy products and eggs. This plan ensures you get all necessary nutrients through a variety of plant-based sources, focusing on high-protein legumes and nutrient-dense greens.'
   },
@@ -68,7 +56,7 @@ const dietPlans: DietPlan[] = [
     calories: 2400,
     description: 'Time-restricted feeding window. Focus on metabolic flexibility and growth.',
     image: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?w=1200&h=800&fit=crop',
-    macros: { protein: 30, fats: 30, carbs: 40 },
+    macros: { protein: 180, fats: 80, carbs: 240 },
     suitableFor: ['gain', 'maintain'],
     about: 'Lean Gains is a popular form of intermittent fasting that involves an 8-hour eating window followed by a 16-hour fast. This approach is designed to maximize muscle growth while minimizing fat gain. It works by optimizing hormone levels and improving insulin sensitivity, making it an effective strategy for body recomposition.'
   }
@@ -78,9 +66,23 @@ interface DietGoalsProps {
   myDiets: DietItem[];
   onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void;
   onRemoveFromMyDiet: (id: string) => void;
+  profile: UserProfile;
+  setProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
+  dailyTarget: number;
+  baseTarget: number;
+  carryOver: number;
 }
 
-export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGoalsProps) {
+export function DietGoals({ 
+  myDiets, 
+  onAddToMyDiet, 
+  onRemoveFromMyDiet,
+  profile,
+  setProfile,
+  dailyTarget,
+  baseTarget,
+  carryOver
+}: DietGoalsProps) {
   const [isOnboarded, setIsOnboarded] = useState<boolean>(() => {
     const saved = localStorage.getItem('calai_onboarded');
     return saved === 'true';
@@ -89,19 +91,6 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
   const [activeTab, setActiveTab] = useState<'all' | 'my'>('all');
   const [showResetWarning, setShowResetWarning] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<DietPlan | DietItem | null>(null);
-
-  const [profile, setProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('calai_profile');
-    return saved ? JSON.parse(saved) : {
-      goal: 'lose',
-      activityLevel: 'sedentary',
-      gender: 'male',
-      age: 25,
-      height: 175,
-      weight: 70,
-    };
-  });
-
   const [errors, setErrors] = useState<{ age?: string; height?: string; weight?: string }>({});
 
   const validate = () => {
@@ -116,14 +105,12 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
   const handleCompleteOnboarding = () => {
     if (validate()) {
       localStorage.setItem('calai_onboarded', 'true');
-      localStorage.setItem('calai_profile', JSON.stringify(profile));
       setIsOnboarded(true);
     }
   };
 
   const handleReset = () => {
     localStorage.removeItem('calai_onboarded');
-    localStorage.removeItem('calai_profile');
     setIsOnboarded(false);
     setShowResetWarning(false);
     setProfile({
@@ -133,6 +120,8 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
       age: 25,
       height: 175,
       weight: 70,
+      targetWeight: 65,
+      startingWeight: 70,
     });
   };
 
@@ -194,9 +183,9 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
             <div className="grid grid-cols-4 gap-6">
               {[
                 { label: 'Energy', value: `${selectedPlan.calories.toLocaleString()} kcal`, sub: 'Daily Target', color: 'bg-brand-orange', icon: <Flame size={20} /> },
-                { label: 'Protein', value: `${macros.protein}%`, sub: 'Building Blocks', color: 'bg-green-500', icon: <Zap size={20} /> },
-                { label: 'Carbs', value: `${macros.carbs}%`, sub: 'Sustained Energy', color: 'bg-yellow-500', icon: <Droplets size={20} /> },
-                { label: 'Fats', value: `${macros.fats}%`, sub: 'Healthy Lipids', color: 'bg-orange-400', icon: <RotateCcw size={20} /> },
+                { label: 'Protein', value: `${macros.protein}g`, sub: 'Building Blocks', color: 'bg-green-500', icon: <Zap size={20} /> },
+                { label: 'Carbs', value: `${macros.carbs}g`, sub: 'Sustained Energy', color: 'bg-yellow-500', icon: <Droplets size={20} /> },
+                { label: 'Fats', value: `${macros.fats}g`, sub: 'Healthy Lipids', color: 'bg-orange-400', icon: <RotateCcw size={20} /> },
               ].map((stat, idx) => (
                 <div key={idx} className="bg-surface-dark rounded-[2rem] p-6 border border-white/5">
                   <div className="flex items-center justify-between mb-6">
@@ -270,31 +259,6 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
 
     const filteredPlans = dietPlans.filter(plan => plan.suitableFor.includes(profile.goal));
     const totalCalories = myDiets.reduce((sum, item) => sum + item.calories, 0);
-    
-    // Calculate Daily Target
-    const calculateDailyTarget = () => {
-      let bmr = 0;
-      if (profile.gender === 'male') {
-        bmr = 10 * profile.weight + 6.25 * profile.height - 5 * profile.age + 5;
-      } else {
-        bmr = 10 * profile.weight + 6.25 * profile.height - 5 * profile.age - 161;
-      }
-
-      const activityFactors = {
-        sedentary: 1.2,
-        light: 1.375,
-        moderate: 1.55,
-        active: 1.725
-      };
-
-      const tdee = bmr * activityFactors[profile.activityLevel];
-      
-      if (profile.goal === 'lose') return Math.round(tdee - 500);
-      if (profile.goal === 'gain') return Math.round(tdee + 500);
-      return Math.round(tdee);
-    };
-
-    const dailyTarget = calculateDailyTarget();
     const progressPercentage = Math.min((totalCalories / dailyTarget) * 100, 100);
 
     return (
@@ -348,15 +312,15 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
                   <div className="grid grid-cols-3 gap-4 pt-6 border-t border-white/5">
                     <div className="text-center">
                       <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Protein</p>
-                      <p className="font-bold">{plan.macros.protein}%</p>
+                      <p className="font-bold">{plan.macros.protein}g</p>
                     </div>
                     <div className="text-center">
                       <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Fats</p>
-                      <p className="font-bold">{plan.macros.fats}%</p>
+                      <p className="font-bold">{plan.macros.fats}g</p>
                     </div>
                     <div className="text-center">
                       <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Carbs</p>
-                      <p className="font-bold">{plan.macros.carbs}%</p>
+                      <p className="font-bold">{plan.macros.carbs}g</p>
                     </div>
                   </div>
                 </div>
@@ -394,15 +358,15 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
                       <div className="grid grid-cols-3 gap-4 pt-6 border-t border-white/5">
                         <div className="text-center">
                           <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Protein</p>
-                          <p className="font-bold">{item.protein}%</p>
+                          <p className="font-bold">{item.protein}g</p>
                         </div>
                         <div className="text-center">
                           <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Fats</p>
-                          <p className="font-bold">{item.fats}%</p>
+                          <p className="font-bold">{item.fats}g</p>
                         </div>
                         <div className="text-center">
                           <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Carbs</p>
-                          <p className="font-bold">{item.carbs}%</p>
+                          <p className="font-bold">{item.carbs}g</p>
                         </div>
                       </div>
                     </div>
@@ -411,14 +375,14 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-20 text-text-muted bg-surface-dark/30 rounded-[3rem] border border-dashed border-white/10">
-                <Utensils size={48} className="mb-4 opacity-20" />
+                <PlusCircle size={48} className="mb-4 opacity-20" />
                 <p className="font-medium">No diets logged yet.</p>
                 <p className="text-sm opacity-60">Start scanning your meals or add from All Diets!</p>
               </div>
             )}
           </div>
         )}
-
+ 
         {/* Quick View & Reset Goal */}
         <div className="fixed bottom-10 right-10 z-40">
           <motion.div 
@@ -458,12 +422,17 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
                 </div>
               </div>
             </div>
-
+ 
             <div className="mt-6 pt-6 border-t border-white/5">
               <div className="flex justify-between text-xs mb-2">
                 <span className="text-text-muted">Daily Target</span>
                 <span className="font-bold">{totalCalories.toLocaleString()} / {dailyTarget.toLocaleString()} kcal</span>
               </div>
+              {carryOver < 0 && (
+                <p className="text-[10px] text-brand-orange font-bold mb-3 opacity-60">
+                  Includes {Math.abs(carryOver)} kcal carry-over debt
+                </p>
+              )}
               <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
                 <motion.div 
                   initial={{ width: 0 }}
@@ -474,7 +443,7 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
             </div>
           </motion.div>
         </div>
-
+ 
         {/* Reset Warning Modal */}
         <AnimatePresence>
           {showResetWarning && (
@@ -569,6 +538,26 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
                   )}
                 </button>
               ))}
+            </div>
+          </section>
+
+          {/* Section 1.5: Target Weight */}
+          <section>
+            <div className="flex items-center gap-3 mb-2">
+              <Flag className="text-brand-orange" size={20} />
+              <h2 className="text-2xl font-bold">What is your target weight?</h2>
+            </div>
+            <p className="text-text-muted mb-8">This helps us track your progress towards your ideal weight.</p>
+            
+            <div className="max-w-xs">
+              <label className="block text-sm font-bold mb-3">Target Weight (kg)</label>
+              <input 
+                type="number" 
+                value={profile.targetWeight}
+                onChange={(e) => setProfile({ ...profile, targetWeight: parseInt(e.target.value) || 0 })}
+                className="w-full bg-surface-dark border border-white/5 rounded-2xl p-4 text-white focus:outline-none focus:border-brand-orange transition-colors"
+                placeholder="65"
+              />
             </div>
           </section>
 
@@ -667,7 +656,10 @@ export function DietGoals({ myDiets, onAddToMyDiet, onRemoveFromMyDiet }: DietGo
                 <input 
                   type="number" 
                   value={profile.weight}
-                  onChange={(e) => setProfile({ ...profile, weight: parseInt(e.target.value) || 0 })}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value) || 0;
+                    setProfile({ ...profile, weight: val, startingWeight: val });
+                  }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.weight ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
                   placeholder="70"
                 />

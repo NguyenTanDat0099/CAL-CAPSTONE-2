@@ -53,8 +53,15 @@ export function Sidebar({ activeTab, onTabChange }: SidebarProps) {
       </nav>
 
       <div className="mt-auto pt-6 border-t border-white/5 space-y-2">
-        <button className="w-full flex items-center gap-3 px-4 py-3 text-text-muted hover:text-white hover:bg-white/5 rounded-xl transition-all">
-          <Settings size={20} />
+        <button 
+          onClick={() => onTabChange('settings')}
+          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+            activeTab === 'settings' 
+              ? 'bg-surface-lighter text-brand-orange shadow-lg shadow-brand-orange/5' 
+              : 'text-text-muted hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Settings size={20} className={activeTab === 'settings' ? 'text-brand-orange' : ''} />
           <span className="font-medium text-sm">Settings</span>
         </button>
         <button className="w-full flex items-center gap-3 px-4 py-3 text-text-muted hover:text-red-400 hover:bg-red-400/5 rounded-xl transition-all">
