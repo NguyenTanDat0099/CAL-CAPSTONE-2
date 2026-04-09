@@ -114,6 +114,8 @@ export function DietGoals({
     setIsOnboarded(false);
     setShowResetWarning(false);
     setProfile({
+      name: 'Nguyen Tan Dat',
+      avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop',
       goal: 'lose',
       activityLevel: 'sedentary',
       gender: 'male',

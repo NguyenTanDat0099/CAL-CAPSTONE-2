@@ -14,9 +14,10 @@ import { motion } from 'motion/react';
 interface SidebarProps {
   activeTab: string;
   onTabChange: (id: string) => void;
+  onLogout: () => void;
 }
 
-export function AdminSidebar({ activeTab, onTabChange }: SidebarProps) {
+export function AdminSidebar({ activeTab, onTabChange, onLogout }: SidebarProps) {
   const navItems = [
     { icon: LayoutDashboard, label: 'Dashboard', id: 'dashboard' },
     { icon: Users, label: 'User Management', id: 'users' },
@@ -63,7 +64,10 @@ export function AdminSidebar({ activeTab, onTabChange }: SidebarProps) {
           <Settings size={20} className={activeTab === 'settings' ? 'text-brand-orange' : ''} />
           <span className="font-medium text-sm">Settings</span>
         </button>
-        <button className="w-full flex items-center gap-3 px-4 py-3 text-text-muted hover:text-red-400 hover:bg-red-400/5 rounded-xl transition-all">
+        <button
+          onClick={onLogout}
+          className="w-full flex items-center gap-3 px-4 py-3 text-text-muted hover:text-red-400 hover:bg-red-400/5 rounded-xl transition-all"
+        >
           <LogOut size={20} />
           <span className="font-medium text-sm">Logout</span>
         </button>

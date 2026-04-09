@@ -22,11 +22,15 @@ const chartData = [
   { name: 'Sun', users: 649, logs: 4300 },
 ];
 
-export default function App() {
-  return <AdminApp />;
+interface AdminAppShellProps {
+  onLogout: () => void;
 }
 
-function AdminApp() {
+export default function App({ onLogout }: AdminAppShellProps) {
+  return <AdminApp onLogout={onLogout} />;
+}
+
+function AdminApp({ onLogout }: AdminAppShellProps) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [profile] = useState<AdminProfile>({
@@ -43,7 +47,7 @@ function AdminApp() {
 
   return (
     <div className="flex min-h-screen bg-bg-dark text-white font-sans antialiased">
-      <AdminSidebar activeTab={activeTab} onTabChange={setActiveTab} />
+      <AdminSidebar activeTab={activeTab} onTabChange={setActiveTab} onLogout={onLogout} />
       
       {/* Global Header */}
       <div className="fixed top-0 right-0 left-64 h-24 px-8 z-40 flex items-center justify-between bg-bg-dark/80 backdrop-blur-md border-b border-white/5">

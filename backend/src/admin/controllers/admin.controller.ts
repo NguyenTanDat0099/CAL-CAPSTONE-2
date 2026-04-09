@@ -5,8 +5,8 @@ import {
   getAllUsersService,
 } from '../services/admin.service';
 
-export const getAdminProfile = (req: Request, res: Response) => {
-  const adminProfile = getAdminProfileService();
+export const getAdminProfile = async (req: Request, res: Response) => {
+  const adminProfile = await getAdminProfileService();
 
   res.status(200).json({
     message: 'Admin profile fetched successfully',
@@ -14,8 +14,8 @@ export const getAdminProfile = (req: Request, res: Response) => {
   });
 };
 
-export const getAdminStats = (req: Request, res: Response) => {
-  const adminStats = getAdminStatsService();
+export const getAdminStats = async (req: Request, res: Response) => {
+  const adminStats = await getAdminStatsService();
 
   res.status(200).json({
     message: 'Admin stats fetched successfully',
@@ -23,8 +23,8 @@ export const getAdminStats = (req: Request, res: Response) => {
   });
 };
 
-export const getAllUsers = (req: Request, res: Response) => {
-  const users = getAllUsersService();
+export const getAllUsers = async (req: Request, res: Response) => {
+  const users = await getAllUsersService();
 
   res.status(200).json({
     message: 'Users fetched successfully',

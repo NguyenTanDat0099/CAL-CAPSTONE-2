@@ -46,6 +46,14 @@ const toTimeAgo = (isoDate: string) => {
   return `${Math.floor(diffHours / 24)}d ago`;
 };
 
+const getAuthHeaders = (includeJson = false) => {
+  const token = localStorage.getItem('calai_token');
+  return {
+    ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
 export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -61,7 +69,9 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
   const [error, setError] = useState('');
 
   const refreshHistory = async () => {
-    const response = await fetch(`${API_BASE_URL}/food-analysis/history`);
+    const response = await fetch(`${API_BASE_URL}/food-analysis/history`, {
+      headers: getAuthHeaders(),
+    });
     const result = await response.json();
     setHistory(result.data ?? []);
   };
@@ -99,7 +109,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     try {
       const response = await fetch(`${API_BASE_URL}/food-analysis/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(true),
         body: JSON.stringify({ imageUrl, source }),
       });
       const result = await response.json();
@@ -161,7 +171,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     try {
       const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/confirm`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(true),
         body: JSON.stringify(form),
       });
       const result = await response.json();
@@ -179,7 +189,10 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/save`, { method: 'POST' });
+      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/save`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Save failed');
       patchActiveResult(result.data);
@@ -205,7 +218,10 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/reanalyze`, { method: 'POST' });
+      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/reanalyze`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Reanalyze failed');
       patchActiveResult(result.data);
@@ -221,7 +237,10 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}`, { method: 'DELETE' });
+      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Delete failed');
       setActiveResult(null);
