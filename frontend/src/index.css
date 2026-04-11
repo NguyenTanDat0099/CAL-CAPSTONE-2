@@ -23,4 +23,21 @@
   .glass-effect {
     @apply bg-white/5 backdrop-blur-xl border border-white/10;
   }
+
+  /* Custom Professional Scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full transition-colors;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-brand-orange/40;
+  }
 }
