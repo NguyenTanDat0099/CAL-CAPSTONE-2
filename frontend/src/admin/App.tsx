@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AdminSidebar } from './components/AdminSidebar';
 import { 
   Bell, X, Search, Users, 
@@ -9,7 +9,9 @@ import {
   AlertTriangle, ChevronRight, Eye, Edit, Trash2,
   Download, Filter, Plus, Save, RefreshCw,
   Clock, Shield, Globe, Mail, Phone, Lock,
-  Settings as SettingsIcon, Flag, Zap, Upload, Server, Cpu
+  Settings as SettingsIcon, Flag, Zap, Upload, Server, Cpu,
+  Ban, ChevronDown, Minus, MessageSquare, ShieldAlert,
+  ChevronUp, BellRing, Smartphone, MessageCircle, Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -18,6 +20,68 @@ import {
   PieChart, Pie, Sector
 } from 'recharts';
 import { AdminProfile, User, Meal, ScanResult } from './types';
+
+// Custom Hooks & Components
+const useClickOutside = (ref: React.RefObject<HTMLElement | null>, handler: () => void) => {
+  useEffect(() => {
+    const listener = (event: MouseEvent) => {
+      if (!ref.current || ref.current.contains(event.target as Node)) return;
+      handler();
+    };
+    document.addEventListener('mousedown', listener);
+    return () => document.removeEventListener('mousedown', listener);
+  }, [ref, handler]);
+};
+
+function CustomSelect({ value, onChange, options }: { value: string, onChange: (val: string) => void, options: { value: string, label: string }[] }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const selectedOption = options.find(o => o.value === value);
+
+  useClickOutside(containerRef, () => setIsOpen(false));
+
+  return (
+    <div className="relative w-full" ref={containerRef}>
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-all text-white shadow-inner shadow-black/20 flex justify-between items-center cursor-pointer group hover:border-white/20"
+      >
+        <span className="text-sm tracking-tight">{selectedOption?.label}</span>
+        <ChevronDown size={18} className={`text-text-muted transition-transform duration-300 ${isOpen ? 'rotate-180 text-brand-orange' : 'group-hover:text-white'}`} />
+      </div>
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.95 }}
+            animate={{ opacity: 1, y: 4, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.95 }}
+            className="absolute top-full left-0 right-0 mt-1 bg-surface-dark border border-white/10 rounded-[2rem] shadow-2xl overflow-hidden z-50 p-2 backdrop-blur-xl"
+          >
+            <div className="max-h-60 overflow-y-auto custom-scrollbar">
+              {options.map((opt) => (
+                <motion.div
+                  key={opt.value}
+                  whileHover={{ x: 4 }}
+                  onClick={() => {
+                    onChange(opt.value);
+                    setIsOpen(false);
+                  }}
+                  className={`px-5 py-3 rounded-2xl cursor-pointer transition-all text-[10px] font-black uppercase tracking-widest mb-1 last:mb-0 ${
+                    value === opt.value 
+                      ? 'bg-brand-orange text-bg-dark shadow-lg shadow-brand-orange/20' 
+                      : 'text-text-muted hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  {opt.label}
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 // Mock Data
 const chartData = [
@@ -69,7 +133,7 @@ export default function App() {
 function AdminApp() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   
   const [profile] = useState<AdminProfile>({
     name: 'Admin User',
@@ -77,7 +141,7 @@ function AdminApp() {
     role: 'Super Admin'
   });
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
@@ -100,10 +164,14 @@ function AdminApp() {
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: -20, x: '-50%' }}
             className={`fixed top-8 left-1/2 z-[200] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border ${
-              toast.type === 'success' ? 'bg-green-500/20 border-green-500/50 text-green-400' : 'bg-red-500/20 border-red-500/50 text-red-400'
+              toast.type === 'success' ? 'bg-green-500/20 border-green-500/50 text-green-400' : 
+              toast.type === 'warning' ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400' :
+              'bg-red-500/20 border-red-500/50 text-red-400'
             } backdrop-blur-md`}
           >
-            {toast.type === 'success' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+            {toast.type === 'success' ? <CheckCircle2 size={18} /> : 
+             toast.type === 'warning' ? <AlertTriangle size={18} /> :
+             <Ban size={18} />}
             <span className="text-sm font-bold uppercase tracking-widest">{toast.message}</span>
           </motion.div>
         )}
@@ -223,10 +291,6 @@ function AdminDashboard() {
           <p className="text-text-muted font-medium font-sans">Real-time system monitoring and user analytics summary.</p>
         </div>
         <div className="flex gap-4">
-          <button className="flex items-center gap-2 px-6 py-3 bg-surface-dark border border-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/5 transition-colors">
-            <Download size={14} />
-            Export Stats
-          </button>
           <button className="flex items-center gap-2 px-6 py-3 bg-brand-orange text-bg-dark rounded-2xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-lg shadow-brand-orange/20">
             <RefreshCw size={14} />
             Refresh
@@ -244,7 +308,7 @@ function AdminDashboard() {
           <div key={i} className="bg-surface-dark border border-white/5 p-6 rounded-[2rem] relative overflow-hidden group cursor-pointer hover:border-brand-orange/20 transition-colors shadow-lg">
             <div className="relative z-10">
               <div className="flex justify-between items-start mb-4">
-                <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-brand-orange group-hover:scale-110 transition-transform">
+                <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-brand-orange group-hover:scale-110 transition-transform shadow-lg">
                   <stat.icon size={24} />
                 </div>
                 <div className={`flex items-center gap-1 text-[10px] font-black px-2 py-1 rounded-lg ${
@@ -397,11 +461,13 @@ function AdminDashboard() {
 }
 
 interface ViewProps {
-  showToast: (msg: string, type?: 'success' | 'error') => void;
+  showToast: (msg: string, type?: 'success' | 'error' | 'warning') => void;
 }
 
 function UserManagement({ showToast }: ViewProps) {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [isEditingUser, setIsEditingUser] = useState<User | null>(null);
+  const [showBanConfirm, setShowBanConfirm] = useState<User | null>(null);
   const [filter, setFilter] = useState('All');
   
   const users: User[] = [
@@ -427,9 +493,9 @@ function UserManagement({ showToast }: ViewProps) {
     },
   ];
 
-  const toggleStatus = (user: User) => {
-    showToast(`Account for ${user.name} has been ${user.status === 'active' ? 'suspended' : 'activated'}.`, user.status === 'active' ? 'error' : 'success');
-    setSelectedUser(null);
+  const handleBan = (user: User) => {
+    showToast(`User ${user.name} has been banned from the system.`, 'warning');
+    setShowBanConfirm(null);
   };
 
   return (
@@ -437,7 +503,7 @@ function UserManagement({ showToast }: ViewProps) {
       <header className="flex justify-between items-end">
         <div>
           <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">USER MANAGEMENT</h1>
-          <p className="text-text-muted font-medium">Manage user profiles, subscriptions, and dietary progress.</p>
+          <p className="text-text-muted font-medium font-sans">Manage user profiles, subscriptions, and dietary progress.</p>
         </div>
         <div className="flex gap-4">
           <div className="flex bg-surface-dark border border-white/5 p-1 rounded-2xl shadow-lg">
@@ -501,9 +567,9 @@ function UserManagement({ showToast }: ViewProps) {
                 </td>
                 <td className="px-8 py-6 text-right">
                   <div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => setSelectedUser(user)} className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-white transition-colors" title="View Details"><Eye size={18} /></button>
-                    <button className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-brand-orange transition-colors" title="Edit Profile"><Edit size={18} /></button>
-                    <button onClick={() => showToast(`User ${user.name} deleted.`, 'error')} className="p-2.5 rounded-xl bg-red-400/10 text-red-400 hover:bg-red-400 hover:text-white transition-all shadow-lg"><Trash2 size={18} /></button>
+                    <button onClick={() => setSelectedUser(user)} className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-white transition-colors shadow-lg" title="View Details"><Eye size={18} /></button>
+                    <button onClick={() => setIsEditingUser(user)} className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-brand-orange transition-colors shadow-lg" title="Edit Profile"><Edit size={18} /></button>
+                    <button onClick={() => setShowBanConfirm(user)} className="p-2.5 rounded-xl bg-red-400/10 text-red-400 hover:bg-red-400 hover:text-white transition-all shadow-lg" title="Ban User Account"><Ban size={18} /></button>
                   </div>
                 </td>
               </tr>
@@ -512,6 +578,7 @@ function UserManagement({ showToast }: ViewProps) {
         </table>
       </div>
 
+      {/* User Details Modal */}
       <AnimatePresence>
         {selectedUser && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
@@ -565,9 +632,103 @@ function UserManagement({ showToast }: ViewProps) {
               </div>
 
               <div className="flex gap-4 pt-4">
-                <button onClick={() => toggleStatus(selectedUser)} className={`flex-1 py-5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${selectedUser.status === 'active' ? 'bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white border border-red-500/20' : 'bg-green-500/10 text-green-400 hover:bg-green-500 hover:text-white border border-green-500/20 shadow-lg'}`}>{selectedUser.status === 'active' ? 'Suspend Account' : 'Activate Account'}</button>
+                <button onClick={() => { setSelectedUser(null); setShowBanConfirm(selectedUser); }} className="flex-1 py-5 bg-red-400/10 text-red-400 border border-red-400/20 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-400 hover:text-white transition-all shadow-lg">Ban User Account</button>
                 <button className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Send Password Reset</button>
-                <button className="px-10 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">Save Changes</button>
+                <button onClick={() => { setSelectedUser(null); setIsEditingUser(selectedUser); }} className="px-10 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">Edit Profile</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit User Modal */}
+      <AnimatePresence>
+        {isEditingUser && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsEditingUser(null)} className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative bg-surface-dark border border-white/10 rounded-[3rem] max-w-2xl w-full shadow-2xl overflow-hidden p-12 space-y-10 shadow-black/50">
+              <div className="flex justify-between items-center">
+                <h2 className="text-3xl font-black italic uppercase tracking-tighter text-white">Edit User Profile</h2>
+                <button onClick={() => setIsEditingUser(null)} className="p-3 rounded-2xl bg-white/5 text-text-muted hover:text-white transition-colors shadow-lg"><X size={24} /></button>
+              </div>
+              
+              <div className="space-y-6">
+                <div className="flex items-center gap-6">
+                  <div className="relative group cursor-pointer shadow-2xl">
+                    <img src={isEditingUser.avatar} className="w-24 h-24 rounded-[2rem] object-cover border-4 border-brand-orange/20" />
+                    <div className="absolute inset-0 bg-black/40 rounded-[2rem] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center shadow-inner"><Camera size={24} className="text-white" /></div>
+                  </div>
+                  <div className="flex-1 space-y-4">
+                    <div className="space-y-2"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Full Name</label><input type="text" defaultValue={isEditingUser.name} className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white shadow-inner shadow-black/20" /></div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Account Role</label>
+                      <CustomSelect 
+                        value={isEditingUser.role} 
+                        onChange={(val) => setIsEditingUser({...isEditingUser, role: val as any})} 
+                        options={[
+                          { value: 'user', label: 'Standard User' },
+                          { value: 'premium', label: 'Premium Subscriber' },
+                          { value: 'admin', label: 'System Admin' }
+                        ]} 
+                      />
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Target Weight (kg)</label>
+                    <div className="relative group">
+                      <input 
+                        type="number" 
+                        defaultValue={isEditingUser.targetWeight} 
+                        onChange={(e) => setIsEditingUser({...isEditingUser, targetWeight: parseInt(e.target.value) || 0})}
+                        className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white shadow-inner shadow-black/20" 
+                      />
+                      <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col opacity-0 group-hover:opacity-100 transition-opacity">
+                        <ChevronUp onClick={() => setIsEditingUser({...isEditingUser, targetWeight: (isEditingUser.targetWeight || 0) + 1})} size={12} className="text-text-muted cursor-pointer hover:text-brand-orange" />
+                        <ChevronDown onClick={() => setIsEditingUser({...isEditingUser, targetWeight: Math.max(0, (isEditingUser.targetWeight || 0) - 1)})} size={12} className="text-text-muted cursor-pointer hover:text-brand-orange" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Dietary Goal</label>
+                    <CustomSelect 
+                      value={isEditingUser.goal || 'maintain'} 
+                      onChange={(val) => setIsEditingUser({...isEditingUser, goal: val as any})} 
+                      options={[
+                        { value: 'lose', label: 'Lose Weight' },
+                        { value: 'maintain', label: 'Maintain' },
+                        { value: 'gain', label: 'Gain Muscle' }
+                      ]} 
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-8 border-t border-white/5 flex gap-4">
+                <button onClick={() => setIsEditingUser(null)} className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Cancel</button>
+                <button onClick={() => { showToast(`User ${isEditingUser.name} profile updated!`); setIsEditingUser(null); }} className="flex-1 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">Save Profile</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Ban Confirmation Modal */}
+      <AnimatePresence>
+        {showBanConfirm && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowBanConfirm(null)} className="absolute inset-0 bg-bg-dark/95 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }} className="relative bg-surface-dark border border-red-500/20 rounded-[3rem] max-w-md w-full shadow-2xl p-10 text-center space-y-8 shadow-red-500/10 shadow-black/50">
+              <div className="w-20 h-20 rounded-3xl bg-red-500/10 flex items-center justify-center text-red-500 mx-auto shadow-inner shadow-red-500/20"><ShieldAlert size={40} /></div>
+              <div>
+                <h3 className="text-2xl font-black italic uppercase tracking-tighter text-white">Restrict User Account?</h3>
+                <p className="text-text-muted font-bold mt-4 leading-relaxed">This will immediately <span className="text-red-400">ban</span> access for <span className="text-white italic">"{showBanConfirm.name}"</span>. You can lift this restriction later from the security panel.</p>
+              </div>
+              <div className="flex gap-4 pt-4">
+                <button onClick={() => setShowBanConfirm(null)} className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Go Back</button>
+                <button onClick={() => handleBan(showBanConfirm)} className="flex-1 py-5 bg-red-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-600 transition-colors shadow-2xl shadow-red-500/30 active:scale-95">Yes, Ban User</button>
               </div>
             </motion.div>
           </div>
@@ -582,6 +743,7 @@ function ContentManagement({ showToast }: ViewProps) {
   const [selectedScan, setSelectedScan] = useState<ScanResult | null>(null);
   const [selectedFood, setSelectedFood] = useState<Meal | null>(null);
   const [isAddingFood, setIsAddingFood] = useState(false);
+  const [isEditingFood, setIsEditingFood] = useState<Meal | null>(null);
 
   const foodItems: Meal[] = [
     { id: '1', name: 'Avocado Toast', calories: 350, protein: 8, carbs: 32, fats: 22, fiber: 12, sugar: 4, category: 'Breakfast', image: 'https://images.unsplash.com/photo-1525351484163-7529414344d8?w=100&h=100&fit=crop', description: 'Whole grain sourdough topped with mashed avocado, chili flakes, and a poached egg.', about: 'A classic breakfast choice providing healthy fats and complex carbohydrates.' },
@@ -605,10 +767,9 @@ function ContentManagement({ showToast }: ViewProps) {
       <header className="flex justify-between items-end">
         <div>
           <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">CONTENT MANAGER</h1>
-          <p className="text-text-muted font-medium">Curate the food database and validate AI recognition logs.</p>
+          <p className="text-text-muted font-medium font-sans">Curate the food database and validate AI recognition logs.</p>
         </div>
         <div className="flex gap-4">
-          <button className="flex items-center gap-2 px-6 py-3 bg-white/5 text-white border border-white/10 font-black rounded-xl hover:bg-white/10 transition-colors uppercase text-[10px] tracking-widest shadow-lg shadow-black/20"><Download size={14} /> EXPORT DATABASE</button>
           <button onClick={() => setIsAddingFood(true)} className="flex items-center gap-2 px-6 py-3 bg-brand-orange text-bg-dark font-black rounded-xl hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20 uppercase text-[10px] tracking-widest"><Plus size={16} /> ADD FOOD ITEM</button>
         </div>
       </header>
@@ -651,16 +812,16 @@ function ContentManagement({ showToast }: ViewProps) {
                   <td className="px-8 py-6"><span className="px-3 py-1 bg-white/5 rounded-lg text-[10px] font-black uppercase tracking-widest text-text-muted border border-white/5">{item.category}</span></td>
                   <td className="px-8 py-6">
                     <div className="flex gap-3 text-[10px] font-black">
-                      <div className="flex flex-col"><span className="text-green-400">P: {item.protein}g</span><div className="w-8 h-1 bg-white/5 rounded-full mt-1 overflow-hidden shadow-inner"><div className="h-full bg-green-400" style={{width: '60%'}} /></div></div>
-                      <div className="flex flex-col"><span className="text-blue-400">C: {item.carbs}g</span><div className="w-8 h-1 bg-white/5 rounded-full mt-1 overflow-hidden shadow-inner"><div className="h-full bg-blue-400" style={{width: '40%'}} /></div></div>
-                      <div className="flex flex-col"><span className="text-yellow-400">F: {item.fats}g</span><div className="w-8 h-1 bg-white/5 rounded-full mt-1 overflow-hidden shadow-inner"><div className="h-full bg-yellow-400" style={{width: '30%'}} /></div></div>
+                      <div className="flex flex-col"><span className="text-green-400 uppercase">P: {item.protein}g</span><div className="w-8 h-1 bg-white/5 rounded-full mt-1 overflow-hidden shadow-inner"><div className="h-full bg-green-400" style={{width: '60%'}} /></div></div>
+                      <div className="flex flex-col"><span className="text-blue-400 uppercase">C: {item.carbs}g</span><div className="w-8 h-1 bg-white/5 rounded-full mt-1 overflow-hidden shadow-inner"><div className="h-full bg-blue-400" style={{width: '40%'}} /></div></div>
+                      <div className="flex flex-col"><span className="text-yellow-400 uppercase">F: {item.fats}g</span><div className="w-8 h-1 bg-white/5 rounded-full mt-1 overflow-hidden shadow-inner"><div className="h-full bg-yellow-400" style={{width: '30%'}} /></div></div>
                     </div>
                   </td>
                   <td className="px-8 py-6 text-right">
                     <div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => setSelectedFood(item)} className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-white transition-colors shadow-lg"><Eye size={18} /></button>
-                      <button className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-brand-orange transition-colors shadow-lg"><Edit size={18} /></button>
-                      <button onClick={() => showToast(`Food "${item.name}" deleted.`, 'error')} className="p-2.5 rounded-xl bg-red-400/10 text-red-400 hover:bg-red-400 hover:text-white transition-all shadow-lg"><Trash2 size={18} /></button>
+                      <button onClick={() => setSelectedFood(item)} className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-white transition-colors shadow-lg" title="View Info"><Eye size={18} /></button>
+                      <button onClick={() => setIsEditingFood(item)} className="p-2.5 rounded-xl bg-white/5 text-text-muted hover:text-brand-orange transition-colors shadow-lg" title="Edit Parameters"><Edit size={18} /></button>
+                      <button onClick={() => showToast(`Food "${item.name}" deleted.`, 'error')} className="p-2.5 rounded-xl bg-red-400/10 text-red-400 hover:bg-red-400 hover:text-white transition-all shadow-lg" title="Delete Entry"><Trash2 size={18} /></button>
                     </div>
                   </td>
                 </tr>
@@ -690,12 +851,12 @@ function ContentManagement({ showToast }: ViewProps) {
                   </td>
                   <td className="px-8 py-6">
                     <div className="flex items-center gap-4">
-                      <div className="flex-1 h-2 w-24 bg-white/5 rounded-full overflow-hidden shadow-inner"><motion.div initial={{ width: 0 }} animate={{ width: `${scan.confidence * 100}%` }} className={`h-full ${scan.confidence > 0.8 ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' : scan.confidence > 0.6 ? 'bg-yellow-400' : 'bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.5)]'}`} /></div>
+                      <div className="flex-1 h-2 w-24 bg-white/5 rounded-full overflow-hidden shadow-inner"><motion.div initial={{ width: 0 }} animate={{ width: `${scan.confidence * 100}%` }} className={`h-full ${scan.confidence > 0.8 ? 'bg-green-400 shadow-[0_0_8px_#4ade80]' : scan.confidence > 0.6 ? 'bg-yellow-400' : 'bg-red-400 shadow-[0_0_8px_#f87171]'}`} /></div>
                       <span className={`text-xs font-black ${scan.confidence > 0.8 ? 'text-green-400' : 'text-red-400'}`}>{Math.round(scan.confidence * 100)}%</span>
                     </div>
                   </td>
                   <td className="px-8 py-6"><span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-2 w-fit ${scan.status === 'verified' ? 'bg-green-400/10 text-green-400 border border-green-400/20' : 'bg-red-400/10 text-red-400 border border-red-400/20'}`}>{scan.status === 'verified' ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />} {scan.status}</span></td>
-                  <td className="px-8 py-6 text-right"><div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => setSelectedScan(scan)} className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors shadow-lg">Review</button></div></td>
+                  <td className="px-8 py-6 text-right"><div className="flex items-center justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={() => setSelectedScan(scan)} className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors shadow-lg border border-white/5">Review</button></div></td>
                 </tr>
               ))}
             </tbody>
@@ -706,26 +867,14 @@ function ContentManagement({ showToast }: ViewProps) {
       {/* Add Food Modal */}
       <AnimatePresence>
         {isAddingFood && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAddingFood(false)} className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md" />
-            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative bg-surface-dark border border-white/10 rounded-[3rem] max-w-2xl w-full shadow-2xl overflow-hidden p-12 space-y-8 shadow-black/50">
-              <div className="flex justify-between items-center mb-2">
-                <h2 className="text-3xl font-black italic uppercase tracking-tighter text-white">Add New Food Item</h2>
-                <button onClick={() => setIsAddingFood(false)} className="p-3 rounded-2xl bg-white/5 text-text-muted hover:text-white transition-colors shadow-lg"><X size={24} /></button>
-              </div>
-              <div className="grid grid-cols-2 gap-6">
-                <div className="space-y-2"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Item Name</label><input type="text" placeholder="e.g. Greek Salad" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors shadow-inner shadow-black/20 text-white" /></div>
-                <div className="space-y-2"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Category</label><select className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors appearance-none shadow-inner shadow-black/20 text-white"><option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Snack</option></select></div>
-              </div>
-              <div className="grid grid-cols-4 gap-4">
-                {[{ l: 'Calories', p: 'kcal' }, { l: 'Protein', p: 'g' }, { l: 'Carbs', p: 'g' }, { l: 'Fats', p: 'g' }].map((f, i) => (
-                  <div key={i} className="space-y-2 text-center"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted">{f.l} ({f.p})</label><input type="number" defaultValue="0" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-4 py-4 font-bold text-center outline-none focus:border-brand-orange transition-colors shadow-inner shadow-black/20 text-white" /></div>
-                ))}
-              </div>
-              <div className="space-y-2"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Image Upload</label><div className="w-full h-32 bg-bg-dark border-2 border-dashed border-white/5 rounded-[2rem] flex flex-col items-center justify-center text-text-muted hover:border-brand-orange/40 hover:text-white transition-all cursor-pointer group shadow-inner shadow-black/20"><Upload size={24} className="mb-2 group-hover:scale-110 transition-transform" /><span className="text-[10px] font-black uppercase tracking-widest">Drop image here or browse</span></div></div>
-              <div className="pt-6 flex gap-4"><button onClick={() => setIsAddingFood(false)} className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Discard</button><button onClick={() => { showToast('Food item added successfully!'); setIsAddingFood(false); }} className="flex-1 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">Create Food Item</button></div>
-            </motion.div>
-          </div>
+          <FoodFormModal onClose={() => setIsAddingFood(false)} onSubmit={(data) => { showToast('Food item created!'); setIsAddingFood(false); }} title="Add New Food Item" />
+        )}
+      </AnimatePresence>
+
+      {/* Edit Food Modal */}
+      <AnimatePresence>
+        {isEditingFood && (
+          <FoodFormModal initialData={isEditingFood} onClose={() => setIsEditingFood(null)} onSubmit={(data) => { showToast(`"${isEditingFood.name}" updated successfully!`); setIsEditingFood(null); }} title="Edit Food Item" />
         )}
       </AnimatePresence>
 
@@ -749,7 +898,7 @@ function ContentManagement({ showToast }: ViewProps) {
         {selectedFood && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedFood(null)} className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md" />
-            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative bg-surface-dark border border-white/10 rounded-[3rem] max-w-2xl w-full shadow-2xl overflow-hidden p-12 space-y-10 shadow-black/50">
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative bg-surface-dark border border-white/10 rounded-[3rem] max-w-2xl w-full shadow-2xl overflow-hidden p-12 space-y-10 shadow-black/50 shadow-black/50 shadow-black/50">
               <div className="flex justify-between items-start">
                 <div className="flex gap-8 items-center"><img src={selectedFood.image} className="w-24 h-24 rounded-[2rem] object-cover border-4 border-brand-orange/20 shadow-xl" /><div><h2 className="text-4xl font-black tracking-tighter uppercase italic text-white">{selectedFood.name}</h2><p className="text-brand-orange text-sm font-black uppercase tracking-[0.2em] mt-1">{selectedFood.category}</p></div></div>
                 <button onClick={() => setSelectedFood(null)} className="p-3 rounded-2xl bg-white/5 text-text-muted hover:text-white transition-colors shadow-lg"><X size={24} /></button>
@@ -760,11 +909,133 @@ function ContentManagement({ showToast }: ViewProps) {
                 ))}
               </div>
               <div className="space-y-4"><h4 className="text-[10px] font-black uppercase tracking-widest text-text-muted">Description</h4><p className="text-sm font-medium leading-relaxed italic text-white/80">{selectedFood.description}</p></div>
-              <div className="pt-8 border-t border-white/5 flex gap-4"><button className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Edit Parameters</button><button onClick={() => setSelectedFood(null)} className="px-12 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">Confirm</button></div>
+              <div className="pt-8 border-t border-white/5 flex gap-4"><button onClick={() => { setSelectedFood(null); setIsEditingFood(selectedFood); }} className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Edit Parameters</button><button onClick={() => setSelectedFood(null)} className="px-12 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">Confirm</button></div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+// Refined Food Form Modal with improved Dropbox and Counter UI
+function FoodFormModal({ initialData, onClose, onSubmit, title }: { initialData?: Meal, onClose: () => void, onSubmit: (data: any) => void, title: string }) {
+  const [formData, setFormData] = useState(initialData || {
+    name: '',
+    category: 'Breakfast',
+    calories: 0,
+    protein: 0,
+    carbs: 0,
+    fats: 0,
+    description: '',
+    image: ''
+  });
+
+  const updateMacro = (field: string, delta: number) => {
+    setFormData(prev => ({ ...prev, [field]: Math.max(0, (prev as any)[field] + delta) }));
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative bg-surface-dark border border-white/10 rounded-[3rem] max-w-2xl w-full shadow-2xl overflow-hidden p-12 space-y-8 shadow-black/50">
+        <div className="flex justify-between items-center mb-2">
+          <h2 className="text-3xl font-black italic uppercase tracking-tighter text-white">{title}</h2>
+          <button onClick={onClose} className="p-3 rounded-2xl bg-white/5 text-text-muted hover:text-white transition-colors shadow-lg"><X size={24} /></button>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-6">
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Item Name</label>
+            <input 
+              type="text" 
+              value={formData.name}
+              onChange={(e) => setFormData({...formData, name: e.target.value})}
+              placeholder="e.g. Greek Salad" 
+              className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors shadow-inner shadow-black/20 text-white" 
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Category</label>
+            <CustomSelect 
+              value={formData.category} 
+              onChange={(val) => setFormData({...formData, category: val as any})} 
+              options={[
+                { value: 'Breakfast', label: '🍳 Breakfast' },
+                { value: 'Lunch', label: '🥗 Lunch' },
+                { value: 'Dinner', label: '🍽️ Dinner' },
+                { value: 'Snack', label: '🍏 Snack' }
+              ]} 
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-4">
+          {[
+            { l: 'Calories', f: 'calories', c: 'text-brand-orange' },
+            { l: 'Protein', f: 'protein', c: 'text-green-400' },
+            { l: 'Carbs', f: 'carbs', c: 'text-blue-400' },
+            { l: 'Fats', f: 'fats', c: 'text-yellow-400' }
+          ].map((macro, i) => (
+            <div key={i} className="space-y-3">
+              <label className="text-[10px] font-black uppercase tracking-widest text-text-muted block text-center opacity-60">{macro.l}</label>
+              <div className="flex flex-col items-center gap-1 bg-bg-dark border border-white/5 rounded-2xl p-2 shadow-inner shadow-black/40 group hover:border-brand-orange/20 transition-all">
+                <button onClick={() => updateMacro(macro.f, 5)} className="w-full py-1 hover:bg-white/5 rounded-xl flex justify-center text-text-muted hover:text-brand-orange transition-all"><ChevronUp size={14} /></button>
+                <input 
+                  type="number" 
+                  value={(formData as any)[macro.f]}
+                  onChange={(e) => setFormData({...formData, [macro.f]: parseInt(e.target.value) || 0})}
+                  className={`w-full bg-transparent text-center text-xl font-black outline-none ${macro.c}`}
+                />
+                <button onClick={() => updateMacro(macro.f, -5)} className="w-full py-1 hover:bg-white/5 rounded-xl flex justify-center text-text-muted hover:text-red-400 transition-all"><ChevronDown size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Nutritional Narrative</label>
+          <textarea 
+            value={formData.description}
+            onChange={(e) => setFormData({...formData, description: e.target.value})}
+            rows={2} 
+            className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors shadow-inner shadow-black/20 text-white resize-none" 
+            placeholder="Describe the macro balance and health benefits..."
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">Food Representation Image</label>
+          <div className="relative group overflow-hidden rounded-[2.5rem] bg-bg-dark border-2 border-dashed border-white/10 hover:border-brand-orange/40 transition-all cursor-pointer h-28 flex flex-col items-center justify-center shadow-inner shadow-black/40">
+            {formData.image ? (
+              <>
+                <img src={formData.image} className="absolute inset-0 w-full h-full object-cover opacity-20" />
+                <div className="relative z-10 flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-brand-orange shadow-lg">
+                    <ImageIcon size={24} />
+                  </div>
+                  <div>
+                    <p className="text-white font-black text-xs uppercase tracking-widest italic">Asset Loaded</p>
+                    <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Click to Replace Reference</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <Upload size={24} className="text-text-muted group-hover:text-brand-orange group-hover:scale-110 transition-all" />
+                <p className="text-[10px] font-black uppercase tracking-widest text-text-muted group-hover:text-white">Drop Visual Asset or Browse</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="pt-6 flex gap-4">
+          <button onClick={onClose} className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Discard changes</button>
+          <button onClick={() => onSubmit(formData)} className="flex-1 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">
+            {initialData ? 'Update Food Profile' : 'Publish to Library'}
+          </button>
+        </div>
+      </motion.div>
     </div>
   );
 }
@@ -784,15 +1055,14 @@ function AnalyticsView() {
           <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">SYSTEM ANALYTICS</h1>
           <p className="text-text-muted font-medium font-sans">Aggregate data insights on user nutrition and system health.</p>
         </div>
-        <button className="flex items-center gap-2 px-6 py-3 bg-surface-dark border border-white/5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg shadow-black/20"><Download size={14} /> Full Analytics Report</button>
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-surface-dark border border-white/5 p-10 rounded-[2.5rem] shadow-2xl">
+        <div className="bg-surface-dark border border-white/5 p-10 rounded-[2.5rem] shadow-2xl shadow-black/20">
           <div className="flex justify-between items-center mb-10"><h3 className="text-xl font-black italic uppercase tracking-tighter text-white">Consumption vs. Targets (Mean)</h3><div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-brand-orange shadow-[0_0_8px_#ff9060]" /><span className="text-[10px] font-black uppercase tracking-widest text-text-muted">Average</span><span className="w-3 h-3 rounded-full bg-white/10 ml-2 shadow-[0_0_8px_rgba(255,255,255,0.1)]" /><span className="text-[10px] font-black uppercase tracking-widest text-text-muted">Target</span></div></div>
           <div className="h-[300px] w-full"><ResponsiveContainer width="100%" height="100%"><BarChart data={nutrientData}><CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#adaaaa', fontSize: 10, fontWeight: 700}} /><YAxis axisLine={false} tickLine={false} tick={{fill: '#adaaaa', fontSize: 10, fontWeight: 700}} /><Tooltip cursor={{fill: '#ffffff03'}} contentStyle={{backgroundColor: '#1a1919', border: '1px solid #ffffff10', borderRadius: '1rem', color: '#fff'}} /><Bar dataKey="average" fill="#ff9060" radius={[4, 4, 0, 0]} barSize={40} /><Bar dataKey="target" fill="#ffffff10" radius={[4, 4, 0, 0]} barSize={40} /></BarChart></ResponsiveContainer></div>
         </div>
-        <div className="bg-surface-dark border border-white/5 p-10 rounded-[2.5rem] flex flex-col justify-center items-center text-center shadow-2xl">
+        <div className="bg-surface-dark border border-white/5 p-10 rounded-[2.5rem] flex flex-col justify-center items-center text-center shadow-2xl shadow-black/20">
           <div className="w-24 h-24 rounded-[2rem] bg-brand-orange/10 flex items-center justify-center text-brand-orange mb-8 shadow-inner shadow-brand-orange/20 animate-pulse"><PieChartIcon size={48} /></div>
           <h3 className="text-3xl font-black mb-4 italic uppercase tracking-tighter text-white">Retention Analytics</h3>
           <p className="text-text-muted max-w-sm mb-10 font-medium leading-relaxed">User engagement has increased by <span className="text-white font-black">15.4%</span> since the new AI Scan features were introduced.</p>
@@ -851,7 +1121,7 @@ function SecurityView({ showToast }: ViewProps) {
 }
 
 function AdminSettings({ showToast }: ViewProps) {
-  const [activeSetting, setActiveSetting] = useState('Integrations'); // DEFAULT TO INTEGRATIONS (GENERAL REMOVED)
+  const [activeSetting, setActiveSetting] = useState('Integrations');
 
   const saveSettings = () => {
     showToast('System configuration saved successfully!');
@@ -862,14 +1132,13 @@ function AdminSettings({ showToast }: ViewProps) {
       <header className="flex justify-between items-end">
         <div>
           <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">SYSTEM SETTINGS</h1>
-          <p className="text-text-muted font-medium">Configure global parameters, server integrations, and security protocols.</p>
+          <p className="text-text-muted font-medium font-sans">Configure global parameters, server integrations, and security protocols.</p>
         </div>
         <button onClick={saveSettings} className="flex items-center gap-2 px-8 py-4 bg-brand-orange text-bg-dark font-black rounded-2xl shadow-xl shadow-brand-orange/20 hover:scale-105 transition-transform active:scale-95 uppercase text-[10px] tracking-widest"><Save size={18} /> Save Configuration</button>
       </header>
 
       <div className="grid grid-cols-12 gap-8">
         <aside className="col-span-12 lg:col-span-3 space-y-2">
-          {/* GENERAL REMOVED FROM SIDEBAR */}
           {[
             { id: 'Integrations', icon: Zap },
             { id: 'Email/SMTP', icon: Mail },
@@ -880,7 +1149,7 @@ function AdminSettings({ showToast }: ViewProps) {
           ))}
         </aside>
 
-        <div className="col-span-12 lg:col-span-9 bg-surface-dark border border-white/5 p-12 rounded-[3rem] shadow-2xl shadow-black/50 space-y-12">
+        <div className="col-span-12 lg:col-span-9 bg-surface-dark border border-white/5 p-12 rounded-[3rem] shadow-2xl shadow-black/50 space-y-12 h-fit">
           {activeSetting === 'Integrations' && (
             <section className="space-y-10 animate-in fade-in duration-500">
               <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-brand-orange mb-10 flex items-center gap-3"><div className="w-10 h-0.5 bg-brand-orange shadow-[0_0_8px_#ff9060]" /> AI Engine & Identity integrations</h3>
@@ -900,17 +1169,45 @@ function AdminSettings({ showToast }: ViewProps) {
                 <div className="space-y-3"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted opacity-60">Sender Identity</label><input type="email" defaultValue="noreply@calai.app" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors shadow-inner shadow-black/20 text-white" /></div>
                 <div className="space-y-3"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted opacity-60">Auth Password</label><div className="relative"><input type="password" defaultValue="********" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors shadow-inner shadow-black/20 text-white" /><Lock size={16} className="absolute right-6 top-1/2 -translate-y-1/2 text-text-muted" /></div></div>
               </div>
-              <div className="bg-bg-dark/30 p-8 rounded-[2rem] border border-white/5 flex items-center justify-between shadow-xl"><p className="text-xs font-bold text-text-muted italic leading-relaxed">System-wide notification server. Required for goal reach alerts and password resets.</p><button className="px-8 py-4 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Run Connection Test</button></div>
+              <div className="bg-bg-dark/30 p-8 rounded-[2rem] border border-white/5 flex items-center justify-between shadow-xl shadow-black/20"><p className="text-xs font-bold text-text-muted italic leading-relaxed">System-wide notification server. Required for goal reach alerts and password resets.</p><button className="px-8 py-4 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Run Connection Test</button></div>
             </section>
           )}
 
           {activeSetting === 'Communication' && (
-            <section className="space-y-10 animate-in fade-in duration-500">
+            <section className="space-y-12 animate-in fade-in duration-500">
               <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-brand-orange mb-10 flex items-center gap-3"><div className="w-10 h-0.5 bg-brand-orange shadow-[0_0_8px_#ff9060]" /> outbound communication logic</h3>
-              <div className="space-y-6">
-                {[{ label: 'Push Notifications', status: 'Enabled', icon: Bell, desc: 'FCM / APNS for real-time meal reminders and goal nudges.' }, { label: 'SMS Gateway (Twilio)', status: 'Connected', icon: Phone, desc: 'Mobile number verification and mission-critical alerts.' }, { label: 'Internal Support Chat', status: 'Active', icon: Mail, desc: 'User-to-Admin direct encrypted messaging channel.' }].map((c, i) => (
-                  <div key={i} className="bg-bg-dark/50 p-8 rounded-[2.5rem] border border-white/10 flex justify-between items-center group hover:border-brand-orange/30 transition-colors shadow-inner shadow-black/20"><div className="flex gap-6 items-center"><div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center text-brand-orange shadow-lg group-hover:scale-110 transition-transform"><c.icon size={28} /></div><div><h4 className="text-lg font-black italic uppercase tracking-tighter text-white">{c.label}</h4><p className="text-xs text-text-muted font-bold opacity-60 leading-relaxed">{c.desc}</p></div></div><div className="flex items-center gap-4"><span className="text-[10px] font-black text-green-400 uppercase tracking-widest bg-green-400/10 px-3 py-1.5 rounded-full border border-green-400/20">{c.status}</span><button className="p-2.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-text-muted hover:text-white shadow-lg"><SettingsIcon size={16} /></button></div></div>
-                ))}
+              
+              <div className="space-y-12">
+                {/* Push Notifications Section */}
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between"><div className="flex items-center gap-4"><div className="w-12 h-12 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange"><BellRing size={24} /></div><h4 className="text-xl font-black uppercase tracking-tighter text-white">Push Notifications</h4></div><div className="flex items-center gap-3"><span className="text-[10px] font-black text-green-400 uppercase tracking-widest bg-green-400/10 px-4 py-2 rounded-full border border-green-400/20">Active</span><div className="w-12 h-6 bg-brand-orange rounded-full relative cursor-pointer shadow-lg shadow-brand-orange/20"><div className="absolute right-1 top-1 w-4 h-4 bg-bg-dark rounded-full" /></div></div></div>
+                  <div className="grid grid-cols-2 gap-8 bg-bg-dark/30 p-8 rounded-[2.5rem] border border-white/5 shadow-inner shadow-black/20">
+                    <div className="space-y-3"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted opacity-60">Firebase Server Key</label><input type="password" defaultValue="AAAA-redacted-key" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white" /></div>
+                    <div className="space-y-3"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted opacity-60">FCM Project ID</label><input type="text" defaultValue="calai-prod-842" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white" /></div>
+                  </div>
+                </div>
+
+                {/* Twilio Section */}
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between"><div className="flex items-center gap-4"><div className="w-12 h-12 rounded-2xl bg-blue-400/10 flex items-center justify-center text-blue-400"><Smartphone size={24} /></div><h4 className="text-xl font-black uppercase tracking-tighter text-white">SMS Gateway (Twilio)</h4></div><div className="flex items-center gap-3"><span className="text-[10px] font-black text-text-muted uppercase tracking-widest bg-white/5 px-4 py-2 rounded-full border border-white/10">Disabled</span><div className="w-12 h-6 bg-white/10 rounded-full relative cursor-pointer shadow-lg"><div className="absolute left-1 top-1 w-4 h-4 bg-bg-dark rounded-full" /></div></div></div>
+                  <div className="grid grid-cols-3 gap-6 bg-bg-dark/30 p-8 rounded-[2.5rem] border border-white/5 shadow-inner shadow-black/20">
+                    <div className="space-y-3"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted opacity-60">Account SID</label><input type="text" defaultValue="AC8293..." className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white" /></div>
+                    <div className="space-y-3"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted opacity-60">Auth Token</label><input type="password" defaultValue="redacted" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white" /></div>
+                    <div className="space-y-3"><label className="text-[10px] font-black uppercase tracking-widest text-text-muted opacity-60">Twilio Phone</label><input type="text" defaultValue="+1800-CALAI" className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white" /></div>
+                  </div>
+                </div>
+
+                {/* Support Chat Section */}
+                <div className="space-y-6">
+                  <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-2xl bg-green-400/10 flex items-center justify-center text-green-400"><MessageCircle size={24} /></div><h4 className="text-xl font-black uppercase tracking-tighter text-white">Internal Support Chat</h4></div>
+                  <div className="bg-bg-dark/50 p-8 rounded-[2.5rem] border border-white/10 flex items-center justify-between shadow-inner shadow-black/20">
+                    <div className="space-y-2">
+                      <p className="text-sm font-black text-white italic uppercase tracking-tighter">Support Webhook Connector</p>
+                      <p className="text-[10px] text-text-muted font-bold leading-relaxed max-w-sm">Synchronizes admin chat responses with the internal user mobile inbox via secure WebSocket relay.</p>
+                    </div>
+                    <button className="px-8 py-4 bg-white/5 border border-white/10 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg">Configure Endpoints</button>
+                  </div>
+                </div>
               </div>
             </section>
           )}
@@ -922,7 +1219,7 @@ function AdminSettings({ showToast }: ViewProps) {
                 <div className="bg-bg-dark/50 p-10 rounded-[3rem] border border-white/10 space-y-6 shadow-inner shadow-black/20"><div className="flex items-center gap-4 text-brand-orange"><Server size={24} /><h4 className="font-black italic uppercase tracking-tighter text-white">Cluster Maintenance</h4></div><p className="text-xs text-text-muted font-bold leading-relaxed">Cleanup expired user sessions, optimize DB indexes, and prune old audit logs from the main production cluster.</p><button className="w-full py-5 bg-white/5 border border-white/10 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-red-400/10 hover:text-red-400 hover:border-red-400/20 transition-all shadow-lg">Force DB Garbage Collection</button></div>
                 <div className="bg-bg-dark/50 p-10 rounded-[3rem] border border-white/10 space-y-6 shadow-inner shadow-black/20"><div className="flex items-center gap-4 text-blue-400"><Cpu size={24} /><h4 className="font-black italic uppercase tracking-tighter text-white">Engine Versioning</h4></div><div className="space-y-3"><div className="flex justify-between text-[10px] font-black uppercase tracking-widest"><span className="text-text-muted opacity-60">Runtime Engine</span><span className="text-white">v2.4.8-stable</span></div><div className="flex justify-between text-[10px] font-black uppercase tracking-widest"><span className="text-text-muted opacity-60">Visual Neural Model</span><span className="text-white">v1.0.2-pro</span></div></div><button className="w-full py-5 bg-blue-400 text-bg-dark rounded-2xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-transform shadow-lg shadow-blue-400/20">Fetch Updates from Master</button></div>
               </div>
-              <div className="bg-red-400/5 border border-red-400/10 p-10 rounded-[3rem] flex justify-between items-center shadow-xl shadow-red-400/5"><div><h4 className="text-xl font-black text-red-400 italic uppercase tracking-tighter">Emergency Override</h4><p className="text-xs font-bold text-text-muted mt-1 leading-relaxed">Forces immediate system-wide maintenance mode and freezes all write operations.</p></div><button className="px-12 py-5 bg-red-400 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-red-500 transition-colors shadow-2xl shadow-red-400/30 active:scale-95">ACTIVATE OVERRIDE</button></div>
+              <div className="bg-red-400/5 border border-red-400/10 p-10 rounded-[3rem] flex justify-between items-center shadow-xl shadow-red-400/5 shadow-black/50"><div><h4 className="text-xl font-black text-red-400 italic uppercase tracking-tighter">Emergency Override</h4><p className="text-xs font-bold text-text-muted mt-1 leading-relaxed">Forces immediate system-wide maintenance mode and freezes all write operations.</p></div><button className="px-12 py-5 bg-red-400 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-red-500 transition-colors shadow-2xl shadow-red-400/30 active:scale-95">ACTIVATE OVERRIDE</button></div>
             </section>
           )}
 
