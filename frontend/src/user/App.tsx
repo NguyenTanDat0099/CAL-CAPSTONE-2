@@ -28,7 +28,11 @@ export interface UserProfile {
   startingWeight: number;
 }
 
-export default function App() {
+interface UserAppProps {
+  onLogout: () => void;
+}
+
+export default function App({ onLogout }: UserAppProps) {
   const [activeTab, setActiveTab] = useState('home');
   const [myDiets, setMyDiets] = useState<DietItem[]>(() => {
     const saved = localStorage.getItem('calai_my_diets');
@@ -171,7 +175,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-bg-dark">
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
+      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onLogout={onLogout} />
       
       {/* Global Header with Avatar & Notifications */}
       <div className="fixed top-0 right-0 p-8 z-40 flex items-center gap-4">

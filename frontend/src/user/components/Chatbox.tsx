@@ -4,13 +4,10 @@ import {
   Send, 
   Trash2, 
   MessageSquare, 
-  MoreVertical,
   Bot,
   User,
-  ChevronRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from "@google/genai";
 
 interface Message {
   id: string;
@@ -27,32 +24,40 @@ interface Conversation {
   messages: Message[];
 }
 
+const API_BASE_URL = 'http://localhost:3000/api/chat';
+
+const getAuthHeaders = (includeJson = false) => {
+  const token = localStorage.getItem('calai_token');
+  return {
+    ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
+const formatTime = (value: string) =>
+  new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+const formatConversationTime = (value: string) => {
+  const date = new Date(value);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const diffHours = Math.floor(diff / (1000 * 60 * 60));
+
+  if (diffHours < 1) return 'Just now';
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
+};
+
 export function Chatbox() {
-  const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
-  const [conversations, setConversations] = useState<Conversation[]>(() => {
-    const saved = localStorage.getItem('calai_chats');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [activeChatId, setActiveChatId] = useState<string | null>(() => {
-    const saved = localStorage.getItem('calai_active_chat_id');
-    return saved || null;
-  });
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [activeTab, setActiveTab] = useState<'nutrition' | 'assistant'>('nutrition');
+  const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const activeChat = conversations.find(c => c.id === activeChatId);
-
-  useEffect(() => {
-    localStorage.setItem('calai_chats', JSON.stringify(conversations));
-  }, [conversations]);
-
-  useEffect(() => {
-    if (activeChatId) {
-      localStorage.setItem('calai_active_chat_id', activeChatId);
-    }
-  }, [activeChatId]);
 
   useEffect(() => {
     scrollToBottom();
@@ -62,107 +67,128 @@ export function Chatbox() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const createNewChat = () => {
-    const newChat: Conversation = {
-      id: Math.random().toString(36).substr(2, 9),
-      title: 'New Conversation',
-      lastMessage: 'No messages yet',
-      timestamp: 'Just now',
-      messages: []
-    };
-    setConversations(prev => [newChat, ...prev]);
-    setActiveChatId(newChat.id);
+  const mapMessages = (rows: Array<{ messageId: number; message: string; sender: 'user' | 'ai'; createdAt: string }>): Message[] =>
+    rows.map(row => ({
+      id: String(row.messageId),
+      text: row.message,
+      sender: row.sender,
+      timestamp: formatTime(row.createdAt),
+    }));
+
+  const loadSessions = async (preferredSessionId?: string) => {
+    const response = await fetch(`${API_BASE_URL}/sessions`, {
+      headers: getAuthHeaders(),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to load chat sessions');
+    }
+
+    const sessions = (result.data ?? []) as Array<{
+      sessionId: number;
+      lastMessage: string;
+      startedAt: string;
+    }>;
+
+    const mappedSessions: Conversation[] = sessions.map(session => ({
+      id: String(session.sessionId),
+      title: session.lastMessage === 'No messages yet' ? 'New Conversation' : session.lastMessage.slice(0, 30),
+      lastMessage: session.lastMessage,
+      timestamp: formatConversationTime(session.startedAt),
+      messages: [],
+    }));
+
+    setConversations(mappedSessions);
+
+    const nextActiveId = preferredSessionId ?? mappedSessions[0]?.id ?? null;
+    setActiveChatId(nextActiveId);
   };
 
-  const deleteChat = (id: string, e: React.MouseEvent) => {
+  const loadMessages = async (sessionId: string) => {
+    const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages`, {
+      headers: getAuthHeaders(),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to load chat messages');
+    }
+
+    const mapped = mapMessages(result.data ?? []);
+    setConversations(prev =>
+      prev.map(conversation =>
+        conversation.id === sessionId
+          ? {
+              ...conversation,
+              messages: mapped,
+              lastMessage: mapped[mapped.length - 1]?.text ?? conversation.lastMessage,
+            }
+          : conversation
+      )
+    );
+  };
+
+  useEffect(() => {
+    loadSessions().catch(err => setError(err instanceof Error ? err.message : 'Failed to load chats'));
+  }, []);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    loadMessages(activeChatId).catch(err => setError(err instanceof Error ? err.message : 'Failed to load messages'));
+  }, [activeChatId]);
+
+  const createNewChat = () => {
+    setActiveChatId(null);
+    setInputText('');
+  };
+
+  const deleteChat = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setConversations(prev => prev.filter(c => c.id !== id));
-    if (activeChatId === id) {
-      setActiveChatId(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/sessions/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to delete chat');
+      }
+      const nextSessions = conversations.filter(c => c.id !== id);
+      setConversations(nextSessions);
+      if (activeChatId === id) {
+        setActiveChatId(nextSessions[0]?.id ?? null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete chat');
     }
   };
 
   const handleSendMessage = async () => {
-    if (!inputText.trim() || !activeChatId) return;
+    if (!inputText.trim()) return;
 
-    const userMessage: Message = {
-      id: Math.random().toString(36).substr(2, 9),
-      text: inputText,
-      sender: 'user',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-
-    const updatedConversations = conversations.map(c => {
-      if (c.id === activeChatId) {
-        return {
-          ...c,
-          messages: [...c.messages, userMessage],
-          lastMessage: inputText,
-          timestamp: 'Just now'
-        };
-      }
-      return c;
-    });
-
-    setConversations(updatedConversations);
+    const currentMessage = inputText;
     setInputText('');
     setIsTyping(true);
+    setError('');
 
     try {
-      if (!geminiApiKey) {
-        throw new Error('Missing VITE_GEMINI_API_KEY');
+      const response = await fetch(`${API_BASE_URL}/messages`, {
+        method: 'POST',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({
+          message: currentMessage,
+          sessionId: activeChatId ? Number(activeChatId) : undefined,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to send message');
       }
 
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-      const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: [{ role: "user", parts: [{ text: inputText }] }],
-        config: {
-          systemInstruction: "You are CalAI Nutrition Assistant. You help users with their diet, calorie tracking, and meal planning. Be concise, helpful, and encouraging. Use markdown for formatting if needed.",
-        }
-      });
-
-      const aiMessage: Message = {
-        id: Math.random().toString(36).substr(2, 9),
-        text: response.text || "I'm sorry, I couldn't process that.",
-        sender: 'ai',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-
-      setConversations(prev => prev.map(c => {
-        if (c.id === activeChatId) {
-          // Update title if it's the first message
-          const newTitle = c.messages.length === 1 ? inputText.slice(0, 30) + (inputText.length > 30 ? '...' : '') : c.title;
-          return {
-            ...c,
-            title: newTitle,
-            messages: [...c.messages, aiMessage],
-            lastMessage: aiMessage.text,
-            timestamp: 'Just now'
-          };
-        }
-        return c;
-      }));
+      const sessionId = String(result.data.sessionId);
+      await loadSessions(sessionId);
+      await loadMessages(sessionId);
     } catch (error) {
-      console.error('Error calling Gemini:', error);
-      const fallbackMessage: Message = {
-        id: Math.random().toString(36).substr(2, 9),
-        text: "Chat AI is not configured yet. Add VITE_GEMINI_API_KEY to frontend/.env to enable this feature.",
-        sender: 'ai',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-
-      setConversations(prev => prev.map(c => {
-        if (c.id === activeChatId) {
-          return {
-            ...c,
-            messages: [...c.messages, fallbackMessage],
-            lastMessage: fallbackMessage.text,
-            timestamp: 'Just now'
-          };
-        }
-        return c;
-      }));
+      setError(error instanceof Error ? error.message : 'Failed to send message');
     } finally {
       setIsTyping(false);
     }
@@ -255,6 +281,11 @@ export function Chatbox() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-8 space-y-8">
+          {error && (
+            <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">
+              {error}
+            </div>
+          )}
           {!activeChatId ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
               <div className="w-20 h-20 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange mb-6">
@@ -345,7 +376,7 @@ export function Chatbox() {
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                 placeholder="Ask CalAI anything..."
                 className="w-full bg-surface-dark border border-white/10 rounded-2xl py-6 pl-16 pr-16 text-sm focus:outline-none focus:border-brand-orange/50 transition-colors"
               />
@@ -354,9 +385,9 @@ export function Chatbox() {
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
                   onClick={handleSendMessage}
-                  disabled={!inputText.trim() || !activeChatId}
+                  disabled={!inputText.trim()}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-                    inputText.trim() && activeChatId ? 'bg-brand-orange text-bg-dark' : 'bg-white/5 text-text-muted'
+                    inputText.trim() ? 'bg-brand-orange text-bg-dark' : 'bg-white/5 text-text-muted'
                   }`}
                 >
                   <Send size={20} />

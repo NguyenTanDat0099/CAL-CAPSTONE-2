@@ -126,11 +126,15 @@ const renderActiveShape = (props: any) => {
   );
 };
 
-export default function App() {
-  return <AdminApp />;
+interface AdminAppShellProps {
+  onLogout: () => void;
 }
 
-function AdminApp() {
+export default function App({ onLogout }: AdminAppShellProps) {
+  return <AdminApp onLogout={onLogout} />;
+}
+
+function AdminApp({ onLogout }: AdminAppShellProps) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
@@ -154,7 +158,7 @@ function AdminApp() {
 
   return (
     <div className="flex min-h-screen bg-bg-dark text-white font-sans antialiased selection:bg-brand-orange/30">
-      <AdminSidebar activeTab={activeTab} onTabChange={setActiveTab} />
+      <AdminSidebar activeTab={activeTab} onTabChange={setActiveTab} onLogout={onLogout} />
       
       {/* Toast Notification */}
       <AnimatePresence>

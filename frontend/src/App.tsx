@@ -1,36 +1,32 @@
 import React, { useState } from 'react';
 import AdminApp from './admin/App';
+import AuthApp from './auth/AuthApp';
 import UserApp from './user/App';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'admin' | 'user'>('admin');
+  const [activeView, setActiveView] = useState<'auth' | 'admin' | 'user'>(() => {
+    const savedToken = localStorage.getItem('calai_token');
+    const savedRole = localStorage.getItem('calai_role');
+    return savedToken && (savedRole === 'admin' || savedRole === 'user') ? savedRole : 'auth';
+  });
+
+  const handleLoginSuccess = (role: 'admin' | 'user', token: string) => {
+    localStorage.setItem('calai_token', token);
+    localStorage.setItem('calai_role', role);
+    setActiveView(role);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('calai_token');
+    localStorage.removeItem('calai_role');
+    setActiveView('auth');
+  };
 
   return (
     <>
-      <div className="fixed top-4 right-4 z-[100] flex items-center gap-2 rounded-2xl border border-white/10 bg-surface-dark/90 p-2 backdrop-blur-md">
-        <button
-          onClick={() => setActiveView('admin')}
-          className={`rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-colors ${
-            activeView === 'admin'
-              ? 'bg-brand-orange text-bg-dark'
-              : 'bg-white/5 text-text-muted hover:text-white'
-          }`}
-        >
-          Admin
-        </button>
-        <button
-          onClick={() => setActiveView('user')}
-          className={`rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-colors ${
-            activeView === 'user'
-              ? 'bg-brand-orange text-bg-dark'
-              : 'bg-white/5 text-text-muted hover:text-white'
-          }`}
-        >
-          User
-        </button>
-      </div>
-
-      {activeView === 'admin' ? <AdminApp /> : <UserApp />}
+      {activeView === 'auth' && <AuthApp onLoginSuccess={handleLoginSuccess} />}
+      {activeView === 'admin' && <AdminApp onLogout={handleLogout} />}
+      {activeView === 'user' && <UserApp onLogout={handleLogout} />}
     </>
   );
 }
