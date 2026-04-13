@@ -5,7 +5,6 @@ import {
   Database, 
   Settings, 
   LogOut,
-  Bell,
   PieChart,
   ShieldCheck
 } from 'lucide-react';
@@ -23,7 +22,7 @@ export function AdminSidebar({ activeTab, onTabChange, onLogout }: SidebarProps)
     { icon: Users, label: 'User Management', id: 'users' },
     { icon: Database, label: 'Content Manager', id: 'content' },
     { icon: PieChart, label: 'Analytics', id: 'analytics' },
-    { icon: ShieldCheck, label: 'Security', id: 'security' },
+    { icon: ShieldCheck, label: 'Security & Roles', id: 'security' },
   ];
 
   return (
@@ -62,9 +61,9 @@ export function AdminSidebar({ activeTab, onTabChange, onLogout }: SidebarProps)
           }`}
         >
           <Settings size={20} className={activeTab === 'settings' ? 'text-brand-orange' : ''} />
-          <span className="font-medium text-sm">Settings</span>
+          <span className="font-medium text-sm">System Settings</span>
         </button>
-        <button
+        <button 
           onClick={onLogout}
           className="w-full flex items-center gap-3 px-4 py-3 text-text-muted hover:text-red-400 hover:bg-red-400/5 rounded-xl transition-all"
         >
