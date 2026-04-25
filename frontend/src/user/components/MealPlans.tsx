@@ -103,7 +103,10 @@ const mockMeals: Meal[] = [
 ];
 
 interface MealPlansProps {
-  onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void;
+  onAddToMyDiet: (
+    item: Omit<DietItem, 'id' | 'date'>,
+    options?: { alreadyPersisted?: boolean; mealType?: string }
+  ) => void | Promise<void>;
 }
 
 export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
@@ -210,19 +213,19 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
             <motion.button 
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-              onClick={() => {
-                onAddToMyDiet({
-                  name: selectedMeal.name,
+                onClick={() => {
+                  onAddToMyDiet({
+                    name: selectedMeal.name,
                   calories: selectedMeal.calories,
                   protein: selectedMeal.protein,
                   carbs: selectedMeal.carbs,
                   fats: selectedMeal.fats,
-                  image: selectedMeal.image,
-                  description: selectedMeal.description,
-                  about: selectedMeal.about
-                });
-                setSelectedMeal(null);
-              }}
+                    image: selectedMeal.image,
+                    description: selectedMeal.description,
+                    about: selectedMeal.about
+                  }, { mealType: selectedMeal.category });
+                  setSelectedMeal(null);
+                }}
               className="bg-brand-orange text-bg-dark font-black py-4 px-10 rounded-2xl flex items-center gap-3 shadow-xl shadow-brand-orange/20"
             >
               <PlusCircle size={20} />
@@ -344,7 +347,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
                       image: meal.image,
                       description: meal.description,
                       about: meal.about
-                    });
+                    }, { mealType: meal.category });
                   }}
                   className="absolute top-6 right-6 w-10 h-10 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white hover:bg-brand-orange hover:text-bg-dark transition-all shadow-xl"
                 >

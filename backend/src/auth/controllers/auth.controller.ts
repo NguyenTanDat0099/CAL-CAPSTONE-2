@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import {
   forgotPasswordService,
   getEmailConfigStatusService,
@@ -8,6 +9,16 @@ import {
   verifyRegisterOtpService,
   verifyResetCodeService,
 } from '../services/auth.service';
+
+const jwtSecret = process.env.JWT_SECRET || 'calai-dev-secret';
+
+interface AuthTokenPayload {
+  accountId: number;
+  email: string;
+  role: string;
+  iat?: number;
+  exp?: number;
+}
 
 const errorStatusMap: Record<string, number> = {
   EMAIL_ALREADY_EXISTS: 409,
@@ -138,4 +149,33 @@ export const getEmailConfigStatus = async (req: Request, res: Response) => {
     message: 'Email configuration status fetched successfully',
     data: getEmailConfigStatusService(),
   });
+};
+
+export const getValidateToken = async (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({
+      valid: false,
+      message: 'NO_TOKEN',
+    });
+  }
+
+  try {
+    const payload = jwt.verify(token, jwtSecret) as AuthTokenPayload;
+    return res.status(200).json({
+      valid: true,
+      data: {
+        accountId: payload.accountId,
+        email: payload.email,
+        role: payload.role,
+      },
+    });
+  } catch {
+    return res.status(401).json({
+      valid: false,
+      message: 'INVALID_TOKEN',
+    });
+  }
 };

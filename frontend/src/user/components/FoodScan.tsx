@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowLeft, Camera, CheckCircle2, Image as ImageIcon, Loa
 import { DietItem } from '../types';
 
 const API_BASE_URL = 'http://localhost:3000/api/users';
+const AUTH_TOKEN_KEY = 'calai_token';
 
 type AnalysisSource = 'upload' | 'camera';
 
@@ -28,7 +29,10 @@ interface FoodAnalysisResult {
 }
 
 interface FoodScanProps {
-  onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void;
+  onAddToMyDiet: (
+    item: Omit<DietItem, 'id' | 'date'>,
+    options?: { alreadyPersisted?: boolean; mealType?: string }
+  ) => void | Promise<void>;
 }
 
 const fileToDataUrl = (file: File) =>
@@ -47,7 +51,7 @@ const toTimeAgo = (isoDate: string) => {
 };
 
 const getAuthHeaders = (includeJson = false) => {
-  const token = localStorage.getItem('calai_token');
+  const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
   return {
     ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -205,7 +209,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
         image: result.data.image,
         description: `${result.data.detectedDish} • ${result.data.estimatedPortion}`,
         about: `Detected items: ${result.data.detectedItems.join(', ')}`,
-      });
+      }, { alreadyPersisted: true });
       setMessage('Saved to meal log');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');

@@ -25,9 +25,11 @@ interface Conversation {
 }
 
 const API_BASE_URL = 'http://localhost:3000/api/chat';
+const AUTH_TOKEN_KEY = 'calai_token';
+const TEMP_CONVERSATION_PREFIX = 'temp-';
 
 const getAuthHeaders = (includeJson = false) => {
-  const token = localStorage.getItem('calai_token');
+  const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
   return {
     ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -48,16 +50,20 @@ const formatConversationTime = (value: string) => {
   return `${Math.floor(diffHours / 24)}d ago`;
 };
 
+const isTemporaryConversationId = (value: string | null) =>
+  Boolean(value && value.startsWith(TEMP_CONVERSATION_PREFIX));
+
 export function Chatbox() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [inputText, setInputText] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
+  const [typingChatId, setTypingChatId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'nutrition' | 'assistant'>('nutrition');
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const activeChat = conversations.find(c => c.id === activeChatId);
+  const isTyping = Boolean(activeChatId && typingChatId && activeChatId === typingChatId);
 
   useEffect(() => {
     scrollToBottom();
@@ -132,7 +138,7 @@ export function Chatbox() {
   }, []);
 
   useEffect(() => {
-    if (!activeChatId) return;
+    if (!activeChatId || isTemporaryConversationId(activeChatId)) return;
     loadMessages(activeChatId).catch(err => setError(err instanceof Error ? err.message : 'Failed to load messages'));
   }, [activeChatId]);
 
@@ -165,10 +171,52 @@ export function Chatbox() {
   const handleSendMessage = async () => {
     if (!inputText.trim()) return;
 
-    const currentMessage = inputText;
+    const currentMessage = inputText.trim();
+    const optimisticMessage: Message = {
+      id: `temp-user-${Date.now()}`,
+      text: currentMessage,
+      sender: 'user',
+      timestamp: formatTime(new Date().toISOString()),
+    };
+    const optimisticChatId =
+      activeChatId && !isTemporaryConversationId(activeChatId)
+        ? activeChatId
+        : `${TEMP_CONVERSATION_PREFIX}${Date.now()}`;
+
     setInputText('');
-    setIsTyping(true);
+    setTypingChatId(optimisticChatId);
     setError('');
+    setActiveChatId(optimisticChatId);
+    setConversations(prev => {
+      const existingConversation = prev.find(conversation => conversation.id === optimisticChatId);
+
+      if (existingConversation) {
+        const updatedConversation: Conversation = {
+          ...existingConversation,
+          title: existingConversation.title === 'New Conversation'
+            ? currentMessage.slice(0, 30)
+            : existingConversation.title,
+          lastMessage: currentMessage,
+          timestamp: 'Just now',
+          messages: [...existingConversation.messages, optimisticMessage],
+        };
+
+        return [
+          updatedConversation,
+          ...prev.filter(conversation => conversation.id !== optimisticChatId),
+        ];
+      }
+
+      const newConversation: Conversation = {
+        id: optimisticChatId,
+        title: currentMessage.slice(0, 30),
+        lastMessage: currentMessage,
+        timestamp: 'Just now',
+        messages: [optimisticMessage],
+      };
+
+      return [newConversation, ...prev];
+    });
 
     try {
       const response = await fetch(`${API_BASE_URL}/messages`, {
@@ -176,7 +224,10 @@ export function Chatbox() {
         headers: getAuthHeaders(true),
         body: JSON.stringify({
           message: currentMessage,
-          sessionId: activeChatId ? Number(activeChatId) : undefined,
+          sessionId:
+            activeChatId && !isTemporaryConversationId(activeChatId)
+              ? Number(activeChatId)
+              : undefined,
         }),
       });
       const result = await response.json();
@@ -185,12 +236,45 @@ export function Chatbox() {
       }
 
       const sessionId = String(result.data.sessionId);
-      await loadSessions(sessionId);
-      await loadMessages(sessionId);
+      const mappedMessages = mapMessages(result.data.messages ?? []);
+
+      setConversations(prev => {
+        const fallbackConversation = prev.find(conversation => conversation.id === optimisticChatId);
+        const nextConversation: Conversation = {
+          id: sessionId,
+          title: mappedMessages[0]?.text?.slice(0, 30) || fallbackConversation?.title || 'New Conversation',
+          lastMessage: mappedMessages[mappedMessages.length - 1]?.text || fallbackConversation?.lastMessage || currentMessage,
+          timestamp: 'Just now',
+          messages: mappedMessages,
+        };
+
+        return [
+          nextConversation,
+          ...prev.filter(conversation => conversation.id !== optimisticChatId && conversation.id !== sessionId),
+        ];
+      });
+      setActiveChatId(sessionId);
+      setTypingChatId(null);
     } catch (error) {
+      setConversations(prev =>
+        prev.map(conversation =>
+          conversation.id === optimisticChatId
+            ? {
+                ...conversation,
+                messages: conversation.messages.filter(message => message.id !== optimisticMessage.id),
+                lastMessage:
+                  conversation.lastMessage === currentMessage
+                    ? conversation.messages[conversation.messages.length - 2]?.text ?? 'No messages yet'
+                    : conversation.lastMessage,
+              }
+            : conversation
+        ).filter(conversation => conversation.messages.length > 0)
+      );
+      if (optimisticChatId === activeChatId || isTemporaryConversationId(optimisticChatId)) {
+        setActiveChatId(prev => (prev === optimisticChatId ? null : prev));
+      }
+      setTypingChatId(null);
       setError(error instanceof Error ? error.message : 'Failed to send message');
-    } finally {
-      setIsTyping(false);
     }
   };
 

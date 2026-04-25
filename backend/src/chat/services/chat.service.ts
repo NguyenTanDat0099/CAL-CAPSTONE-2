@@ -15,6 +15,21 @@ interface MessageRow {
   created_at: string;
 }
 
+interface UserRow {
+  user_id: number;
+}
+
+const resolveUserId = async (accountId: number) => {
+  const [rows] = await pool.query('SELECT user_id FROM users WHERE account_id = ? LIMIT 1', [accountId]);
+  const existing = (rows as UserRow[])[0];
+
+  if (!existing) {
+    throw new Error('USER_NOT_FOUND');
+  }
+
+  return existing.user_id;
+};
+
 const ensureSession = async (userId: number, sessionId?: number) => {
   if (sessionId) {
     const [rows] = await pool.query(
@@ -165,8 +180,10 @@ const insertMessage = async (sessionId: number, sender: 'user' | 'ai', message: 
   return (insertResult as { insertId: number }).insertId;
 };
 
-export const sendChatMessage = async (userId: number, message: string, sessionId?: number) => {
+export const sendChatMessage = async (accountId: number, message: string, sessionId?: number) => {
+  const userId = await resolveUserId(accountId);
   const activeSessionId = await ensureSession(userId, sessionId);
+
   await insertMessage(activeSessionId, 'user', message);
 
   const context = await getUserContext(userId);
@@ -174,7 +191,7 @@ export const sendChatMessage = async (userId: number, message: string, sessionId
 
   await insertMessage(activeSessionId, 'ai', aiReply);
 
-  const messages = await getChatMessages(userId, activeSessionId);
+  const messages = await getChatMessages(accountId, activeSessionId);
   return {
     sessionId: activeSessionId,
     reply: aiReply,
@@ -182,7 +199,9 @@ export const sendChatMessage = async (userId: number, message: string, sessionId
   };
 };
 
-export const getChatSessions = async (userId: number) => {
+export const getChatSessions = async (accountId: number) => {
+  const userId = await resolveUserId(accountId);
+
   const [rows] = await pool.query(
     `
       SELECT
@@ -209,7 +228,9 @@ export const getChatSessions = async (userId: number) => {
   }));
 };
 
-export const getChatMessages = async (userId: number, sessionId: number) => {
+export const getChatMessages = async (accountId: number, sessionId: number) => {
+  const userId = await resolveUserId(accountId);
+
   const [sessionRows] = await pool.query(
     'SELECT session_id FROM chatsessions WHERE session_id = ? AND user_id = ? LIMIT 1',
     [sessionId, userId]
@@ -238,7 +259,9 @@ export const getChatMessages = async (userId: number, sessionId: number) => {
   }));
 };
 
-export const deleteChatSession = async (userId: number, sessionId: number) => {
+export const deleteChatSession = async (accountId: number, sessionId: number) => {
+  const userId = await resolveUserId(accountId);
+
   const [sessionRows] = await pool.query(
     'SELECT session_id FROM chatsessions WHERE session_id = ? AND user_id = ? LIMIT 1',
     [sessionId, userId]

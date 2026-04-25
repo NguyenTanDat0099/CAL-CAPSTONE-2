@@ -24,3 +24,8 @@
     @apply bg-white/5 backdrop-blur-xl border border-white/10;
   }
 }
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}

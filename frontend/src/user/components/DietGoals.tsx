@@ -64,8 +64,8 @@ const dietPlans: DietPlan[] = [
 
 interface DietGoalsProps {
   myDiets: DietItem[];
-  onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void;
-  onRemoveFromMyDiet: (id: string) => void;
+  onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void | Promise<void>;
+  onRemoveFromMyDiet: (id: string) => void | Promise<void>;
   profile: UserProfile;
   setProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
   dailyTarget: number;
@@ -83,10 +83,8 @@ export function DietGoals({
   baseTarget,
   carryOver
 }: DietGoalsProps) {
-  const [isOnboarded, setIsOnboarded] = useState<boolean>(() => {
-    const saved = localStorage.getItem('calai_onboarded');
-    return saved === 'true';
-  });
+  const hasValidProfile = profile.age > 0 && profile.height > 0 && profile.weight > 0;
+  const [isOnboarded, setIsOnboarded] = useState<boolean>(hasValidProfile);
 
   const [activeTab, setActiveTab] = useState<'all' | 'my'>('all');
   const [showResetWarning, setShowResetWarning] = useState(false);
@@ -95,22 +93,20 @@ export function DietGoals({
 
   const validate = () => {
     const newErrors: { age?: string; height?: string; weight?: string } = {};
-    if (profile.age <= 0 || profile.age > 200) newErrors.age = 'Age must be between 1 and 200';
-    if (profile.height <= 0 || profile.height > 300) newErrors.height = 'Height must be between 1 and 300cm';
-    if (profile.weight <= 0 || profile.weight > 600) newErrors.weight = 'Weight must be between 1 and 600kg';
+    if (profile.age !== 0 && (profile.age <= 0 || profile.age > 200)) newErrors.age = 'Age must be between 1 and 200';
+    if (profile.height !== 0 && (profile.height <= 0 || profile.height > 300)) newErrors.height = 'Height must be between 1 and 300cm';
+    if (profile.weight !== 0 && (profile.weight <= 0 || profile.weight > 600)) newErrors.weight = 'Weight must be between 1 and 600kg';
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleCompleteOnboarding = () => {
     if (validate()) {
-      localStorage.setItem('calai_onboarded', 'true');
       setIsOnboarded(true);
     }
   };
 
   const handleReset = () => {
-    localStorage.removeItem('calai_onboarded');
     setIsOnboarded(false);
     setShowResetWarning(false);
     setProfile({
@@ -119,12 +115,26 @@ export function DietGoals({
       goal: 'lose',
       activityLevel: 'sedentary',
       gender: 'male',
-      age: 25,
-      height: 175,
-      weight: 70,
-      targetWeight: 65,
-      startingWeight: 70,
+      age: 0,
+      height: 0,
+      weight: 0,
+      targetWeight: 0,
+      startingWeight: 0,
     });
+  };
+
+  React.useEffect(() => {
+    const hasProfile = profile.age > 0 && profile.height > 0 && profile.weight > 0;
+    setIsOnboarded(hasProfile);
+  }, [profile.age, profile.height, profile.weight]);
+
+  const handleInputFocus = () => {
+    setIsOnboarded(false);
+  };
+
+  const handleInputBlur = () => {
+    const hasProfile = profile.age > 0 && profile.height > 0 && profile.weight > 0;
+    setIsOnboarded(hasProfile);
   };
 
   if (isOnboarded) {
@@ -553,10 +563,21 @@ export function DietGoals({
             
             <div className="max-w-xs">
               <label className="block text-sm font-bold mb-3">Target Weight (kg)</label>
-              <input 
-                type="number" 
-                value={profile.targetWeight}
-                onChange={(e) => setProfile({ ...profile, targetWeight: parseInt(e.target.value) || 0 })}
+              <input
+                type="text"
+                inputMode="decimal"
+                value={profile.targetWeight || ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    setProfile({ ...profile, targetWeight: 0 });
+                    return;
+                  }
+                  const parsed = parseFloat(raw);
+                  if (!isNaN(parsed)) {
+                    setProfile({ ...profile, targetWeight: parsed });
+                  }
+                }}
                 className="w-full bg-surface-dark border border-white/5 rounded-2xl p-4 text-white focus:outline-none focus:border-brand-orange transition-colors"
                 placeholder="65"
               />
@@ -631,10 +652,23 @@ export function DietGoals({
 
               <div className="col-span-1">
                 <label className="block text-sm font-bold mb-3">Age</label>
-                <input 
-                  type="number" 
-                  value={profile.age}
-                  onChange={(e) => setProfile({ ...profile, age: parseInt(e.target.value) || 0 })}
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={profile.age || ''}
+                  onFocus={handleInputFocus}
+                  onBlur={handleInputBlur}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setProfile({ ...profile, age: 0 });
+                      return;
+                    }
+                    const parsed = parseInt(raw);
+                    if (!isNaN(parsed)) {
+                      setProfile({ ...profile, age: parsed });
+                    }
+                  }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.age ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
                   placeholder="25"
                 />
@@ -643,10 +677,23 @@ export function DietGoals({
 
               <div className="col-span-1">
                 <label className="block text-sm font-bold mb-3">Height (cm)</label>
-                <input 
-                  type="number" 
-                  value={profile.height}
-                  onChange={(e) => setProfile({ ...profile, height: parseInt(e.target.value) || 0 })}
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={profile.height || ''}
+                  onFocus={handleInputFocus}
+                  onBlur={handleInputBlur}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setProfile({ ...profile, height: 0 });
+                      return;
+                    }
+                    const parsed = parseInt(raw);
+                    if (!isNaN(parsed)) {
+                      setProfile({ ...profile, height: parsed });
+                    }
+                  }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.height ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
                   placeholder="175"
                 />
@@ -655,12 +702,20 @@ export function DietGoals({
 
               <div className="col-span-1">
                 <label className="block text-sm font-bold mb-3">Current Weight (kg)</label>
-                <input 
-                  type="number" 
-                  value={profile.weight}
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={profile.weight || ''}
                   onChange={(e) => {
-                    const val = parseInt(e.target.value) || 0;
-                    setProfile({ ...profile, weight: val, startingWeight: val });
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setProfile({ ...profile, weight: 0, startingWeight: 0 });
+                      return;
+                    }
+                    const parsed = parseInt(raw);
+                    if (!isNaN(parsed)) {
+                      setProfile({ ...profile, weight: parsed, startingWeight: parsed });
+                    }
                   }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.weight ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
                   placeholder="70"

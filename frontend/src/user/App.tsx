@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { FoodScan } from './components/FoodScan';
 import { DietGoals } from './components/DietGoals';
@@ -32,38 +32,67 @@ interface UserAppProps {
   onLogout: () => void;
 }
 
+type AddToDietOptions = {
+  alreadyPersisted?: boolean;
+  mealType?: string;
+};
+
+const API_BASE_URL = 'http://localhost:3000/api/users';
+const AUTH_TOKEN_KEY = 'calai_token';
+const AVATAR_STORAGE_KEY = 'calai_profile_avatar';
+const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop';
+
+const getAuthHeaders = (includeJson = false) => {
+  const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+  return {
+    ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
+const createDefaultProfile = (): UserProfile => ({
+  name: 'Alex Rivers',
+  avatar: localStorage.getItem(AVATAR_STORAGE_KEY) || DEFAULT_AVATAR,
+  goal: 'lose',
+  activityLevel: 'active',
+  gender: 'male',
+  age: 28,
+  height: 180,
+  weight: 75,
+  targetWeight: 65,
+  startingWeight: 75,
+});
+
+const getMealImage = (mealTime?: string) => {
+  const normalized = (mealTime || '').toLowerCase();
+  if (normalized === 'breakfast') {
+    return 'https://images.unsplash.com/photo-1494390248081-4e521a5940db?w=800&h=600&fit=crop';
+  }
+  if (normalized === 'lunch') {
+    return 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&h=600&fit=crop';
+  }
+  if (normalized === 'snack') {
+    return 'https://images.unsplash.com/photo-1509722747041-616f39b57569?w=800&h=600&fit=crop';
+  }
+  return 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=800&h=600&fit=crop';
+};
+
+const normalizeMealType = (value?: string) => {
+  const normalized = (value || '').trim().toLowerCase();
+  if (normalized === 'breakfast' || normalized === 'lunch' || normalized === 'dinner' || normalized === 'snack') {
+    return normalized;
+  }
+  return 'dinner';
+};
+
 export default function App({ onLogout }: UserAppProps) {
   const [activeTab, setActiveTab] = useState('home');
-  const [myDiets, setMyDiets] = useState<DietItem[]>(() => {
-    const saved = localStorage.getItem('calai_my_diets');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [profile, setProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('calai_profile');
-    return saved ? JSON.parse(saved) : {
-      name: 'Alex Rivers',
-      avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop',
-      goal: 'lose',
-      activityLevel: 'active',
-      gender: 'male',
-      age: 28,
-      height: 180,
-      weight: 75,
-      targetWeight: 65,
-      startingWeight: 75,
-    };
-  });
-
+  const [myDiets, setMyDiets] = useState<DietItem[]>([]);
+  const [profile, setProfileState] = useState<UserProfile>(createDefaultProfile);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [notifications, setNotifications] = useState<{ id: string; message: string; time: string }[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
-
-  useEffect(() => {
-    localStorage.setItem('calai_my_diets', JSON.stringify(myDiets));
-  }, [myDiets]);
-
-  useEffect(() => {
-    localStorage.setItem('calai_profile', JSON.stringify(profile));
-  }, [profile]);
+  const profileSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Calculate Base Daily Target (without carry-over)
   const baseTarget = useMemo(() => {
@@ -123,6 +152,144 @@ export default function App({ onLogout }: UserAppProps) {
   // Final Adjusted Daily Target
   const dailyTarget = baseTarget + carryOver;
 
+  const handleProfileChange: React.Dispatch<React.SetStateAction<UserProfile>> = (updater) => {
+    setProfileState(prev => (typeof updater === 'function' ? updater(prev) : updater));
+  };
+
+  const mapMealToDietItem = (meal: {
+    id: number | string;
+    mealName: string;
+    calories: number;
+    protein?: number;
+    carbs?: number;
+    fats?: number;
+    mealTime?: string;
+    createdAt: string;
+  }): DietItem => ({
+    id: String(meal.id),
+    name: meal.mealName,
+    calories: meal.calories,
+    protein: meal.protein ?? 0,
+    carbs: meal.carbs ?? 0,
+    fats: meal.fats ?? 0,
+    date: meal.createdAt,
+    image: getMealImage(meal.mealTime),
+    description: `${meal.mealTime || 'Meal'} entry saved from your nutrition log.`,
+    about: 'This meal is loaded from your backend meal history and contributes to your diet tracking progress.',
+  });
+
+  const loadMeals = async () => {
+    const response = await fetch(`${API_BASE_URL}/meals/history`, {
+      headers: getAuthHeaders(),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to load meal history');
+    }
+
+    setMyDiets((result.data ?? []).map(mapMealToDietItem));
+  };
+
+  useEffect(() => {
+    const bootstrapUserData = async () => {
+      try {
+        const [profileResponse, goalsResponse, mealsResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/profile`, { headers: getAuthHeaders() }),
+          fetch(`${API_BASE_URL}/goals`, { headers: getAuthHeaders() }),
+          fetch(`${API_BASE_URL}/meals/history`, { headers: getAuthHeaders() }),
+        ]);
+
+        const [profileResult, goalsResult, mealsResult] = await Promise.all([
+          profileResponse.json(),
+          goalsResponse.json(),
+          mealsResponse.json(),
+        ]);
+
+        if (!profileResponse.ok) {
+          throw new Error(profileResult.message || 'Failed to load profile');
+        }
+        if (!goalsResponse.ok) {
+          throw new Error(goalsResult.message || 'Failed to load goals');
+        }
+        if (!mealsResponse.ok) {
+          throw new Error(mealsResult.message || 'Failed to load meals');
+        }
+
+        const avatar = localStorage.getItem(AVATAR_STORAGE_KEY) || profileResult.data?.avatar || DEFAULT_AVATAR;
+
+        setProfileState({
+          name: profileResult.data?.name || 'Alex Rivers',
+          avatar,
+          goal: goalsResult.data?.goal || 'lose',
+          activityLevel: goalsResult.data?.activityLevel || 'moderate',
+          gender: profileResult.data?.gender || 'male',
+          age: profileResult.data?.age || 25,
+          height: Number(profileResult.data?.height || 175),
+          weight: Number(profileResult.data?.weight || goalsResult.data?.currentWeight || 70),
+          targetWeight: Number(goalsResult.data?.targetWeight || 65),
+          startingWeight: Number(profileResult.data?.weight || goalsResult.data?.currentWeight || 70),
+        });
+
+        setMyDiets((mealsResult.data ?? []).map(mapMealToDietItem));
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setIsBootstrapping(false);
+      }
+    };
+
+    bootstrapUserData();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(AVATAR_STORAGE_KEY, profile.avatar);
+  }, [profile.avatar]);
+
+  useEffect(() => {
+    if (isBootstrapping) return;
+    if (profile.age <= 0 || profile.height <= 0 || profile.weight <= 0) return;
+
+    if (profileSyncTimeoutRef.current) {
+      clearTimeout(profileSyncTimeoutRef.current);
+    }
+
+    profileSyncTimeoutRef.current = setTimeout(async () => {
+      try {
+        await Promise.all([
+          fetch(`${API_BASE_URL}/profile`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify({
+              name: profile.name,
+              gender: profile.gender,
+              age: profile.age,
+              height: profile.height,
+              weight: profile.weight,
+            }),
+          }),
+          fetch(`${API_BASE_URL}/goals`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify({
+              dailyCalories: baseTarget,
+              targetWeight: profile.targetWeight,
+              goal: profile.goal,
+              activityLevel: profile.activityLevel,
+            }),
+          }),
+        ]);
+      } catch (error) {
+        console.error(error);
+      }
+    }, 400);
+
+    return () => {
+      if (profileSyncTimeoutRef.current) {
+        clearTimeout(profileSyncTimeoutRef.current);
+      }
+    };
+  }, [profile, baseTarget, isBootstrapping]);
+
   // Notification Logic
   useEffect(() => {
     const checkNotifications = () => {
@@ -156,22 +323,63 @@ export default function App({ onLogout }: UserAppProps) {
     return () => clearInterval(interval);
   }, [notifications]);
 
-  const handleAddToMyDiet = (item: Omit<DietItem, 'id' | 'date'>) => {
-    const newItem: DietItem = {
-      ...item,
-      id: Math.random().toString(36).substr(2, 9),
-      date: new Date().toISOString(),
-    };
-    setMyDiets(prev => [newItem, ...prev]);
+  const handleAddToMyDiet = async (item: Omit<DietItem, 'id' | 'date'>, options?: AddToDietOptions) => {
+    try {
+      if (options?.alreadyPersisted) {
+        await loadMeals();
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/meals`, {
+        method: 'POST',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({
+          foodName: item.name,
+          calories: item.calories,
+          mealType: normalizeMealType(options?.mealType),
+          protein: item.protein,
+          carbs: item.carbs,
+          fats: item.fats,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to save meal');
+      }
+
+      setMyDiets(prev => [mapMealToDietItem(result.data), ...prev]);
+    } catch (error) {
+      console.error(error);
+    }
   };
 
-  const handleRemoveFromMyDiet = (id: string) => {
-    setMyDiets(prev => prev.filter(item => item.id !== id));
+  const handleRemoveFromMyDiet = async (id: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/meals/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.message || 'Failed to delete meal');
+      }
+      setMyDiets(prev => prev.filter(item => item.id !== id));
+    } catch (error) {
+      console.error(error);
+    }
   };
 
   const removeNotification = (id: string) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
+
+  if (isBootstrapping) {
+    return (
+      <div className="flex min-h-screen bg-bg-dark items-center justify-center text-white">
+        <div className="text-sm font-bold uppercase tracking-widest text-text-muted">Loading profile...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-bg-dark">
@@ -271,7 +479,7 @@ export default function App({ onLogout }: UserAppProps) {
             onAddToMyDiet={handleAddToMyDiet} 
             onRemoveFromMyDiet={handleRemoveFromMyDiet}
             profile={profile}
-            setProfile={setProfile}
+            setProfile={handleProfileChange}
             dailyTarget={dailyTarget}
             baseTarget={baseTarget}
             carryOver={carryOver}
@@ -282,7 +490,7 @@ export default function App({ onLogout }: UserAppProps) {
         {activeTab === 'settings' && (
           <Settings 
             profile={profile}
-            setProfile={setProfile}
+            setProfile={handleProfileChange}
           />
         )}
         {activeTab !== 'home' && activeTab !== 'scan' && activeTab !== 'goals' && activeTab !== 'meals' && activeTab !== 'dashboard' && activeTab !== 'chat' && activeTab !== 'settings' && (
