@@ -91,10 +91,11 @@ interface UserRow {
   account_id: number | null;
   full_name: string | null;
   gender: string | null;
-  date_of_birth: string | null;
+  age: number | null;
   height: number | null;
   weight: number | null;
   created_at: string | null;
+  has_completed_setup: number;
 }
 
 interface GoalRow {
@@ -123,21 +124,13 @@ interface FoodTemplate {
   sodium: 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
-const DEMO_USER = {
-  fullName: 'Nguyen Tan Dat',
-  gender: 'male',
-  dateOfBirth: '2003-09-09',
-  height: 175,
-  weight: 70,
-};
-
-const DEFAULT_GOAL = 'lose';
-const DEFAULT_ACTIVITY_LEVEL = 'moderate';
+const DEMO_USER: null = null;
 
 const mapGoalTypeToAppGoal = (value?: string | null) => {
   if (value === 'muscle_gain' || value === 'gain') return 'gain';
   if (value === 'maintenance' || value === 'maintain') return 'maintain';
-  return 'lose';
+  if (value === 'weight_loss' || value === 'lose') return 'lose';
+  return null;
 };
 
 const mapAppGoalToGoalType = (value?: string | null) => {
@@ -150,7 +143,7 @@ const normalizeActivityLevel = (value?: string | null) => {
   if (value === 'sedentary' || value === 'light' || value === 'moderate' || value === 'active') {
     return value;
   }
-  return DEFAULT_ACTIVITY_LEVEL;
+  return null;
 };
 
 const hasColumn = async (tableName: string, columnName: string) => {
@@ -280,6 +273,27 @@ const initializeUserModuleSchema = async () => {
       ADD COLUMN activity_level VARCHAR(50) NULL DEFAULT 'moderate'
     `);
   }
+
+  if (!(await hasColumn('users', 'has_completed_setup'))) {
+    await pool.query(`
+      ALTER TABLE users
+      ADD COLUMN has_completed_setup TINYINT DEFAULT 0
+    `);
+  }
+
+  // Migration: add age column if not exists, drop date_of_birth if exists
+  if (!(await hasColumn('users', 'age'))) {
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN age INT`);
+    } catch {
+      // ignore
+    }
+  }
+  try {
+    await pool.query(`ALTER TABLE users DROP COLUMN date_of_birth`);
+  } catch {
+    // ignore if column doesn't exist
+  }
 };
 
 const ensureUserModuleSchema = async () => {
@@ -336,29 +350,28 @@ const SEED_FOODS = [
   { name: 'Oatmeal with Banana', category: 'Breakfast', calories: 280, protein: 8, carbs: 52, fats: 4 },
   { name: 'Grilled Salmon', category: 'Dinner', calories: 500, protein: 38, carbs: 12, fats: 28 },
   { name: 'Greek Yogurt Bowl', category: 'Snack', calories: 220, protein: 16, carbs: 24, fats: 6 },
+  { name: 'Boiled Eggs', category: 'Breakfast', calories: 155, protein: 13, carbs: 1, fats: 11 },
+  { name: 'Banh Mi Egg', category: 'Breakfast', calories: 390, protein: 17, carbs: 52, fats: 13 },
+  { name: 'Avocado Toast', category: 'Breakfast', calories: 310, protein: 8, carbs: 32, fats: 18 },
+  { name: 'Com Tam', category: 'Lunch', calories: 650, protein: 32, carbs: 78, fats: 24 },
+  { name: 'Pho Bo', category: 'Lunch', calories: 430, protein: 25, carbs: 55, fats: 12 },
+  { name: 'Bun Thit Nuong', category: 'Lunch', calories: 520, protein: 28, carbs: 68, fats: 16 },
+  { name: 'Grilled Chicken Rice', category: 'Lunch', calories: 560, protein: 42, carbs: 62, fats: 14 },
+  { name: 'Mediterranean Quinoa', category: 'Lunch', calories: 320, protein: 14, carbs: 45, fats: 8 },
+  { name: 'Chicken Rice', category: 'Dinner', calories: 620, protein: 36, carbs: 72, fats: 18 },
+  { name: 'Beef Stir Fry', category: 'Dinner', calories: 540, protein: 35, carbs: 38, fats: 26 },
+  { name: 'Tofu Stir Fry', category: 'Dinner', calories: 310, protein: 18, carbs: 42, fats: 12 },
+  { name: 'Salmon with Quinoa', category: 'Dinner', calories: 556, protein: 44, carbs: 46, fats: 28 },
+  { name: 'Turkey Wrap', category: 'Snack', calories: 280, protein: 24, carbs: 32, fats: 8 },
+  { name: 'Apple', category: 'Snack', calories: 95, protein: 1, carbs: 25, fats: 0 },
+  { name: 'Banana', category: 'Snack', calories: 105, protein: 1, carbs: 27, fats: 0 },
+  { name: 'Protein Shake', category: 'Snack', calories: 180, protein: 25, carbs: 9, fats: 4 },
+  { name: 'Mixed Nuts', category: 'Snack', calories: 210, protein: 6, carbs: 8, fats: 18 },
 ];
 
 const getRandomTemplate = () => {
   const index = Math.floor(Math.random() * FOOD_TEMPLATES.length);
   return FOOD_TEMPLATES[index];
-};
-
-const ageToBirthDate = (age: number) => {
-  const date = new Date();
-  date.setFullYear(date.getFullYear() - age);
-  return date.toISOString().slice(0, 10);
-};
-
-const getAge = (birthDate: string | null) => {
-  if (!birthDate) return 22;
-  const today = new Date();
-  const dob = new Date(birthDate);
-  let age = today.getFullYear() - dob.getFullYear();
-  const monthDiff = today.getMonth() - dob.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
-    age -= 1;
-  }
-  return age;
 };
 
 const getDemoAvatar = () =>
@@ -394,7 +407,7 @@ const getUserByAccountId = async (accountId?: number | null): Promise<UserRow | 
 
   const [rows] = await pool.query(
     `
-      SELECT user_id, account_id, full_name, gender, date_of_birth, height, weight, created_at
+      SELECT user_id, account_id, full_name, gender, age, height, weight, created_at, has_completed_setup
       FROM users
       WHERE account_id = ?
       LIMIT 1
@@ -408,7 +421,7 @@ const getUserByAccountId = async (accountId?: number | null): Promise<UserRow | 
 const getFallbackUser = async (): Promise<UserRow> => {
   const [users] = await pool.query(
     `
-      SELECT user_id, account_id, full_name, gender, date_of_birth, height, weight, created_at
+      SELECT user_id, account_id, full_name, gender, age, height, weight, created_at, has_completed_setup
       FROM users
       ORDER BY user_id
       LIMIT 1
@@ -426,10 +439,13 @@ const getFallbackUser = async (): Promise<UserRow> => {
 const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
   await ensureUserModuleSchema();
   const user = await getUserByAccountId(accountId);
-  return user ?? getFallbackUser();
+  if (!user) {
+    throw new Error('USER_NOT_FOUND');
+  }
+  return user;
 };
 
-const ensureUserGoal = async (userId: number): Promise<GoalRow> => {
+const ensureUserGoal = async (userId: number): Promise<GoalRow | null> => {
   const [goals] = await pool.query(
     `
       SELECT goal_id, user_id, target_calories, target_weight, goal_type, activity_level
@@ -442,29 +458,7 @@ const ensureUserGoal = async (userId: number): Promise<GoalRow> => {
   );
 
   const goalRows = goals as GoalRow[];
-  if (goalRows.length > 0) {
-    return goalRows[0];
-  }
-
-  const [insertResult] = await pool.query(
-    `
-      INSERT INTO usergoals (user_id, target_calories, target_weight, goal_type, activity_level)
-      VALUES (?, ?, ?, ?, ?)
-    `,
-    [userId, 2200, 65, mapAppGoalToGoalType(DEFAULT_GOAL), DEFAULT_ACTIVITY_LEVEL]
-  );
-
-  const goalId = (insertResult as { insertId: number }).insertId;
-  const [createdGoals] = await pool.query(
-    `
-      SELECT goal_id, user_id, target_calories, target_weight, goal_type, activity_level
-      FROM usergoals
-      WHERE goal_id = ?
-    `,
-    [goalId]
-  );
-
-  return (createdGoals as GoalRow[])[0];
+  return goalRows[0] ?? null;
 };
 
 const ensureFoodCategory = async (categoryName: string) => {
@@ -724,58 +718,68 @@ export const initializeUserServices = async () => {
 };
 
 export const getUserProfileService = async (accountId?: number | null) => {
-  const user = await resolveUser(accountId);
-
-  return {
-    id: user.user_id,
-    name: user.full_name || DEMO_USER.fullName,
-    email: `user${user.user_id}@calai.local`,
-    role: 'user',
-    gender: user.gender ?? DEMO_USER.gender,
-    age: getAge(user.date_of_birth),
-    height: user.height ?? DEMO_USER.height,
-    weight: user.weight ?? DEMO_USER.weight,
-    goal: 'lose weight',
-    avatar: getDemoAvatar(),
-  };
+  try {
+    const user = await resolveUser(accountId);
+    return {
+      id: user.user_id,
+      name: user.full_name || null,
+      email: null,
+      role: 'user',
+      gender: user.gender || null,
+      age: user.age ?? null,
+      height: user.height || null,
+      weight: user.weight || null,
+      goal: null,
+      avatar: null,
+      hasCompletedSetup: Boolean(user.has_completed_setup),
+    };
+  } catch {
+    return null;
+  }
 };
 
 export const getUserGoalsService = async (accountId?: number | null) => {
-  const user = await resolveUser(accountId);
-  const goal = await ensureUserGoal(user.user_id);
+  try {
+    const user = await resolveUser(accountId);
+    const goal = await ensureUserGoal(user.user_id);
+    if (!goal) return null;
 
-  return {
-    dailyCalories: Math.round(goal.target_calories ?? 2200),
-    targetWeight: goal.target_weight ?? 65,
-    currentWeight: user.weight ?? DEMO_USER.weight,
-    goal: mapGoalTypeToAppGoal(goal.goal_type),
-    activityLevel: normalizeActivityLevel(goal.activity_level),
-  };
+    return {
+      dailyCalories: goal.target_calories || null,
+      targetWeight: goal.target_weight || null,
+      currentWeight: user.weight || null,
+      goal: mapGoalTypeToAppGoal(goal.goal_type),
+      activityLevel: normalizeActivityLevel(goal.activity_level),
+    };
+  } catch {
+    return null;
+  }
 };
 
 export const getUserMealsService = async (accountId?: number | null) => {
-  const user = await resolveUser(accountId);
-  const [rows] = await pool.query(
-    `
-      SELECT
-        m.meal_id,
-        m.meal_type,
-        m.created_at,
-        f.food_name,
-        mi.quantity,
-        f.calories,
-        f.protein,
-        f.carbs,
-        f.fat
-      FROM meals m
-      INNER JOIN mealitems mi ON mi.meal_id = m.meal_id
-      INNER JOIN foods f ON f.food_id = mi.food_id
-      WHERE m.user_id = ?
-      ORDER BY m.created_at DESC
-      LIMIT 10
-    `,
-    [user.user_id]
-  );
+  try {
+    const user = await resolveUser(accountId);
+    const [rows] = await pool.query(
+      `
+        SELECT
+          m.meal_id,
+          m.meal_type,
+          m.created_at,
+          f.food_name,
+          mi.quantity,
+          f.calories,
+          f.protein,
+          f.carbs,
+          f.fat
+        FROM meals m
+        INNER JOIN mealitems mi ON mi.meal_id = m.meal_id
+        INNER JOIN foods f ON f.food_id = mi.food_id
+        WHERE m.user_id = ?
+        ORDER BY m.created_at DESC
+        LIMIT 10
+      `,
+      [user.user_id]
+    );
 
   return (rows as Array<{
     meal_id: number;
@@ -797,6 +801,9 @@ export const getUserMealsService = async (accountId?: number | null) => {
       fats: Math.round((row.fat ?? 0) * row.quantity),
       createdAt: row.created_at,
     }));
+  } catch {
+    return [];
+  }
 };
 
 export const getUserMealHistoryService = async (accountId?: number | null) => {
@@ -804,41 +811,60 @@ export const getUserMealHistoryService = async (accountId?: number | null) => {
 };
 
 export const getUserDashboardService = async (accountId?: number | null) => {
-  const user = await resolveUser(accountId);
-  const goal = await ensureUserGoal(user.user_id);
-  const totals = await updateDailyNutritionLog(user.user_id);
+  try {
+    const user = await resolveUser(accountId);
+    const goal = await ensureUserGoal(user.user_id);
+    const totals = await updateDailyNutritionLog(user.user_id);
 
-  return {
-    overview: {
-      currentCalories: totals.current,
-      targetCalories: Math.round(goal.target_calories ?? 2200),
-      totalProtein: totals.protein,
-      totalCarbs: totals.carbs,
-      totalFats: totals.fats,
-    },
-    profile: {
-      currentWeight: user.weight ?? DEMO_USER.weight,
-      targetWeight: goal.target_weight ?? 65,
-    },
-  };
+    return {
+      overview: {
+        currentCalories: totals.current,
+        targetCalories: goal?.target_calories ?? null,
+        totalProtein: totals.protein,
+        totalCarbs: totals.carbs,
+        totalFats: totals.fats,
+      },
+      profile: {
+        currentWeight: user.weight ?? null,
+        targetWeight: goal?.target_weight ?? null,
+      },
+    };
+  } catch {
+    return {
+      overview: {
+        currentCalories: 0,
+        targetCalories: null,
+        totalProtein: 0,
+        totalCarbs: 0,
+        totalFats: 0,
+      },
+      profile: {
+        currentWeight: null,
+        targetWeight: null,
+      },
+    };
+  }
 };
 
 export const updateUserProfileService = async (accountId: number | null | undefined, payload: UpsertUserProfilePayload) => {
   const user = await resolveUser(accountId);
+  if (!user) {
+    throw new Error('USER_NOT_FOUND');
+  }
 
-  const nextName = payload.name ?? user.full_name ?? DEMO_USER.fullName;
-  const nextGender = payload.gender ?? user.gender ?? DEMO_USER.gender;
-  const nextHeight = payload.height ?? user.height ?? DEMO_USER.height;
-  const nextWeight = payload.weight ?? user.weight ?? DEMO_USER.weight;
-  const nextBirthDate = payload.age ? ageToBirthDate(payload.age) : user.date_of_birth ?? DEMO_USER.dateOfBirth;
+  const nextName = payload.name ?? user.full_name ?? '';
+  const nextGender = payload.gender ?? user.gender ?? '';
+  const nextHeight = payload.height ?? user.height ?? 0;
+  const nextWeight = payload.weight ?? user.weight ?? 0;
+  const nextAge = payload.age ?? user.age ?? null;
 
   await pool.query(
     `
       UPDATE users
-      SET full_name = ?, gender = ?, date_of_birth = ?, height = ?, weight = ?
+      SET full_name = ?, gender = ?, age = ?, height = ?, weight = ?, has_completed_setup = 1
       WHERE user_id = ?
     `,
-    [nextName, nextGender, nextBirthDate, nextHeight, nextWeight, user.user_id]
+    [nextName, nextGender, nextAge, nextHeight, nextWeight, user.user_id]
   );
 
   return getUserProfileService(accountId);
@@ -846,22 +872,46 @@ export const updateUserProfileService = async (accountId: number | null | undefi
 
 export const updateUserGoalsService = async (accountId: number | null | undefined, payload: UpdateUserGoalsPayload) => {
   const user = await resolveUser(accountId);
-  const goal = await ensureUserGoal(user.user_id);
+  if (!user) {
+    throw new Error('USER_NOT_FOUND');
+  }
 
-  await pool.query(
-    `
-      UPDATE usergoals
-      SET target_calories = ?, target_weight = ?, goal_type = ?, activity_level = ?
-      WHERE goal_id = ?
-    `,
-    [
-      payload.dailyCalories ?? goal.target_calories ?? 2200,
-      payload.targetWeight ?? goal.target_weight ?? 65,
-      mapAppGoalToGoalType(payload.goal ?? mapGoalTypeToAppGoal(goal.goal_type)),
-      normalizeActivityLevel(payload.activityLevel ?? goal.activity_level),
-      goal.goal_id,
-    ]
-  );
+  let goal = await ensureUserGoal(user.user_id);
+  if (!goal) {
+    const [insertResult] = await pool.query(
+      `INSERT INTO usergoals (user_id, target_calories, target_weight, goal_type, activity_level) VALUES (?, ?, ?, ?, ?)`,
+      [
+        user.user_id,
+        payload.dailyCalories ?? null,
+        payload.targetWeight ?? null,
+        payload.goal ? mapAppGoalToGoalType(payload.goal) : null,
+        payload.activityLevel ?? null,
+      ]
+    );
+    goal = {
+      goal_id: (insertResult as { insertId: number }).insertId,
+      user_id: user.user_id,
+      target_calories: payload.dailyCalories ?? null,
+      target_weight: payload.targetWeight ?? null,
+      goal_type: payload.goal ? mapAppGoalToGoalType(payload.goal) : null,
+      activity_level: payload.activityLevel ?? null,
+    };
+  } else {
+    await pool.query(
+      `
+        UPDATE usergoals
+        SET target_calories = ?, target_weight = ?, goal_type = ?, activity_level = ?
+        WHERE goal_id = ?
+      `,
+      [
+        payload.dailyCalories ?? goal.target_calories,
+        payload.targetWeight ?? goal.target_weight,
+        payload.goal ? mapAppGoalToGoalType(payload.goal) : goal.goal_type,
+        payload.activityLevel ?? goal.activity_level,
+        goal.goal_id,
+      ]
+    );
+  }
 
   return getUserGoalsService(accountId);
 };
@@ -1073,15 +1123,17 @@ export const analyzeFoodImageService = async (
   const user = await resolveUser(accountId);
   await ensureUserGoal(user.user_id);
 
-  const template = source === 'camera'
-    ? FOOD_TEMPLATES.find(item => item.source === 'camera') || getRandomTemplate()
-    : FOOD_TEMPLATES.find(item => item.source === 'upload') || getRandomTemplate();
-
+  // Save image record
   const [imageResult] = await pool.query(
     'INSERT INTO foodimages (user_id, image_url, source) VALUES (?, ?, ?)',
     [user.user_id, imageUrl, source]
   );
   const imageId = (imageResult as { insertId: number }).insertId;
+
+  // Try Python AI first, fallback to templates
+  let template = source === 'camera'
+    ? FOOD_TEMPLATES.find(item => item.source === 'camera') || getRandomTemplate()
+    : FOOD_TEMPLATES.find(item => item.source === 'upload') || getRandomTemplate();
 
   const foodId = await createFoodRecord(template);
 

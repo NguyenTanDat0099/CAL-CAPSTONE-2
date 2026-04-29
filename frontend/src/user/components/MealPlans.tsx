@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Search, RotateCcw, Plus, Utensils, ArrowLeft, Info, Flame, Zap, Droplets, Heart, PlusCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Meal, MealCategory, DietItem } from '../types';
+import { buildApiUrl } from '../../config/api';
 
 const mockMeals: Meal[] = [
   {
@@ -102,6 +103,31 @@ const mockMeals: Meal[] = [
   }
 ];
 
+const AUTH_TOKEN_KEY = 'calai_token';
+
+const getAuthHeaders = (): Record<string, string> => {
+  let token = '';
+  try { token = sessionStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch {}
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+const normalizeMealCategory = (value?: string | null): MealCategory => {
+  const normalized = (value || '').toLowerCase();
+  if (normalized === 'breakfast') return 'Breakfast';
+  if (normalized === 'lunch') return 'Lunch';
+  if (normalized === 'dinner') return 'Dinner';
+  if (normalized === 'snack') return 'Snack';
+  return 'Lunch';
+};
+
+const getMealImage = (category: MealCategory, image?: string | null) => {
+  if (image) return image;
+  if (category === 'Breakfast') return 'https://images.unsplash.com/photo-1494390248081-4e521a5940db?w=800&h=600&fit=crop';
+  if (category === 'Lunch') return 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&h=600&fit=crop';
+  if (category === 'Dinner') return 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=800&h=600&fit=crop';
+  return 'https://images.unsplash.com/photo-1509722747041-616f39b57569?w=800&h=600&fit=crop';
+};
+
 interface MealPlansProps {
   onAddToMyDiet: (
     item: Omit<DietItem, 'id' | 'date'>,
@@ -115,9 +141,59 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
   const [minKcal, setMinKcal] = useState<string>('0');
   const [maxKcal, setMaxKcal] = useState<string>('1200');
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
+  const [meals, setMeals] = useState<Meal[]>([]);
+  const [loadingMeals, setLoadingMeals] = useState(true);
+
+  useEffect(() => {
+    const loadMeals = async () => {
+      setLoadingMeals(true);
+      try {
+        const response = await fetch(buildApiUrl(`/users/foods/search?q=${encodeURIComponent(searchQuery)}`), {
+          headers: getAuthHeaders(),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.message || 'Failed to load meals');
+        }
+
+        const mappedMeals: Meal[] = (result.data ?? []).map((food: {
+          id: number;
+          name: string;
+          calories: number;
+          protein: number;
+          carbs: number;
+          fats: number;
+          category?: string;
+          imagePath?: string | null;
+        }) => {
+          const category = normalizeMealCategory(food.category);
+          return {
+            id: String(food.id),
+            name: food.name,
+            calories: food.calories,
+            protein: food.protein,
+            carbs: food.carbs,
+            fats: food.fats,
+            image: getMealImage(category, food.imagePath),
+            category,
+            description: `${food.name} from the CalAI food library.`,
+            about: 'This nutrition profile is maintained by the admin Food Library and can be added to your daily diet log.',
+          };
+        });
+
+        setMeals(mappedMeals);
+      } catch {
+        setMeals(mockMeals);
+      } finally {
+        setLoadingMeals(false);
+      }
+    };
+
+    loadMeals();
+  }, [searchQuery]);
 
   const filteredMeals = useMemo(() => {
-    return mockMeals.filter(meal => {
+    return meals.filter(meal => {
       const matchesCategory = activeCategory === 'All' || meal.category === activeCategory;
       const matchesSearch = meal.name.toLowerCase().includes(searchQuery.toLowerCase());
       const kcal = meal.calories;
@@ -126,7 +202,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
       const matchesKcal = kcal >= min && kcal <= max;
       return matchesCategory && matchesSearch && matchesKcal;
     });
-  }, [activeCategory, searchQuery, minKcal, maxKcal]);
+  }, [meals, activeCategory, searchQuery, minKcal, maxKcal]);
 
   const handleReset = () => {
     setMinKcal('0');
@@ -312,6 +388,12 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
       </div>
 
       {/* Meals Grid */}
+      {loadingMeals && (
+        <div className="py-16 text-center text-text-muted font-bold uppercase tracking-widest text-xs">
+          Loading food library...
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-32">
         <AnimatePresence mode="popLayout">
           {filteredMeals.map((meal) => (
