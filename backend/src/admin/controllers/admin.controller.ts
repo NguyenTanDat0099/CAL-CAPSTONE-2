@@ -24,11 +24,11 @@ const handleError = (error: unknown, res: Response) => {
   return res.status(500).json({ message: 'INTERNAL_SERVER_ERROR' });
 };
 
-const parseIntParam = (value: unknown, fallback: number): number => {
-  if (value === undefined || value === null) return fallback;
+const parseIntParam = (value: unknown, defaultValue: number): number => {
+  if (value === undefined || value === null) return defaultValue;
   const str = Array.isArray(value) ? String(value[0]) : String(value);
   const parsed = parseInt(str, 10);
-  return isNaN(parsed) ? fallback : parsed;
+  return isNaN(parsed) ? defaultValue : parsed;
 };
 
 // ──────────────────────────────────────────────

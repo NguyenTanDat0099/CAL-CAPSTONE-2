@@ -478,58 +478,12 @@ const ensureUserModuleSchema = async () => {
   await userModuleSchemaInitPromise;
 };
 
-const FOOD_TEMPLATES: FoodTemplate[] = [
-  {
-    name: 'Chicken Hummus Bowl',
-    source: 'upload',
-    categoryName: 'Balanced Bowl',
-    estimatedPortion: '1 serving bowl',
-    confidence: 0.93,
-    totalKcal: 575,
-    protein: 42,
-    carbs: 68,
-    fats: 14,
-    ingredients: [
-      { name: 'Grilled Chicken Strips', amount: '150g', category: 'Lean Protein', calories: 220 },
-      { name: 'Whole Grain Naan', amount: '1 piece', category: 'Complex Carb', calories: 260 },
-      { name: 'Bell Peppers', amount: '80g', category: 'Vegetable', calories: 45 },
-      { name: 'Hummus', amount: '45g', category: 'Healthy Fat', calories: 50 },
-    ],
-    healthScore: 8.4,
-    sodium: 'LOW',
-  },
-  {
-    name: 'Fried Chicken Rice',
-    source: 'camera',
-    categoryName: 'Comfort Meal',
-    estimatedPortion: '1 large plate',
-    confidence: 0.62,
-    totalKcal: 860,
-    protein: 34,
-    carbs: 92,
-    fats: 38,
-    ingredients: [
-      { name: 'Fried Chicken', amount: '180g', category: 'Protein', calories: 420 },
-      { name: 'White Rice', amount: '200g', category: 'Carb', calories: 260 },
-      { name: 'Pickled Vegetables', amount: '40g', category: 'Vegetable', calories: 30 },
-      { name: 'Sauce', amount: '35g', category: 'Sauce', calories: 150 },
-    ],
-    healthScore: 5.8,
-    sodium: 'HIGH',
-  },
-];
-
 const SEED_FOODS = [
   { name: 'Chicken Salad', category: 'Healthy Meal', calories: 350, protein: 30, carbs: 18, fats: 14 },
   { name: 'Oatmeal with Banana', category: 'Breakfast', calories: 280, protein: 8, carbs: 52, fats: 4 },
   { name: 'Grilled Salmon', category: 'Dinner', calories: 500, protein: 38, carbs: 12, fats: 28 },
   { name: 'Greek Yogurt Bowl', category: 'Snack', calories: 220, protein: 16, carbs: 24, fats: 6 },
 ];
-
-const getRandomTemplate = () => {
-  const index = Math.floor(Math.random() * FOOD_TEMPLATES.length);
-  return FOOD_TEMPLATES[index];
-};
 
 const getDemoAvatar = () =>
   'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop';
@@ -557,6 +511,118 @@ const normalizeMealType = (value?: string | null) => {
   return 'dinner';
 };
 
+const toRecord = (value: unknown): Record<string, unknown> => (
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+);
+
+const toNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const match = value.match(/-?\d+(?:\.\d+)?/);
+    if (match) return Number(match[0]);
+  }
+  return null;
+};
+
+const toStringArray = (value: unknown): string[] => (
+  Array.isArray(value)
+    ? value.map(item => String(item ?? '').trim()).filter(Boolean)
+    : []
+);
+
+const parseImageDataUrl = (imageUrl: string) => {
+  const match = imageUrl.match(/^data:(image\/(?:png|jpe?g|webp));base64,([a-z0-9+/=]+)$/i);
+  if (!match) {
+    throw new Error('INVALID_IMAGE');
+  }
+
+  const buffer = Buffer.from(match[2], 'base64');
+  const bytes = new ArrayBuffer(buffer.byteLength);
+  new Uint8Array(bytes).set(buffer);
+  return {
+    mime: match[1].toLowerCase(),
+    bytes,
+  };
+};
+
+const buildFoodTemplateFromCalAi = (data: unknown, source: AnalysisSource): FoodTemplate => {
+  const record = toRecord(data);
+  const vision = toRecord(record.vision_detail);
+  const summary = toRecord(record.nutrition_summary);
+  const estimate = toRecord(summary.estimated_visible_portion ?? record.estimated_nutrition);
+
+  const name = String(record.dish_name || '').trim();
+  if (!name || name.toLowerCase() === 'unknown') {
+    throw new Error('AI_ANALYSIS_INCOMPLETE');
+  }
+
+  const totalKcal = toNumber(estimate.calories);
+  if (totalKcal == null) {
+    throw new Error('AI_ANALYSIS_INCOMPLETE');
+  }
+
+  const protein = toNumber(estimate.protein) ?? 0;
+  const carbs = toNumber(estimate.carbs) ?? 0;
+  const fats = toNumber(estimate.fat) ?? 0;
+  const confidence = toNumber(record.confidence) ?? 0;
+  const categoryName = typeof vision.category === 'string' && vision.category.trim()
+    ? vision.category.trim()
+    : 'AI Analysis';
+  const estimatedPortion = typeof estimate.serving_size === 'string' && estimate.serving_size.trim()
+    ? estimate.serving_size.trim()
+    : (typeof vision.portion_description === 'string' && vision.portion_description.trim()
+        ? vision.portion_description.trim()
+        : '1 serving');
+  const ingredientNames = toStringArray(vision.ingredients).slice(0, 6);
+  const caloriesPerIngredient = ingredientNames.length > 0
+    ? Math.round(totalKcal / ingredientNames.length)
+    : Math.round(totalKcal);
+
+  const ingredients = (ingredientNames.length ? ingredientNames : [name]).map((ingredient, index) => ({
+    name: ingredient,
+    amount: index === 0 ? estimatedPortion : 'visible ingredient',
+    category: index === 0 ? categoryName : 'Ingredient',
+    calories: index === 0 && ingredientNames.length === 0 ? Math.round(totalKcal) : caloriesPerIngredient,
+  }));
+
+  const sodium = getSodiumLevel(totalKcal);
+  return {
+    name,
+    source,
+    categoryName,
+    estimatedPortion,
+    confidence,
+    totalKcal: Math.round(totalKcal),
+    protein: Math.round(protein),
+    carbs: Math.round(carbs),
+    fats: Math.round(fats),
+    ingredients,
+    healthScore: computeHealthScore(totalKcal, protein, sodium),
+    sodium,
+  };
+};
+
+const analyzeImageWithCalAi = async (imageUrl: string, source: AnalysisSource): Promise<FoodTemplate> => {
+  const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
+  if (!baseUrl) {
+    throw new Error('CAL_AI_UNAVAILABLE');
+  }
+
+  const image = parseImageDataUrl(imageUrl);
+  const form = new FormData();
+  form.append('file', new Blob([image.bytes], { type: image.mime }), `food-scan.${image.mime.split('/')[1] || 'jpg'}`);
+
+  const response = await fetch(`${baseUrl}/api/food/analyze`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error('CAL_AI_UNAVAILABLE');
+  }
+
+  return buildFoodTemplateFromCalAi(await response.json(), source);
+};
+
 const getUserByAccountId = async (accountId?: number | null): Promise<UserRow | null> => {
   if (!accountId) {
     return null;
@@ -573,24 +639,6 @@ const getUserByAccountId = async (accountId?: number | null): Promise<UserRow | 
   );
 
   return (rows as UserRow[])[0] ?? null;
-};
-
-const getFallbackUser = async (): Promise<UserRow> => {
-  const [users] = await pool.query(
-    `
-      SELECT user_id, account_id, full_name, gender, age, height, weight, created_at, has_completed_setup
-      FROM users
-      ORDER BY user_id
-      LIMIT 1
-    `
-  );
-  const existing = (users as UserRow[])[0];
-
-  if (!existing) {
-    throw new Error('USER_NOT_FOUND');
-  }
-
-  return existing;
 };
 
 const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
@@ -1287,11 +1335,7 @@ export const analyzeFoodImageService = async (
   );
   const imageId = (imageResult as { insertId: number }).insertId;
 
-  // Try Python AI first, fallback to templates
-  let template = source === 'camera'
-    ? FOOD_TEMPLATES.find(item => item.source === 'camera') || getRandomTemplate()
-    : FOOD_TEMPLATES.find(item => item.source === 'upload') || getRandomTemplate();
-
+  const template = await analyzeImageWithCalAi(imageUrl, source);
   const foodId = await createFoodRecord(template);
 
   const [resultInsert] = await pool.query(

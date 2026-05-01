@@ -60,7 +60,7 @@ interface CalAiQueryResult {
   citations?: Array<Record<string, unknown>>;
 }
 
-const MAX_IMAGE_DATA_URL_LENGTH = 7_000_000;
+const MAX_IMAGE_DATA_URL_LENGTH = Number(process.env.MAX_IMAGE_DATA_URL_LENGTH || 3_500_000);
 
 interface ImageData {
   mime: string;
@@ -69,6 +69,7 @@ interface ImageData {
 }
 
 interface FoodImageInsight {
+  answer?: string | null;
   dishName: string | null;
   confidence: number | null;
   description: string | null;
@@ -91,7 +92,7 @@ interface FoodImageInsight {
   followUpQuestions?: string[];
   tableRows?: Array<Record<string, unknown>>;
   imageQuality?: Record<string, unknown>;
-  source: 'cal-ai' | 'ollama-vision' | 'filename' | 'local-estimate';
+  source: 'cal-ai';
 }
 
 const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
@@ -206,6 +207,12 @@ const isFollowUpMessage = (message: string) => {
     'tiep',
     'tinh tiep',
     'vay con',
+    'vay ',
+    'nhu vay',
+    'luong dinh duong',
+    'can nang hien tai',
+    'tang bao nhieu',
+    'giam bao nhieu',
     'con no',
     'so sanh voi',
     'them',
@@ -405,6 +412,14 @@ const wantsStructuredTable = (message: string) => {
       'nutrition',
       'uoc tinh',
       'estimate',
+      'kg',
+      'tang bao nhieu',
+      'giam bao nhieu',
+      'tdee',
+      'bmr',
+      'can nang',
+      'surplus',
+      'deficit',
     ].some(keyword => normalized.includes(keyword));
 };
 
@@ -478,118 +493,6 @@ const askCalAi = async (
   } catch {
     return null;
   }
-};
-
-const askOllama = async (
-  message: string,
-  calAiContext?: string | null,
-  runtimeContext?: ChatRuntimeContext | null
-) => {
-  const baseUrl = (process.env.OLLAMA_BASE_URL || '').replace(/\/+$/, '');
-  const model = process.env.OLLAMA_MODEL || 'llama3.2';
-  if (!baseUrl || !model) return null;
-
-  const tableMode = wantsStructuredTable(message);
-  const chartMode = wantsChart(message);
-  const prompt = [
-    'You are CalAI Pro, an experienced clinical nutrition consultant, food analyst, and practical long-term health advisor.',
-    'Trả lời bằng tiếng Việt tự nhiên, đầy đủ và bám sát câu hỏi hiện tại. Chỉ dùng ngôn ngữ khác nếu user yêu cầu rõ ràng.',
-    'Do not diagnose disease, prescribe treatment, or replace personal medical care.',
-    'Use professional nutrition reasoning: clarify the user goal, state assumptions, estimate calories/macros when possible, assess tradeoffs, mention uncertainty, and give actionable next steps.',
-    'When the user asks to list, compare, plan, review numeric nutrition, estimate macros/calories, or asks for chart-like data, use Markdown tables. Do not wrap tables in code blocks.',
-    tableMode
-      ? 'Table mode is ON: include at least one compact Markdown table with relevant columns and numbers/assumptions. Add short notes below the table only when needed.'
-      : 'Table mode is OFF unless a table would make numeric information clearer.',
-    chartMode
-      ? 'The user asked for a chart/graph: provide chart-ready table data and a one-sentence chart recommendation. Do not generate image syntax.'
-      : 'If chart data is useful, keep it as a normal table.',
-    calAiContext
-      ? `Use this Cal-AI retrieval/context answer as supporting data, but rewrite it clearly and correct obvious formatting issues:\n${calAiContext}`
-      : 'No external nutrition context was returned; make conservative estimates and label them as estimates.',
-    runtimeContext?.contextText
-      ? `Conversation context for resolving follow-up references. Use it only when relevant:\n${runtimeContext.contextText}`
-      : 'No previous chat context was provided.',
-    runtimeContext?.isFollowUp
-      ? 'The current user message appears to be a follow-up. Resolve pronouns like "món này", "nó", "this", "that" using the conversation context before answering.'
-      : 'The current user message appears mostly standalone; do not overuse old context.',
-    'If information is missing, say the most important assumption and ask one useful follow-up question.',
-    `Current user question: ${message}`,
-  ].join('\n');
-
-  try {
-    return await withTimeout(async signal => {
-      const response = await fetch(`${baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal,
-        body: JSON.stringify({
-          model,
-          prompt,
-          stream: false,
-          options: {
-            temperature: 0.2,
-            num_predict: tableMode ? 700 : 420,
-            num_ctx: 4096,
-          },
-        }),
-      });
-      if (!response.ok) return null;
-      const data = (await response.json()) as { response?: string };
-      return data.response?.trim() || null;
-    }, 18000);
-  } catch {
-    return null;
-  }
-};
-
-const fallbackAnswer = (message: string) => {
-  const normalized = stripAccents(message);
-
-  if (normalized.includes('apple')) {
-    return [
-      'Một quả táo cỡ vừa thường khoảng 90-100 kcal, chủ yếu từ carbohydrate tự nhiên.',
-      '',
-      markdownTable(
-        ['Mục', 'Ước tính'],
-        [
-          ['Calories', '90-100 kcal/quả vừa'],
-          ['Carb', '22-26g'],
-          ['Chất xơ', '3-5g'],
-          ['Gợi ý', 'Ăn kèm sữa chua Hy Lạp, trứng hoặc hạt nếu muốn no lâu hơn'],
-        ]
-      ),
-    ].join('\n');
-  }
-
-  if (
-    normalized.includes('lunch')
-    || normalized.includes('meal plan')
-    || normalized.includes('plan')
-    || normalized.includes('thuc don')
-    || normalized.includes('bua trua')
-  ) {
-    return [
-      'Mình có thể lập bữa ăn theo mục tiêu của bạn. Nếu chưa có thông tin cá nhân, dùng khung bữa trưa cân bằng sau:',
-      '',
-      markdownTable(
-        ['Nhóm', 'Khẩu phần gợi ý', 'Vai trò'],
-        [
-          ['Protein nạc', '1 lòng bàn tay: ức gà/cá/trứng/đậu phụ', 'Giữ no, hỗ trợ cơ'],
-          ['Tinh bột', '1 nắm tay: cơm/khoai/yến mạch', 'Năng lượng'],
-          ['Rau', '2 nắm tay', 'Chất xơ, vi chất'],
-          ['Chất béo tốt', '1 thìa dầu olive hoặc ít hạt/bơ', 'Cân bằng hormone, hấp thu vitamin'],
-        ]
-      ),
-      '',
-      'Gửi thêm mục tiêu kcal, cân nặng, chiều cao và mục tiêu tăng/giảm cân để mình tính cụ thể hơn.',
-    ].join('\n');
-  }
-
-  if (normalized.includes('macro') || normalized.includes('protein')) {
-    return 'Mốc macro thực tế: protein khoảng 1.6-2.2g/kg cân nặng/ngày nếu tập luyện; fat khoảng 20-30% tổng calories; phần còn lại là carb. Nếu bạn gửi cân nặng và mục tiêu, mình sẽ tính ra gram/ngày rõ hơn.';
-  }
-
-  return 'Mình có thể ước tính calories, lập thực đơn, so sánh món ăn và phân tích macro. Hãy gửi tên món, khẩu phần hoặc mục tiêu hằng ngày để mình trả lời sát hơn.';
 };
 
 const normalizeImageUrl = (imageUrl?: string | null) => {
@@ -702,6 +605,9 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   if (!dishName) return null;
 
   return {
+    answer: typeof record.answer === 'string' && record.answer.trim()
+      ? record.answer.trim()
+      : null,
     dishName,
     confidence: toNumber(record.confidence),
     description: typeof visionDetail.description === 'string' ? visionDetail.description : null,
@@ -729,7 +635,7 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   };
 };
 
-const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null) => {
+const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null, question?: string) => {
   const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
   if (!baseUrl) return null;
 
@@ -739,6 +645,9 @@ const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null) =>
       const form = new FormData();
       const filename = imageName?.trim() || `chat-upload.${image.mime.split('/')[1] || 'jpg'}`;
       form.append('file', new Blob([image.bytes], { type: image.mime }), filename);
+      if (question?.trim()) {
+        form.append('question', question.trim());
+      }
 
       const response = await fetch(`${baseUrl}/api/food/analyze`, {
         method: 'POST',
@@ -754,154 +663,6 @@ const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null) =>
     }, Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 30000));
   } catch (error) {
     console.warn('[ChatVision] Cal-AI image analyze unavailable:', error instanceof Error ? error.message : error);
-    return null;
-  }
-};
-
-const parseVisionJson = (text: string) => {
-  const cleaned = text
-    .replace(/```json|```/g, '')
-    .replace(/:\s*(-?\d+(?:\.\d+)?)\s*(kcal|calories|calorie|grams|gram|g|mg)\b/gi, ': $1')
-    .trim();
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-
-  try {
-    return JSON.parse(match[0]) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-};
-
-const getVisionModelCandidates = () => {
-  const primary = process.env.OLLAMA_VISION_MODEL || 'qwen2.5vl:3b';
-  const fallback = process.env.OLLAMA_VISION_FALLBACK_MODELS || 'llava:7b,llava:latest';
-  return [primary, ...fallback.split(',')]
-    .map(model => model.trim())
-    .filter(Boolean)
-    .filter((model, index, models) => models.indexOf(model) === index);
-};
-
-const askOllamaVision = async (message: string, imageUrl: string, imageName?: string | null) => {
-  const baseUrl = (process.env.OLLAMA_BASE_URL || '').replace(/\/+$/, '');
-  const models = getVisionModelCandidates();
-  if (!baseUrl || models.length === 0) return null;
-
-  try {
-    const image = parseImageDataUrl(imageUrl);
-    const prompt = `
-You are CalAI Vision Pro: a senior food-image analyst, clinical nutrition doctor-style advisor, registered-dietitian style estimator, and practical long-term health consultant.
-
-Inspect the image itself and answer the user's question. The filename is only a weak hint and must never override visible evidence. Do not diagnose disease or prescribe treatment. Nutrition values must be estimates for the visible edible portion.
-
-Advanced protocol:
-- Audit image quality: clarity, angle, lighting, crop, occlusion, scale references, and confidence impact.
-- Extract concrete visual evidence before naming the dish.
-- Separate visible facts from inferred ingredients/cooking methods.
-- Include plausible alternatives if the image is ambiguous.
-- Estimate portion from bowl/plate size, count of pieces, volume, broth/sauce amount, meat thickness, rice/noodle quantity, and serving context.
-- Estimate calories, protein, carbs, fat, fiber, sugar, sodium, energy density, macro balance, and main drivers.
-- Assess strengths, concerns, blood-sugar load, sodium risk, fried/saturated-fat risk, protein adequacy, vegetable/fiber adequacy, and who should be cautious.
-- Give practical recommendations for weight loss, muscle gain, blood sugar control, heart-health style eating, and healthier adjustments.
-- Include compact table_rows so the UI can render numbers as tables.
-- Think internally, but output only valid JSON. No markdown and no extra text.
-- Numeric fields must be plain numbers with no units. Put units only inside text fields.
-- Text values should be Vietnamese unless the user clearly writes another language.
-
-Return this exact JSON shape:
-{
-  "image_quality": {"clarity": "good | fair | poor", "lighting": "good | fair | poor", "angle": "...", "occlusion": "...", "confidence_impact": "..."},
-  "dish_name": "most likely dish name or unknown",
-  "possible_dishes": [{"name": "...", "probability": 0.0, "why": "..."}],
-  "description": "...",
-  "image_observations": ["visible evidence only"],
-  "visible_vs_inferred": {"visible": ["..."], "inferred": ["..."], "not_visible": ["..."]},
-  "identification_evidence": ["reason the dish is likely"],
-  "ingredients": ["visible or likely ingredient"],
-  "category": "...",
-  "visual_form": "bowl | plate | rice plate | noodle soup | soup | salad | sandwich | pizza | sushi platter | packaged product | drink | dessert | snack | mixed meal | unknown",
-  "portion_description": "...",
-  "portion_estimation": {"servings": null, "estimated_grams": null, "volume_or_count": "...", "method": "...", "uncertainty": "low | medium | high"},
-  "sub_items": [{"name": "...", "count": 0, "estimated_amount": "...", "visible_ingredients": ["..."]}],
-  "nutrition_estimate": {"calories": null, "protein": null, "carbs": null, "fat": null, "fiber": null, "sugar": null, "sodium_mg": null, "basis": "...", "main_calorie_drivers": ["..."]},
-  "health_context": {"cooking_method": "...", "sauce_or_condiment": "...", "estimated_servings": "...", "energy_density": "low | moderate | high | unknown", "processing_level": "minimally processed | mixed | processed | unknown", "macro_balance": "..."},
-  "dietary_assessment": {"health_score_0_10": null, "strengths": ["..."], "concerns": ["..."], "suitable_for": ["..."], "caution_for": ["..."]},
-  "risk_flags": [{"risk": "...", "severity": "low | medium | high", "reason": "..."}],
-  "recommendations": {"for_weight_loss": ["..."], "for_muscle_gain": ["..."], "for_blood_sugar": ["..."], "for_heart_health": ["..."], "healthier_adjustments": ["..."]},
-  "table_rows": [{"metric": "Calories", "value": null, "unit": "kcal", "note": "visible portion estimate"}],
-  "uncertainty": {"level": "low | medium | high", "reasons": ["..."], "needs_user_input": ["..."]},
-  "confidence": 0.0
-}
-
-Filename hint: ${imageName || ''}
-User question: ${message || 'Đây là món gì? Hãy phân tích dinh dưỡng và tư vấn.'}
-`.trim();
-
-    return await withTimeout(async signal => {
-      for (const model of models) {
-        const response = await fetch(`${baseUrl}/api/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal,
-          body: JSON.stringify({
-            model,
-            stream: false,
-            images: [image.base64],
-            prompt,
-            options: {
-              temperature: 0.1,
-              num_predict: 850,
-              num_ctx: 4096,
-            },
-          }),
-        });
-
-        if (!response.ok) {
-          console.warn(`[ChatVision] Ollama vision ${model} failed with HTTP ${response.status}`);
-          continue;
-        }
-        const data = await response.json() as { response?: string; error?: string };
-        if (data.error) {
-          console.warn(`[ChatVision] Ollama vision ${model} error: ${data.error}`);
-          continue;
-        }
-        const parsed = data.response ? parseVisionJson(data.response) : null;
-      const dishName = cleanDishName(parsed?.dish_name as string | null);
-        if (!dishName) continue;
-      const nutritionEstimate = toRecord(parsed?.nutrition_estimate);
-      const dietaryAssessment = toRecord(parsed?.dietary_assessment);
-      const uncertainty = toRecord(parsed?.uncertainty);
-
-      return {
-        dishName,
-        confidence: toNumber(parsed?.confidence),
-        description: typeof parsed?.description === 'string' ? parsed.description : null,
-        ingredients: toStringArray(parsed?.ingredients),
-        portion: typeof parsed?.portion_description === 'string' ? parsed.portion_description : null,
-        calories: toNumber(nutritionEstimate.calories ?? parsed?.calories),
-        protein: toNumber(nutritionEstimate.protein ?? parsed?.protein),
-        carbs: toNumber(nutritionEstimate.carbs ?? parsed?.carbs),
-        fat: toNumber(nutritionEstimate.fat ?? parsed?.fat),
-        fiber: toNumber(nutritionEstimate.fiber),
-        sugar: toNumber(nutritionEstimate.sugar),
-        sodiumMg: toNumber(nutritionEstimate.sodium_mg),
-        imageObservations: toStringArray(parsed?.image_observations),
-        evidence: toStringArray(parsed?.identification_evidence),
-        dietaryStrengths: toStringArray(dietaryAssessment.strengths),
-        dietaryConcerns: toStringArray(dietaryAssessment.concerns),
-        riskFlags: riskFlagsToText(parsed?.risk_flags),
-        recommendations: collectRecommendations(parsed?.recommendations),
-        uncertaintyReasons: toStringArray(uncertainty.reasons),
-        followUpQuestions: toStringArray(uncertainty.needs_user_input),
-        tableRows: toRecordArray(parsed?.table_rows),
-        imageQuality: toRecord(parsed?.image_quality),
-          source: 'ollama-vision',
-      } satisfies FoodImageInsight;
-      }
-      return null;
-    }, Number(process.env.OLLAMA_VISION_TIMEOUT_MS || 30000));
-  } catch (error) {
-    console.warn('[ChatVision] Ollama vision unavailable:', error instanceof Error ? error.message : error);
     return null;
   }
 };
@@ -1066,95 +827,6 @@ const summarizeNutritionEvidence = (insight: FoodImageInsight | null) => {
   ].filter((item): item is string => Boolean(item));
 };
 
-const tableFallbackAnswer = (message: string, answer: string) => {
-  if (!wantsStructuredTable(message)) return answer;
-  if (hasMarkdownTable(answer)) return answer;
-
-  return [
-    markdownTable(
-      ['Mục', 'Nội dung'],
-      [
-        ['Yêu cầu', message || 'Tư vấn dinh dưỡng'],
-        ['Trả lời từ nguồn dữ liệu', answer],
-      ]
-    ),
-    'Mình đang giữ dạng bảng vì câu hỏi có yếu tố liệt kê, so sánh, kế hoạch hoặc số liệu.',
-  ].join('\n\n');
-};
-
-const hasMarkdownTable = (value: string) =>
-  /\|.+\|\s*\n\s*\|(?:\s*:?-{3,}:?\s*\|)+/m.test(value);
-
-const askOllamaImageReply = async (message: string, insight: FoodImageInsight) => {
-  const baseUrl = (process.env.OLLAMA_BASE_URL || '').replace(/\/+$/, '');
-  const model = process.env.OLLAMA_MODEL || 'llama3.2';
-  if (!baseUrl || !model) return null;
-
-  const tableMode = wantsStructuredTable(message) || wantsCalories(message) || insight.calories != null;
-  const chartMode = wantsChart(message);
-  const compactInsight = {
-    dishName: insight.dishName,
-    confidence: insight.confidence,
-    description: insight.description,
-    ingredients: insight.ingredients,
-    portion: insight.portion,
-    nutrition: {
-      calories: insight.calories,
-      protein: insight.protein,
-      carbs: insight.carbs,
-      fat: insight.fat,
-      fiber: insight.fiber,
-      sugar: insight.sugar,
-      sodiumMg: insight.sodiumMg,
-    },
-    observations: insight.imageObservations,
-    evidence: insight.evidence,
-    strengths: insight.dietaryStrengths,
-    concerns: insight.dietaryConcerns,
-    risks: insight.riskFlags,
-    recommendations: insight.recommendations,
-    uncertainty: insight.uncertaintyReasons,
-    followUpQuestions: insight.followUpQuestions,
-    source: insight.source,
-  };
-
-  const prompt = [
-    'You are CalAI Pro, a senior nutrition doctor-style advisor, dietitian-style estimator, food analyst, and practical health consultant.',
-    'Use the structured vision insight below as the source of truth. Do not invent visual facts that are not in the insight.',
-    'Answer in Vietnamese unless the user explicitly asks for another language.',
-    'Do not diagnose disease or prescribe treatment. Give practical nutrition advice and clearly label uncertainty.',
-    tableMode
-      ? 'The answer must include at least one Markdown table with relevant nutrition numbers, assumptions, and notes. Do not wrap the table in a code block.'
-      : 'Use short paragraphs unless a table makes the answer clearer.',
-    chartMode
-      ? 'The user asked for chart-like output: include chart-ready table data for calories/protein/carbs/fat and a one-sentence chart suggestion.'
-      : 'If numbers are present, keep them compact and easy to scan.',
-    'Recommended structure: short identification sentence, table when needed, clinical nutrition assessment, practical recommendations, uncertainty/follow-up.',
-    `User question: ${message || 'Đây là món gì? Hãy phân tích dinh dưỡng và tư vấn.'}`,
-    `Vision insight JSON: ${JSON.stringify(compactInsight)}`,
-  ].join('\n');
-
-  try {
-    return await withTimeout(async signal => {
-      const response = await fetch(`${baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal,
-        body: JSON.stringify({ model, prompt, stream: false }),
-      });
-      if (!response.ok) return null;
-
-      const data = (await response.json()) as { response?: string };
-      const reply = data.response?.trim();
-      if (!reply) return null;
-      if (tableMode && !hasMarkdownTable(reply)) return null;
-      return reply;
-    }, 25000);
-  } catch {
-    return null;
-  }
-};
-
 const generateAssistantReply = async (
   accountId: number | null | undefined,
   message: string,
@@ -1181,7 +853,7 @@ const generateAssistantReply = async (
       evidence: [message || 'Không có ghi chú kèm ảnh'],
     });
 
-    const calAiInsight = await askCalAiFoodImage(imageUrl, imageName);
+    const calAiInsight = await askCalAiFoodImage(imageUrl, imageName, message);
     let insight = calAiInsight;
 
     if (calAiInsight) {
@@ -1192,25 +864,8 @@ const generateAssistantReply = async (
     } else {
       addThinkingStep(trace, 'Chạy Cal-AI vision pipeline', 'Cal-AI chưa trả về kết quả vision đủ dùng trong thời gian chờ.', {
         status: 'warning',
-        detail: 'Backend chuyển sang model vision trực tiếp của Ollama để tránh trả lời dựa vào tên file.',
+        detail: 'Không gọi model vision khác ngoài Cal-AI để giữ một nguồn xử lý thống nhất.',
       });
-    }
-
-    if (!insight) {
-      const ollamaInsight = await askOllamaVision(message, imageUrl, imageName);
-      insight = ollamaInsight;
-
-      if (ollamaInsight) {
-        addThinkingStep(trace, 'Fallback sang Ollama vision', 'Ollama vision đã nhận diện được món và trả về JSON phân tích.', {
-          detail: `Model vision: ${process.env.OLLAMA_VISION_MODEL || 'llava:7b'}`,
-          evidence: summarizeNutritionEvidence(ollamaInsight).slice(0, 6),
-        });
-      } else {
-        addThinkingStep(trace, 'Fallback sang Ollama vision', 'Ollama vision cũng chưa trả về JSON đủ tin cậy.', {
-          status: 'warning',
-          detail: 'Câu trả lời sẽ yêu cầu ảnh rõ hơn thay vì suy luận bằng filename.',
-        });
-      }
     }
 
     addThinkingStep(trace, 'Chuẩn hóa dữ liệu dinh dưỡng', insight
@@ -1220,27 +875,20 @@ const generateAssistantReply = async (
         evidence: summarizeNutritionEvidence(insight).slice(0, 6),
       });
 
-    const synthesizedReply = insight ? await askOllamaImageReply(message, insight) : null;
-    if (synthesizedReply) {
-      addThinkingStep(trace, 'Sinh câu trả lời từ insight ảnh', 'Model text đã viết câu trả lời cuối cùng dựa trên JSON vision đã chuẩn hóa.', {
-        detail: `Model text: ${process.env.OLLAMA_MODEL || 'llama3.2'}`,
+    addThinkingStep(trace, 'Sinh câu trả lời từ Cal-AI', insight?.answer
+      ? 'Cal-AI đã trả về câu trả lời tự nhiên từ prompt vision + Agentic RAG thống nhất.'
+      : 'Cal-AI chưa trả về câu trả lời tự nhiên, backend chỉ render dữ liệu cấu trúc đã có.', {
+        status: insight?.answer ? 'done' : 'warning',
       });
-    } else {
-      addThinkingStep(trace, 'Sinh câu trả lời từ insight ảnh', insight
-        ? 'Model text không trả về nội dung đủ chuẩn, backend dùng formatter an toàn từ insight vision.'
-        : 'Không có insight ảnh đủ dùng để gọi model text.', {
-          status: insight ? 'warning' : 'skipped',
-        });
-    }
 
     addThinkingStep(trace, 'Định dạng câu trả lời', tableMode || insight?.calories != null
       ? 'UI sẽ render Markdown table/rich text cho dữ liệu dinh dưỡng và đánh giá.'
       : 'UI sẽ render dạng mô tả ngắn vì câu hỏi không cần bảng.', {
         detail: insight?.source ? `Nguồn cuối cùng: ${insight.source}` : 'Không có nguồn vision đủ chắc.',
-      });
+    });
 
     return {
-      text: synthesizedReply ?? formatImageQuestionReply(insight, message),
+      text: insight?.answer ?? formatImageQuestionReply(insight, message),
       thinkingSteps: trace,
     };
   }
@@ -1255,9 +903,7 @@ const generateAssistantReply = async (
   const calAiAnswer = calAiResult?.answer ?? null;
   if (calAiResult) {
     addThinkingStep(trace, 'Truy vấn Cal-AI context', 'Cal-AI /query đã trả về câu trả lời hoặc dữ liệu liên quan.', {
-      detail: tableMode
-        ? 'Kết quả này sẽ được dùng làm context để model trình bày lại theo bảng.'
-        : 'Kết quả đủ dùng để trả lời trực tiếp.',
+      detail: 'Cal-AI là nguồn model duy nhất cho câu trả lời text.',
       evidence: [
         calAiResult.intent ? `Intent: ${calAiResult.intent}` : '',
         calAiResult.citations?.length ? `Citations: ${calAiResult.citations.length}` : '',
@@ -1272,74 +918,27 @@ const generateAssistantReply = async (
       });
     }
 
-    if (!tableMode) {
-      addThinkingStep(trace, 'Định dạng câu trả lời', 'Đã giữ câu trả lời ngắn gọn theo context Cal-AI.', {
-        detail: 'Không cần bảng vì câu hỏi không thiên về liệt kê, so sánh hoặc số liệu.',
-      });
-
-      return {
-        text: calAiAnswer,
-        thinkingSteps: trace,
-      };
-    }
-
-    if (calAiAnswer && hasMarkdownTable(calAiAnswer)) {
-      addThinkingStep(trace, 'Dùng phản hồi RAG đã cấu trúc', 'Cal-AI đã trả về bảng Markdown phù hợp nên backend không gọi model text lần hai.', {
-        detail: 'Tránh timeout và tránh nhãn fallback khi câu trả lời RAG đã đủ dùng.',
-      });
-
-      return {
-        text: calAiAnswer,
-        thinkingSteps: trace,
-      };
-    }
-  } else {
-    addThinkingStep(trace, 'Truy vấn Cal-AI context', 'Cal-AI /query không trả về dữ liệu đủ dùng hoặc hết thời gian chờ.', {
-      status: 'warning',
-      detail: 'Backend sẽ dùng model text để tạo câu trả lời có cấu trúc.',
-    });
-  }
-
-  const ollamaAnswer = await askOllama(message, calAiAnswer, runtimeContext);
-  if (ollamaAnswer) {
-    addThinkingStep(trace, 'Sinh câu trả lời bằng model text', tableMode
-      ? 'Model text đã viết lại câu trả lời với bảng Markdown và ghi chú ngắn.'
-      : 'Model text đã tạo tư vấn dinh dưỡng theo ngữ cảnh câu hỏi.', {
-        detail: `Model text: ${process.env.OLLAMA_MODEL || 'llama3.2'}`,
-      });
-
     addThinkingStep(trace, 'Định dạng câu trả lời', tableMode
-      ? 'UI sẽ render bảng Markdown thành table thay vì đoạn text thô.'
+      ? 'Cal-AI chịu trách nhiệm tạo bảng Markdown khi cần.'
       : 'UI sẽ render nội dung tư vấn dạng rich text.');
 
     return {
-      text: ollamaAnswer,
+      text: calAiAnswer,
       thinkingSteps: trace,
     };
   }
 
-  if (calAiAnswer) {
-    addThinkingStep(trace, 'Fallback giữ context Cal-AI', 'Model text không phản hồi kịp, nên backend dùng câu trả lời Cal-AI đã có.', {
-      status: tableMode ? 'warning' : 'done',
-      detail: tableMode ? 'Câu trả lời được bọc lại thành bảng tối thiểu để UI vẫn hiển thị có cấu trúc.' : undefined,
-    });
+  addThinkingStep(trace, 'Truy vấn Cal-AI context', 'Cal-AI /query không trả về dữ liệu đủ dùng hoặc hết thời gian chờ.', {
+    status: 'warning',
+    detail: 'Không gọi model thay thế ở backend.',
+  });
 
-    return {
-      text: tableFallbackAnswer(message, calAiAnswer),
-      thinkingSteps: trace,
-    };
-  }
-
-  addThinkingStep(trace, 'Fallback nội bộ', 'Không có dịch vụ model nào trả về đủ nhanh, nên dùng rule tư vấn cục bộ.', {
+  addThinkingStep(trace, 'Không thể tạo câu trả lời', 'Không có câu trả lời đáng tin cậy từ pipeline Agentic RAG.', {
     status: 'warning',
   });
 
-  addThinkingStep(trace, 'Định dạng câu trả lời', tableMode
-    ? 'Câu trả lời fallback được bọc thành bảng tối thiểu theo intent của user.'
-    : 'Câu trả lời fallback được giữ ngắn gọn.');
-
   return {
-    text: tableFallbackAnswer(message, fallbackAnswer(message)),
+    text: 'Mình chưa tạo được câu trả lời đáng tin cậy cho request này vì dịch vụ phân tích không trả về dữ liệu đủ dùng trong thời gian chờ. Bạn hãy gửi lại câu hỏi hoặc bổ sung số liệu chính như tổng kcal, khẩu phần, chiều cao, cân nặng, tuổi, giới tính và mức vận động để mình tính chính xác.',
     thinkingSteps: trace,
   };
 };
