@@ -45,7 +45,7 @@ mysql -u root -p calai < seed.sql
 
 ---
 
-## 🚀 Mục tiêu
+##  Mục tiêu
 
 * Cá nhân hóa dinh dưỡng
 * Hỗ trợ người dùng ăn uống khoa học
