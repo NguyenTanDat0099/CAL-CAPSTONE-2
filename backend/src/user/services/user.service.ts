@@ -545,25 +545,52 @@ const parseImageDataUrl = (imageUrl: string) => {
   };
 };
 
+const extractBestNutrition = (record: Record<string, unknown>) => {
+  const summary = toRecord(record.nutrition_summary);
+  const retrieved = toRecord(record.retrieved_nutrition);
+  const per100g = toRecord(summary.per_100g);
+  const estimate = toRecord(summary.estimated_visible_portion ?? record.estimated_nutrition);
+
+  const kcalKeys = ['calories', 'Caloric Value', 'Energ_Kcal', 'energy-kcal_100g'];
+  const proteinKeys = ['protein', 'Protein', 'Protein_(g)', 'proteins_100g'];
+  const carbKeys = ['carbohydrate', 'Carbohydrates', 'Carbohydrt_(g)', 'carbohydrates_100g', 'carbs'];
+  const fatKeys = ['fat', 'Fat', 'Lipid_Tot_(g)', 'fat_100g', 'total_fat'];
+
+  const pick = (sources: Record<string, unknown>[], keys: string[]) => {
+    for (const src of sources) {
+      for (const key of keys) {
+        const v = toNumber(src[key]);
+        if (v != null && v > 0) return v;
+      }
+    }
+    return null;
+  };
+
+  const sources = [estimate, per100g, retrieved];
+  return {
+    calories: pick(sources, kcalKeys),
+    protein: pick(sources, proteinKeys),
+    carbs: pick(sources, carbKeys),
+    fat: pick(sources, fatKeys),
+  };
+};
+
 const buildFoodTemplateFromCalAi = (data: unknown, source: AnalysisSource): FoodTemplate => {
   const record = toRecord(data);
   const vision = toRecord(record.vision_detail);
   const summary = toRecord(record.nutrition_summary);
   const estimate = toRecord(summary.estimated_visible_portion ?? record.estimated_nutrition);
 
-  const name = String(record.dish_name || '').trim();
-  if (!name || name.toLowerCase() === 'unknown') {
-    throw new Error('AI_ANALYSIS_INCOMPLETE');
-  }
+  const rawName = String(record.dish_name || '').trim();
+  const name = rawName && rawName.toLowerCase() !== 'unknown'
+    ? rawName
+    : 'Unidentified food';
 
-  const totalKcal = toNumber(estimate.calories);
-  if (totalKcal == null) {
-    throw new Error('AI_ANALYSIS_INCOMPLETE');
-  }
-
-  const protein = toNumber(estimate.protein) ?? 0;
-  const carbs = toNumber(estimate.carbs) ?? 0;
-  const fats = toNumber(estimate.fat) ?? 0;
+  const best = extractBestNutrition(record);
+  const totalKcal = best.calories ?? 0;
+  const protein = best.protein ?? 0;
+  const carbs = best.carbs ?? 0;
+  const fats = best.fat ?? 0;
   const confidence = toNumber(record.confidence) ?? 0;
   const categoryName = typeof vision.category === 'string' && vision.category.trim()
     ? vision.category.trim()
@@ -574,7 +601,7 @@ const buildFoodTemplateFromCalAi = (data: unknown, source: AnalysisSource): Food
         ? vision.portion_description.trim()
         : '1 serving');
   const ingredientNames = toStringArray(vision.ingredients).slice(0, 6);
-  const caloriesPerIngredient = ingredientNames.length > 0
+  const caloriesPerIngredient = ingredientNames.length > 0 && totalKcal > 0
     ? Math.round(totalKcal / ingredientNames.length)
     : Math.round(totalKcal);
 
@@ -608,19 +635,28 @@ const analyzeImageWithCalAi = async (imageUrl: string, source: AnalysisSource): 
     throw new Error('CAL_AI_UNAVAILABLE');
   }
 
+  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 150000);
   const image = parseImageDataUrl(imageUrl);
-  const form = new FormData();
-  form.append('file', new Blob([image.bytes], { type: image.mime }), `food-scan.${image.mime.split('/')[1] || 'jpg'}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  const response = await fetch(`${baseUrl}/api/food/analyze`, {
-    method: 'POST',
-    body: form,
-  });
-  if (!response.ok) {
-    throw new Error('CAL_AI_UNAVAILABLE');
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([image.bytes], { type: image.mime }), `food-scan.${image.mime.split('/')[1] || 'jpg'}`);
+
+    const response = await fetch(`${baseUrl}/api/food/analyze`, {
+      method: 'POST',
+      body: form,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error('CAL_AI_UNAVAILABLE');
+    }
+
+    return buildFoodTemplateFromCalAi(await response.json(), source);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return buildFoodTemplateFromCalAi(await response.json(), source);
 };
 
 const getUserByAccountId = async (accountId?: number | null): Promise<UserRow | null> => {

@@ -656,17 +656,20 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   const visionDetail = record.vision_detail && typeof record.vision_detail === 'object'
     ? record.vision_detail as Record<string, unknown>
     : {};
+  const vitCnn = toRecord(visionDetail.vit_cnn_analysis);
+  const vitPredictions = Array.isArray(vitCnn.top_predictions) ? vitCnn.top_predictions : [];
   const dietaryAssessment = toRecord(visionDetail.dietary_assessment);
   const uncertainty = toRecord(visionDetail.uncertainty);
 
-  const dishName = cleanDishName(record.dish_name as string | null);
-  if (!dishName) return null;
+  const dishName = cleanDishName(record.dish_name as string | null)
+    ?? (vitPredictions.length > 0 ? cleanDishName(String((vitPredictions[0] as Record<string, unknown>)?.name ?? '')) : null);
+
+  const hasAnswer = typeof record.answer === 'string' && record.answer.trim();
+  if (!dishName && !hasAnswer) return null;
 
   return {
-    answer: typeof record.answer === 'string' && record.answer.trim()
-      ? record.answer.trim()
-      : null,
-    dishName,
+    answer: hasAnswer ? (record.answer as string).trim() : null,
+    dishName: dishName ?? 'Unidentified food',
     confidence: toNumber(record.confidence),
     description: typeof visionDetail.description === 'string' ? visionDetail.description : null,
     ingredients: toStringArray(visionDetail.ingredients),
@@ -905,6 +908,19 @@ const generateAssistantReply = async (
   const tableMode = wantsStructuredTable(message);
   const hasConversationContext = Boolean(runtimeContext?.contextText);
 
+  const userProfile = await fetchUserProfile(accountId);
+
+  if (hasProfileData(userProfile)) {
+    addThinkingStep(trace, 'Tải hồ sơ user', 'Đã lấy thông tin cá nhân từ database để cá nhân hóa câu trả lời.', {
+      evidence: [
+        userProfile!.gender ? `Giới tính: ${userProfile!.gender}` : '',
+        userProfile!.age ? `Tuổi: ${userProfile!.age}` : '',
+        userProfile!.weight ? `Cân nặng: ${userProfile!.weight} kg` : '',
+        userProfile!.goal ? `Mục tiêu: ${userProfile!.goal}` : '',
+      ].filter(Boolean),
+    });
+  }
+
   if (hasConversationContext) {
     addThinkingStep(trace, 'Đọc ngữ cảnh hội thoại', runtimeContext?.isFollowUp
       ? 'Câu hỏi hiện tại có dấu hiệu nối tiếp, backend đã lấy các tin nhắn trước trong cùng đoạn chat.'
@@ -960,24 +976,11 @@ const generateAssistantReply = async (
     };
   }
 
-  const userProfile = await fetchUserProfile(accountId);
-
   addThinkingStep(trace, 'Phân loại yêu cầu', tableMode
     ? 'Câu hỏi có dấu hiệu cần bảng, so sánh, kế hoạch, macro/calories hoặc dữ liệu dạng biểu đồ.'
     : 'Câu hỏi là tư vấn dinh dưỡng dạng hội thoại thông thường.', {
       evidence: [message],
     });
-
-  if (hasProfileData(userProfile)) {
-    addThinkingStep(trace, 'Tải hồ sơ user', 'Đã lấy thông tin cá nhân từ database để cá nhân hóa câu trả lời.', {
-      evidence: [
-        userProfile!.gender ? `Giới tính: ${userProfile!.gender}` : '',
-        userProfile!.age ? `Tuổi: ${userProfile!.age}` : '',
-        userProfile!.weight ? `Cân nặng: ${userProfile!.weight} kg` : '',
-        userProfile!.goal ? `Mục tiêu: ${userProfile!.goal}` : '',
-      ].filter(Boolean),
-    });
-  }
 
   const calAiResult = await askCalAi(message, runtimeContext, userProfile);
   const calAiAnswer = calAiResult?.answer ?? null;
