@@ -466,12 +466,64 @@ const addThinkingStep = (
   });
 };
 
+interface UserProfile {
+  gender?: string | null;
+  age?: number | null;
+  height?: number | null;
+  weight?: number | null;
+  dailyCalories?: number | null;
+  targetWeight?: number | null;
+  goal?: string | null;
+  activityLevel?: string | null;
+}
+
+const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile | null> => {
+  if (!accountId) return null;
+
+  try {
+    const [userRows] = await pool.query(
+      'SELECT gender, age, height, weight FROM users WHERE account_id = ? AND has_completed_setup = 1 LIMIT 1',
+      [accountId]
+    );
+    const user = (userRows as Array<Record<string, unknown>>)[0];
+    if (!user) return null;
+
+    const [goalRows] = await pool.query(
+      `SELECT target_calories, target_weight, goal_type, activity_level
+       FROM usergoals WHERE user_id = (SELECT user_id FROM users WHERE account_id = ? LIMIT 1) LIMIT 1`,
+      [accountId]
+    );
+    const goal = (goalRows as Array<Record<string, unknown>>)[0];
+
+    return {
+      gender: user.gender as string | null,
+      age: user.age as number | null,
+      height: user.height as number | null,
+      weight: user.weight as number | null,
+      dailyCalories: goal?.target_calories as number | null ?? null,
+      targetWeight: goal?.target_weight as number | null ?? null,
+      goal: goal?.goal_type as string | null ?? null,
+      activityLevel: goal?.activity_level as string | null ?? null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const hasProfileData = (profile: UserProfile | null | undefined): boolean => {
+  if (!profile) return false;
+  return [profile.gender, profile.age, profile.height, profile.weight]
+    .some(value => value != null && value !== '');
+};
+
 const askCalAi = async (
   message: string,
-  runtimeContext?: ChatRuntimeContext | null
+  runtimeContext?: ChatRuntimeContext | null,
+  userProfile?: UserProfile | null
 ) => {
   const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
   if (!baseUrl) return null;
+  const timeoutMs = Number(process.env.CAL_AI_QUERY_TIMEOUT_MS || 70000);
 
   try {
     return await withTimeout(async signal => {
@@ -485,12 +537,18 @@ const askCalAi = async (
           session_id: runtimeContext ? String(runtimeContext.sessionId) : undefined,
           conversation_context: runtimeContext?.contextText || undefined,
           is_follow_up: runtimeContext?.isFollowUp || undefined,
+          user_profile: hasProfileData(userProfile) ? userProfile : undefined,
         }),
       });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        console.warn(`[ChatText] Cal-AI query failed with HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
+        return null;
+      }
       return formatCalAiResult(await response.json());
-    }, 22000);
-  } catch {
+    }, timeoutMs);
+  } catch (error) {
+    console.warn('[ChatText] Cal-AI query unavailable:', error instanceof Error ? error.message : error);
     return null;
   }
 };
@@ -638,6 +696,7 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
 const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null, question?: string) => {
   const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
   if (!baseUrl) return null;
+  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 150000);
 
   try {
     const image = parseImageDataUrl(imageUrl);
@@ -656,13 +715,21 @@ const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null, qu
       });
 
       if (!response.ok) {
-        console.warn(`[ChatVision] Cal-AI image analyze failed with HTTP ${response.status}`);
+        const errorBody = await response.text().catch(() => '');
+        console.warn(`[ChatVision] Cal-AI image analyze failed with HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
         return null;
       }
       return parseCalAiFoodInsight(await response.json());
-    }, Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 30000));
+    }, timeoutMs);
   } catch (error) {
-    console.warn('[ChatVision] Cal-AI image analyze unavailable:', error instanceof Error ? error.message : error);
+    const isTimeout = error instanceof Error && (
+      error.name === 'AbortError' || error.message.includes('aborted')
+    );
+    if (isTimeout) {
+      console.warn(`[ChatVision] Cal-AI image analyze timed out after ${timeoutMs}ms. Consider increasing CAL_AI_VISION_TIMEOUT_MS.`);
+    } else {
+      console.warn('[ChatVision] Cal-AI image analyze unavailable:', error instanceof Error ? error.message : error);
+    }
     return null;
   }
 };
@@ -893,13 +960,26 @@ const generateAssistantReply = async (
     };
   }
 
+  const userProfile = await fetchUserProfile(accountId);
+
   addThinkingStep(trace, 'Phân loại yêu cầu', tableMode
     ? 'Câu hỏi có dấu hiệu cần bảng, so sánh, kế hoạch, macro/calories hoặc dữ liệu dạng biểu đồ.'
     : 'Câu hỏi là tư vấn dinh dưỡng dạng hội thoại thông thường.', {
       evidence: [message],
     });
 
-  const calAiResult = await askCalAi(message, runtimeContext);
+  if (hasProfileData(userProfile)) {
+    addThinkingStep(trace, 'Tải hồ sơ user', 'Đã lấy thông tin cá nhân từ database để cá nhân hóa câu trả lời.', {
+      evidence: [
+        userProfile!.gender ? `Giới tính: ${userProfile!.gender}` : '',
+        userProfile!.age ? `Tuổi: ${userProfile!.age}` : '',
+        userProfile!.weight ? `Cân nặng: ${userProfile!.weight} kg` : '',
+        userProfile!.goal ? `Mục tiêu: ${userProfile!.goal}` : '',
+      ].filter(Boolean),
+    });
+  }
+
+  const calAiResult = await askCalAi(message, runtimeContext, userProfile);
   const calAiAnswer = calAiResult?.answer ?? null;
   if (calAiResult) {
     addThinkingStep(trace, 'Truy vấn Cal-AI context', 'Cal-AI /query đã trả về câu trả lời hoặc dữ liệu liên quan.', {
