@@ -4,6 +4,7 @@ import {
   getChatMessages,
   getChatSessions,
   sendChatMessage,
+  truncateMessagesAfter,
 } from '../controllers/chat.controller';
 
 const chatRouter = Router();
@@ -11,6 +12,7 @@ const chatRouter = Router();
 chatRouter.get('/sessions', getChatSessions);
 chatRouter.get('/sessions/:sessionId/messages', getChatMessages);
 chatRouter.delete('/sessions/:sessionId', deleteChatSession);
+chatRouter.delete('/sessions/:sessionId/messages/after/:messageId', truncateMessagesAfter);
 chatRouter.post('/message', sendChatMessage);
 
 export default chatRouter;

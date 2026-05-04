@@ -1115,6 +1115,32 @@ export const getChatMessagesService = async (accountId: number | null | undefine
   return (rows as ChatMessageRow[]).map(mapMessage);
 };
 
+export const truncateMessagesAfterService = async (
+  accountId: number | null | undefined,
+  sessionId: number,
+  messageId: number,
+  options: { inclusive?: boolean } = {}
+) => {
+  const user = await resolveUser(accountId);
+  const session = await verifySessionOwner(user.user_id, sessionId);
+  if (!session) {
+    throw new Error('CHAT_SESSION_NOT_FOUND');
+  }
+  const [rows] = await pool.query(
+    'SELECT message_id FROM chatmessages WHERE message_id = ? AND session_id = ? LIMIT 1',
+    [messageId, sessionId]
+  );
+  if ((rows as Array<{ message_id: number }>).length === 0) {
+    throw new Error('CHAT_MESSAGE_NOT_FOUND');
+  }
+  const comparator = options.inclusive ? '>=' : '>';
+  await pool.query(
+    `DELETE FROM chatmessages WHERE session_id = ? AND message_id ${comparator} ?`,
+    [sessionId, messageId]
+  );
+  return { deleted: true, sessionId, messageId, inclusive: options.inclusive === true };
+};
+
 export const deleteChatSessionService = async (accountId: number | null | undefined, sessionId: number) => {
   const user = await resolveUser(accountId);
   const session = await verifySessionOwner(user.user_id, sessionId);

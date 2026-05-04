@@ -17,7 +17,9 @@ import {
   Sparkles,
   Table2,
   RotateCcw,
+  CalendarPlus,
 } from 'lucide-react';
+import type { ScheduleItem, MealSchedule, MealType } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { buildApiUrl } from '../../config/api';
 
@@ -121,6 +123,101 @@ const isTableDivider = (line: string) => {
   return cells.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell.trim()));
 };
 
+const numFromCell = (cell?: string): number | null => {
+  if (!cell) return null;
+  const cleaned = cell.replace(/,/g, '').replace(/\*\*/g, '').trim();
+  const expr = cleaned.match(/^(-?\d+(?:\.\d+)?)\s*([*x×])\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (expr) {
+    const result = Number(expr[1]) * Number(expr[3]);
+    return Number.isFinite(result) ? result : null;
+  }
+  const sum = cleaned.match(/^(-?\d+(?:\.\d+)?)\s*\+\s*(-?\d+(?:\.\d+)?)$/);
+  if (sum) {
+    const result = Number(sum[1]) + Number(sum[2]);
+    return Number.isFinite(result) ? result : null;
+  }
+  const match = cleaned.match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+};
+
+const detectMealType = (cell?: string): MealType => {
+  const norm = stripAccents(cell ?? '');
+  if (/sang|breakfast/.test(norm)) return 'breakfast';
+  if (/toi|dinner/.test(norm)) return 'dinner';
+  if (/snack|phu|nhe/.test(norm)) return 'snack';
+  return 'lunch';
+};
+
+interface ParsedPlan {
+  items: ScheduleItem[];
+  totalKcal: number;
+  rawTable: string;
+}
+
+const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
+  if (!text) return null;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length - 1; i++) {
+    const line = lines[i].trim();
+    if (!line.includes('|')) continue;
+    if (!isTableDivider(lines[i + 1])) continue;
+
+    const headers = splitTableRow(line).map(h => stripAccents(h));
+    const findCol = (...needles: string[]) =>
+      headers.findIndex(h => needles.some(n => h.includes(n)));
+    const monIdx = findCol('mon');
+    const kcalIdx = findCol('kcal', 'calo');
+    if (monIdx < 0 || kcalIdx < 0) continue;
+    const servingIdx = findCol('khau phan', 'phan', 'serving');
+    const proteinIdx = findCol('p(g)', 'protein');
+    const carbsIdx = findCol('c(g)', 'carb');
+    const fatIdx = findCol('f(g)', 'fat', 'beo');
+
+    const matchedSignals = [proteinIdx, carbsIdx, fatIdx].filter(idx => idx >= 0).length;
+    if (matchedSignals < 2) continue;
+
+    const items: ScheduleItem[] = [];
+    let totalKcal = 0;
+    const rawLines: string[] = [line, lines[i + 1]];
+    let cursor = i + 2;
+    while (cursor < lines.length && lines[cursor].trim().includes('|')) {
+      rawLines.push(lines[cursor]);
+      const cells = splitTableRow(lines[cursor]);
+      const name = cells[monIdx]?.replace(/\*\*/g, '').trim();
+      if (name && !/^total|^tong|^tổng/i.test(stripAccents(name))) {
+        const kcal = numFromCell(cells[kcalIdx]);
+        items.push({
+          mealType: detectMealType(cells[monIdx]),
+          name,
+          serving: servingIdx >= 0 ? cells[servingIdx] || null : null,
+          calories: kcal,
+          protein: proteinIdx >= 0 ? numFromCell(cells[proteinIdx]) : null,
+          carbs: carbsIdx >= 0 ? numFromCell(cells[carbsIdx]) : null,
+          fat: fatIdx >= 0 ? numFromCell(cells[fatIdx]) : null,
+          dayOffset: 0,
+        });
+        if (kcal != null) totalKcal += kcal;
+      }
+      cursor += 1;
+    }
+    if (items.length === 0) continue;
+    return { items, totalKcal, rawTable: rawLines.join('\n') };
+  }
+  return null;
+};
+
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const addDaysISO = (iso: string, days: number) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(y, (m ?? 1) - 1, d ?? 1);
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
 const splitTableRow = (line: string) => {
   const trimmed = line.trim();
   const content = trimmed.startsWith('|') && trimmed.endsWith('|')
@@ -188,7 +285,33 @@ const renderInlineMarkdown = (value: string, keyPrefix: string) => {
   return nodes;
 };
 
-const renderRichText = (text: string) => {
+const sanitizeLatex = (text: string) => {
+  if (!text) return text;
+  return text
+    .replace(/\\\[/g, '')
+    .replace(/\\\]/g, '')
+    .replace(/\\\(/g, '')
+    .replace(/\\\)/g, '')
+    .replace(/\$\$/g, '')
+    .replace(/\\text\{([^}]*)\}/g, '$1')
+    .replace(/\\mathrm\{([^}]*)\}/g, '$1')
+    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1) / ($2)')
+    .replace(/\\Delta/g, 'Δ')
+    .replace(/\\approx/g, '≈')
+    .replace(/\\leq/g, '≤')
+    .replace(/\\geq/g, '≥')
+    .replace(/\\times/g, '×')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\div/g, '÷')
+    .replace(/\\pm/g, '±')
+    .replace(/\\,/g, ' ')
+    .replace(/\\!/g, '')
+    .replace(/\\;/g, ' ')
+    .replace(/\\\\/g, '\n');
+};
+
+const renderRichText = (rawText: string) => {
+  const text = sanitizeLatex(rawText);
   const lines = text.split(/\r?\n/);
   const blocks: React.ReactNode[] = [];
   let index = 0;
@@ -319,7 +442,29 @@ const getThinkingStatusMeta = (status?: ThinkingStep['status']) => {
   };
 };
 
-export function Chatbox() {
+interface SavePlanPayload {
+  name: string;
+  description?: string;
+  startDate: string;
+  endDate: string;
+  color?: string;
+  targetCalories?: number;
+  source: 'manual' | 'chat';
+  planPayload?: unknown;
+  items?: ScheduleItem[];
+}
+
+interface ChatboxProps {
+  onSavePlanToSchedule?: (payload: SavePlanPayload) => Promise<MealSchedule>;
+}
+
+interface PendingSave {
+  message: string;
+  parsed: ParsedPlan;
+  defaultName: string;
+}
+
+export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
   const storedActiveChatId = (() => {
     try { return sessionStorage.getItem('calai_active_chat'); } catch { return null; }
   })();
@@ -342,6 +487,11 @@ export function Chatbox() {
   const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
   const [activeTab, setActiveTab] = useState<'nutrition' | 'assistant'>('nutrition');
   const [error, setError] = useState('');
+  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [saveForm, setSaveForm] = useState({ name: '', startDate: todayISO(), endDate: addDaysISO(todayISO(), 6), color: '#FB923C' });
   // Per-conversation typing state: { [conversationId]: boolean }
   const [isTypingMap, setIsTypingMap] = useState<Record<string, boolean>>({});
   // Tracks which message IDs have expanded thinking steps
@@ -753,7 +903,17 @@ export function Chatbox() {
     return aiFallbackHints.some(hint => text.includes(hint));
   };
 
-  const retryAiMessage = (failedAiId: string) => {
+  const truncateMessagesAfter = async (sessionId: number, messageId: number, inclusive: boolean) => {
+    try {
+      const url = buildApiUrl(`/chat/sessions/${sessionId}/messages/after/${messageId}`) +
+        (inclusive ? '?inclusive=true' : '');
+      await fetch(url, { method: 'DELETE', headers: getAuthHeaders() });
+    } catch (err) {
+      console.warn('truncate failed:', err);
+    }
+  };
+
+  const retryAiMessage = async (failedAiId: string) => {
     if (isTyping) return;
     const messages = activeChat?.messages ?? [];
     const failedIndex = messages.findIndex(m => m.id === failedAiId);
@@ -761,6 +921,20 @@ export function Chatbox() {
       ? [...messages].slice(0, failedIndex).reverse().find(m => m.sender === 'user')
       : null;
     if (!previousUser) return;
+
+    const sessionIdNum = Number(activeChatId);
+    const aiMsgIdNum = Number(failedAiId);
+    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && Number.isFinite(aiMsgIdNum) && aiMsgIdNum > 0) {
+      await truncateMessagesAfter(sessionIdNum, aiMsgIdNum, true);
+      setConversations(prev =>
+        prev.map(c =>
+          c.id === String(sessionIdNum)
+            ? { ...c, messages: c.messages.filter(m => Number(m.id) < aiMsgIdNum || !Number.isFinite(Number(m.id))) }
+            : c
+        )
+      );
+    }
+
     const overrideImage: SelectedImage | null = previousUser.imageUrl
       ? {
           dataUrl: previousUser.imageUrl,
@@ -774,6 +948,90 @@ export function Chatbox() {
     const overrideText = previousUser.text.startsWith('Uploaded ') && previousUser.imageUrl
       ? ''
       : previousUser.text;
+    handleSendMessage({ text: overrideText, image: overrideImage });
+  };
+
+  const openSaveModal = (msgText: string) => {
+    const parsed = parsePlanFromMarkdown(msgText);
+    if (!parsed) return;
+    const defaultName = `Meal plan · ${new Date().toLocaleDateString()}`;
+    setPendingSave({ message: msgText, parsed, defaultName });
+    setSaveForm({
+      name: defaultName,
+      startDate: todayISO(),
+      endDate: addDaysISO(todayISO(), 6),
+      color: '#FB923C',
+    });
+    setSaveError('');
+  };
+
+  const closeSaveModal = () => {
+    setPendingSave(null);
+    setSaveError('');
+    setSavingPlan(false);
+  };
+
+  const handleConfirmSavePlan = async () => {
+    if (!pendingSave || !onSavePlanToSchedule) return;
+    if (!saveForm.name.trim()) { setSaveError('Please enter a name.'); return; }
+    if (saveForm.startDate > saveForm.endDate) { setSaveError('End date must be on or after start date.'); return; }
+    const startMs = new Date(`${saveForm.startDate}T00:00:00`).getTime();
+    const endMs = new Date(`${saveForm.endDate}T00:00:00`).getTime();
+    const days = Math.round((endMs - startMs) / 86400000) + 1;
+    if (days > 60) { setSaveError('Schedule cannot exceed 60 days. Pick a shorter range.'); return; }
+    setSavingPlan(true);
+    setSaveError('');
+    try {
+      const totalKcal = pendingSave.parsed.items.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+      const description = `Saved from CalAI chat — ${pendingSave.parsed.items.length} meal${pendingSave.parsed.items.length === 1 ? '' : 's'}, ~${Math.round(totalKcal)} kcal total.`;
+      const result = await onSavePlanToSchedule({
+        name: saveForm.name.trim(),
+        description,
+        startDate: saveForm.startDate,
+        endDate: saveForm.endDate,
+        color: saveForm.color,
+        targetCalories: totalKcal > 0 ? Math.round(totalKcal) : undefined,
+        source: 'chat',
+        planPayload: { table: pendingSave.parsed.rawTable, items: pendingSave.parsed.items },
+        items: pendingSave.parsed.items,
+      });
+      setSaveSuccess(`Saved "${result.name}" to My schedule.`);
+      setPendingSave(null);
+      setTimeout(() => setSaveSuccess(null), 3500);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save schedule');
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+
+  const retryUserMessage = async (msg: Message) => {
+    if (isTyping) return;
+
+    const sessionIdNum = Number(activeChatId);
+    const userMsgIdNum = Number(msg.id);
+    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && Number.isFinite(userMsgIdNum) && userMsgIdNum > 0) {
+      await truncateMessagesAfter(sessionIdNum, userMsgIdNum, true);
+      setConversations(prev =>
+        prev.map(c =>
+          c.id === String(sessionIdNum)
+            ? { ...c, messages: c.messages.filter(m => Number(m.id) < userMsgIdNum || !Number.isFinite(Number(m.id))) }
+            : c
+        )
+      );
+    }
+
+    const overrideImage: SelectedImage | null = msg.imageUrl
+      ? {
+          dataUrl: msg.imageUrl,
+          name: msg.imageName ?? 'Uploaded image',
+          size: 0,
+          type: msg.imageUrl.startsWith('data:image/')
+            ? msg.imageUrl.slice(5, msg.imageUrl.indexOf(';'))
+            : 'image/jpeg',
+        }
+      : null;
+    const overrideText = msg.text.startsWith('Uploaded ') && msg.imageUrl ? '' : msg.text;
     handleSendMessage({ text: overrideText, image: overrideImage });
   };
 
@@ -885,6 +1143,11 @@ export function Chatbox() {
           ref={messagesContainerRef}
           className="flex-1 overflow-y-auto p-8 space-y-8"
         >
+          {saveSuccess && (
+            <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200 mb-4">
+              {saveSuccess}
+            </div>
+          )}
           {error && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">
               <span>{error}</span>
@@ -1044,34 +1307,66 @@ export function Chatbox() {
                           </div>
                           <div className="space-y-4 p-5 text-sm">
                             {msg.text ? renderRichText(msg.text) : null}
-                            {isAiFallback(msg.text) && (
-                              <motion.button
-                                whileHover={{ scale: 1.03 }}
-                                whileTap={{ scale: 0.97 }}
-                                onClick={() => retryAiMessage(msg.id)}
-                                disabled={isTyping}
-                                className={`inline-flex items-center gap-2 rounded-full border border-brand-orange/40 px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                                  isTyping
-                                    ? 'text-text-muted/40 cursor-not-allowed'
-                                    : 'text-brand-orange hover:bg-brand-orange/10'
-                                }`}
-                              >
-                                <RotateCcw size={14} />
-                                Retry
-                              </motion.button>
-                            )}
+                            <div className="flex flex-wrap gap-2">
+                              {isAiFallback(msg.text) && (
+                                <motion.button
+                                  whileHover={{ scale: 1.03 }}
+                                  whileTap={{ scale: 0.97 }}
+                                  onClick={() => retryAiMessage(msg.id)}
+                                  disabled={isTyping}
+                                  className={`inline-flex items-center gap-2 rounded-full border border-brand-orange/40 px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                                    isTyping
+                                      ? 'text-text-muted/40 cursor-not-allowed'
+                                      : 'text-brand-orange hover:bg-brand-orange/10'
+                                  }`}
+                                >
+                                  <RotateCcw size={14} />
+                                  Retry
+                                </motion.button>
+                              )}
+                              {onSavePlanToSchedule && parsePlanFromMarkdown(msg.text) && (
+                                <motion.button
+                                  whileHover={{ scale: 1.03 }}
+                                  whileTap={{ scale: 0.97 }}
+                                  onClick={() => openSaveModal(msg.text)}
+                                  className="inline-flex items-center gap-2 rounded-full border border-emerald-400/40 bg-emerald-400/10 px-4 py-2 text-xs font-bold uppercase tracking-widest text-emerald-300 hover:bg-emerald-400/20 transition-colors"
+                                >
+                                  <CalendarPlus size={14} />
+                                  Save to My schedule
+                                </motion.button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ) : (
-                        <div className="rounded-3xl rounded-tr-none bg-brand-orange p-5 text-left text-sm font-medium leading-relaxed text-bg-dark">
-                          {msg.imageUrl && (
-                            <img
-                              src={msg.imageUrl}
-                              alt={msg.imageName || 'Uploaded image'}
-                              className={`max-h-64 w-full max-w-sm rounded-2xl object-cover ${msg.text ? 'mb-4' : ''}`}
-                            />
-                          )}
-                          {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+                        <div className="space-y-2">
+                          <div className="rounded-3xl rounded-tr-none bg-brand-orange p-5 text-left text-sm font-medium leading-relaxed text-bg-dark">
+                            {msg.imageUrl && (
+                              <img
+                                src={msg.imageUrl}
+                                alt={msg.imageName || 'Uploaded image'}
+                                className={`max-h-64 w-full max-w-sm rounded-2xl object-cover ${msg.text ? 'mb-4' : ''}`}
+                              />
+                            )}
+                            {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+                          </div>
+                          <div className="flex justify-end">
+                            <motion.button
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              onClick={() => retryUserMessage(msg)}
+                              disabled={isTyping}
+                              title="Resend this message"
+                              className={`inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                isTyping
+                                  ? 'text-text-muted/40 cursor-not-allowed'
+                                  : 'text-text-muted hover:text-brand-orange hover:border-brand-orange/30'
+                              }`}
+                            >
+                              <RotateCcw size={11} />
+                              Resend
+                            </motion.button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1204,6 +1499,114 @@ export function Chatbox() {
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {pendingSave && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeSaveModal}
+              className="absolute inset-0 bg-bg-dark/90 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-surface-dark p-7 rounded-3xl border border-white/10 max-w-lg w-full shadow-2xl"
+            >
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-400/10 text-emerald-300 flex items-center justify-center">
+                  <CalendarPlus size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold">Save to My schedule</h3>
+                  <p className="text-xs text-text-muted">{pendingSave.parsed.items.length} meal{pendingSave.parsed.items.length === 1 ? '' : 's'} detected · ~{pendingSave.parsed.totalKcal} kcal</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Schedule name</label>
+                  <input
+                    type="text"
+                    value={saveForm.name}
+                    onChange={(e) => setSaveForm(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Start date</label>
+                    <input
+                      type="date"
+                      value={saveForm.startDate}
+                      onChange={(e) => setSaveForm(prev => ({ ...prev, startDate: e.target.value }))}
+                      className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">End date</label>
+                    <input
+                      type="date"
+                      value={saveForm.endDate}
+                      onChange={(e) => setSaveForm(prev => ({ ...prev, endDate: e.target.value }))}
+                      className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                    />
+                  </div>
+                </div>
+                {(() => {
+                  const startMs = new Date(`${saveForm.startDate}T00:00:00`).getTime();
+                  const endMs = new Date(`${saveForm.endDate}T00:00:00`).getTime();
+                  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+                  const days = Math.round((endMs - startMs) / 86400000) + 1;
+                  if (days <= 0) return <p className="text-[11px] text-red-400">End date must be on or after start date.</p>;
+                  return (
+                    <p className={`text-[11px] ${days > 60 ? 'text-red-400' : 'text-text-muted'}`}>
+                      Duration: {days} day{days === 1 ? '' : 's'}{days > 60 ? ' — too long, max 60 days' : days === 7 ? ' (1 week)' : days === 14 ? ' (2 weeks)' : ''}
+                    </p>
+                  );
+                })()}
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Color</label>
+                  <div className="flex gap-2">
+                    {['#FB923C', '#34D399', '#A78BFA', '#F472B6', '#60A5FA', '#FBBF24'].map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setSaveForm(prev => ({ ...prev, color: c }))}
+                        className={`w-8 h-8 rounded-full border-2 transition-all ${saveForm.color === c ? 'border-white scale-110' : 'border-transparent opacity-70 hover:opacity-100'}`}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {saveError && (
+                <p className="text-red-400 text-xs mt-4">{saveError}</p>
+              )}
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={closeSaveModal}
+                  disabled={savingPlan}
+                  className="flex-1 py-3 rounded-2xl font-bold bg-white/5 hover:bg-white/10 text-sm transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmSavePlan}
+                  disabled={savingPlan}
+                  className="flex-1 py-3 rounded-2xl font-bold text-sm bg-emerald-400 hover:bg-emerald-300 text-bg-dark transition-colors disabled:opacity-50"
+                >
+                  {savingPlan ? 'Saving…' : 'Save schedule'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

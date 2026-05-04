@@ -7,7 +7,7 @@ import { Homepage } from './components/Homepage';
 import { Dashboard } from './components/Dashboard';
 import { Chatbox } from './components/Chatbox';
 import { Settings } from './components/Settings';
-import { DietItem } from './types';
+import { DietItem, MealSchedule, ScheduleItem } from './types';
 import { Bell, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { buildApiUrl } from '../config/api';
@@ -99,6 +99,7 @@ const normalizeMealType = (value?: string) => {
 export default function App({ onLogout }: UserAppProps) {
   const [activeTab, setActiveTab] = useState('home');
   const [myDiets, setMyDiets] = useState<DietItem[]>([]);
+  const [schedules, setSchedules] = useState<MealSchedule[]>([]);
   const [profile, setProfileState] = useState<UserProfile>(createDefaultProfile);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [notifications, setNotifications] = useState<{ id: string; message: string; time: string }[]>([]);
@@ -201,6 +202,85 @@ export default function App({ onLogout }: UserAppProps) {
     setMyDiets((result.data ?? []).map(mapMealToDietItem));
   };
 
+  const loadSchedules = async () => {
+    const response = await fetch(buildApiUrl('/users/schedules'), {
+      headers: getAuthHeaders(),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to load schedules');
+    }
+    setSchedules((result.data ?? []) as MealSchedule[]);
+  };
+
+  const createScheduleFromPlan = async (payload: {
+    name: string;
+    description?: string;
+    startDate: string;
+    endDate: string;
+    color?: string;
+    targetCalories?: number;
+    source: 'manual' | 'chat';
+    planPayload?: unknown;
+    items?: ScheduleItem[];
+  }) => {
+    const response = await fetch(buildApiUrl('/users/schedules'), {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to create schedule');
+    }
+    setSchedules(prev => {
+      const next = [...prev, result.data as MealSchedule];
+      return next.sort((a, b) => a.startDate.localeCompare(b.startDate));
+    });
+    return result.data as MealSchedule;
+  };
+
+  const updateScheduleHandler = async (
+    scheduleId: number,
+    patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>
+  ) => {
+    const response = await fetch(buildApiUrl(`/users/schedules/${scheduleId}`), {
+      method: 'PATCH',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(patch),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to update schedule');
+    }
+    setSchedules(prev => prev.map(s => s.scheduleId === scheduleId ? result.data as MealSchedule : s));
+  };
+
+  const deleteScheduleHandler = async (scheduleId: number) => {
+    const response = await fetch(buildApiUrl(`/users/schedules/${scheduleId}`), {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.message || 'Failed to delete schedule');
+    }
+    setSchedules(prev => prev.filter(s => s.scheduleId !== scheduleId));
+  };
+
+  const publishScheduleHandler = async (scheduleId: number, publish: boolean) => {
+    const response = await fetch(buildApiUrl(`/users/schedules/${scheduleId}/publish`), {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ publish }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to update share status');
+    }
+    setSchedules(prev => prev.map(s => s.scheduleId === scheduleId ? result.data as MealSchedule : s));
+  };
+
   useEffect(() => {
     const bootstrapUserData = async () => {
       try {
@@ -245,6 +325,7 @@ export default function App({ onLogout }: UserAppProps) {
         });
 
         setMyDiets((mealsResult.data ?? []).map(mapMealToDietItem));
+        loadSchedules().catch(err => console.error('schedules load failed:', err));
       } catch (error) {
         console.error(error);
       } finally {
@@ -491,19 +572,23 @@ export default function App({ onLogout }: UserAppProps) {
         )}
         {activeTab === 'scan' && <FoodScan onAddToMyDiet={handleAddToMyDiet} />}
         {activeTab === 'goals' && (
-          <DietGoals 
-            myDiets={myDiets} 
-            onAddToMyDiet={handleAddToMyDiet} 
+          <DietGoals
+            myDiets={myDiets}
+            onAddToMyDiet={handleAddToMyDiet}
             onRemoveFromMyDiet={handleRemoveFromMyDiet}
             profile={profile}
             setProfile={handleProfileChange}
             dailyTarget={dailyTarget}
             baseTarget={baseTarget}
             carryOver={carryOver}
+            schedules={schedules}
+            onUpdateSchedule={updateScheduleHandler}
+            onDeleteSchedule={deleteScheduleHandler}
+            onPublishSchedule={publishScheduleHandler}
           />
         )}
         {activeTab === 'meals' && <MealPlans onAddToMyDiet={handleAddToMyDiet} />}
-        {activeTab === 'chat' && <Chatbox />}
+        {activeTab === 'chat' && <Chatbox onSavePlanToSchedule={createScheduleFromPlan} />}
         {activeTab === 'settings' && (
           <Settings 
             profile={profile}

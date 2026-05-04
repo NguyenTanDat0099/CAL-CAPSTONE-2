@@ -4,11 +4,13 @@ import {
   getChatMessagesService,
   getChatSessionsService,
   sendChatMessageService,
+  truncateMessagesAfterService,
 } from '../services/chat.service';
 
 const statusByError: Record<string, number> = {
   USER_NOT_FOUND: 404,
   CHAT_SESSION_NOT_FOUND: 404,
+  CHAT_MESSAGE_NOT_FOUND: 404,
   EMPTY_MESSAGE: 400,
   INVALID_IMAGE: 400,
   IMAGE_TOO_LARGE: 413,
@@ -79,6 +81,30 @@ export const sendChatMessage = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       message: 'Chat message sent successfully',
+      data: result,
+    });
+  } catch (error) {
+    return handleChatError(error, res);
+  }
+};
+
+export const truncateMessagesAfter = async (req: Request, res: Response) => {
+  const sessionId = parseSessionId(req.params.sessionId);
+  const messageId = Number(req.params.messageId);
+  if (!sessionId || !Number.isInteger(messageId) || messageId <= 0) {
+    return res.status(400).json({ message: 'INVALID_PARAMS' });
+  }
+  const inclusive = String(req.query.inclusive ?? '').toLowerCase() === 'true';
+
+  try {
+    const result = await truncateMessagesAfterService(
+      req.auth?.accountId,
+      sessionId,
+      messageId,
+      { inclusive }
+    );
+    return res.status(200).json({
+      message: 'Messages truncated',
       data: result,
     });
   } catch (error) {

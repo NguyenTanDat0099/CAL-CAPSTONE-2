@@ -19,6 +19,14 @@ import {
   updateUserGoals,
   updateUserProfile,
 } from '../controllers/user.controller';
+import {
+  createSchedule,
+  deleteSchedule,
+  listDiscoverMeals,
+  listSchedules,
+  publishSchedule,
+  updateSchedule,
+} from '../controllers/schedule.controller';
 
 const userRouter = Router();
 
@@ -40,5 +48,11 @@ userRouter.patch('/food-analysis/:analysisId/confirm', confirmFoodAnalysis);
 userRouter.post('/food-analysis/:analysisId/save', saveFoodAnalysisToMealLog);
 userRouter.post('/food-analysis/:analysisId/reanalyze', reanalyzeFoodImage);
 userRouter.delete('/food-analysis/:analysisId', deleteFoodAnalysis);
+userRouter.get('/schedules', listSchedules);
+userRouter.post('/schedules', createSchedule);
+userRouter.patch('/schedules/:scheduleId', updateSchedule);
+userRouter.delete('/schedules/:scheduleId', deleteSchedule);
+userRouter.post('/schedules/:scheduleId/publish', publishSchedule);
+userRouter.get('/discover/meals', listDiscoverMeals);
 
 export default userRouter;
