@@ -557,6 +557,18 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     return () => el.removeEventListener('scroll', handleScroll);
   }, []);
 
+  const parseMessageDbId = (id: string | null | undefined): number | null => {
+    if (!id) return null;
+    const direct = Number(id);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const match = id.match(/^msg-(\d+)-/);
+    if (match) {
+      const parsed = Number(match[1]);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+    return null;
+  };
+
   const mapMessages = (rows: Array<{ messageId?: number; message?: string; sender?: string; createdAt?: string; imageUrl?: string | null; imageName?: string | null; thinkingSteps?: ThinkingStep[] }>): Message[] => {
     if (!Array.isArray(rows)) return [];
     return rows
@@ -923,13 +935,16 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     if (!previousUser) return;
 
     const sessionIdNum = Number(activeChatId);
-    const aiMsgIdNum = Number(failedAiId);
-    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && Number.isFinite(aiMsgIdNum) && aiMsgIdNum > 0) {
+    const aiMsgIdNum = parseMessageDbId(failedAiId);
+    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && aiMsgIdNum != null) {
       await truncateMessagesAfter(sessionIdNum, aiMsgIdNum, true);
       setConversations(prev =>
         prev.map(c =>
           c.id === String(sessionIdNum)
-            ? { ...c, messages: c.messages.filter(m => Number(m.id) < aiMsgIdNum || !Number.isFinite(Number(m.id))) }
+            ? { ...c, messages: c.messages.filter(m => {
+                const dbId = parseMessageDbId(m.id);
+                return dbId == null || dbId < aiMsgIdNum;
+              }) }
             : c
         )
       );
@@ -1009,13 +1024,16 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     if (isTyping) return;
 
     const sessionIdNum = Number(activeChatId);
-    const userMsgIdNum = Number(msg.id);
-    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && Number.isFinite(userMsgIdNum) && userMsgIdNum > 0) {
+    const userMsgIdNum = parseMessageDbId(msg.id);
+    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && userMsgIdNum != null) {
       await truncateMessagesAfter(sessionIdNum, userMsgIdNum, true);
       setConversations(prev =>
         prev.map(c =>
           c.id === String(sessionIdNum)
-            ? { ...c, messages: c.messages.filter(m => Number(m.id) < userMsgIdNum || !Number.isFinite(Number(m.id))) }
+            ? { ...c, messages: c.messages.filter(m => {
+                const dbId = parseMessageDbId(m.id);
+                return dbId == null || dbId < userMsgIdNum;
+              }) }
             : c
         )
       );

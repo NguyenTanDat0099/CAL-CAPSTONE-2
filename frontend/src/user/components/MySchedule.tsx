@@ -353,7 +353,9 @@ function TimelineView({ schedules, today, monthAnchor, setMonthAnchor, onSelect 
   const rangeStart = months[0].start;
   const rangeEnd = months[months.length - 1].end;
   const totalDays = dayDelta(rangeEnd, rangeStart) + 1;
-  const dayWidth = 18;
+  const dayWidth = 26;
+  const laneHeight = 44;
+  const lanePadTop = 18;
   const totalWidth = totalDays * dayWidth;
 
   const dayMarkers = useMemo(() => {
@@ -428,13 +430,13 @@ function TimelineView({ schedules, today, monthAnchor, setMonthAnchor, onSelect 
               return (
                 <div
                   key={idx}
-                  className={`flex flex-col items-center justify-center py-1.5 border-r border-white/5 text-[8px] ${
+                  className={`flex flex-col items-center justify-center py-2 border-r border-white/5 text-[9px] ${
                     isToday ? 'bg-brand-orange/15 text-brand-orange font-black' : isWeekend ? 'text-text-muted/60 bg-bg-dark/40' : 'text-text-muted'
                   }`}
                   style={{ width: dayWidth }}
                 >
                   <span className="uppercase tracking-widest">{marker.weekday}</span>
-                  <span className={`font-black text-[10px] leading-tight ${isToday ? 'text-brand-orange' : 'text-white/80'}`}>
+                  <span className={`font-black text-[12px] leading-tight ${isToday ? 'text-brand-orange' : 'text-white/80'}`}>
                     {marker.label}
                   </span>
                 </div>
@@ -443,7 +445,37 @@ function TimelineView({ schedules, today, monthAnchor, setMonthAnchor, onSelect 
           </div>
 
           {/* Schedule bars */}
-          <div className="relative py-4 min-h-[200px]">
+          <div
+            className="relative"
+            style={{
+              minHeight: Math.max(360, lanePadTop * 2 + Math.max(visible.length, 4) * laneHeight),
+            }}
+          >
+            {/* Lane background guides */}
+            <div className="absolute inset-0 flex flex-col">
+              {Array.from({ length: Math.max(visible.length, 4) }).map((_, idx) => (
+                <div
+                  key={idx}
+                  className={`border-b border-white/5 ${idx % 2 === 0 ? 'bg-bg-dark/20' : ''}`}
+                  style={{ height: laneHeight, marginTop: idx === 0 ? lanePadTop : 0 }}
+                />
+              ))}
+            </div>
+
+            {/* Weekend column shading */}
+            <div className="absolute inset-0 flex pointer-events-none">
+              {dayMarkers.map((marker, idx) => {
+                const isWeekend = marker.date.getDay() === 0 || marker.date.getDay() === 6;
+                return (
+                  <div
+                    key={idx}
+                    className={isWeekend ? 'bg-bg-dark/30' : ''}
+                    style={{ width: dayWidth }}
+                  />
+                );
+              })}
+            </div>
+
             {todayOffset >= 0 && todayOffset < totalDays && (
               <div
                 className="absolute top-0 bottom-0 w-px bg-brand-orange/60 z-10 pointer-events-none"
@@ -462,25 +494,25 @@ function TimelineView({ schedules, today, monthAnchor, setMonthAnchor, onSelect 
                 const offset = Math.max(0, dayDelta(start, rangeStart));
                 const span = Math.min(totalDays - offset, dayDelta(end, start) + 1);
                 if (span <= 0) return null;
-                const left = offset * dayWidth + 2;
-                const width = span * dayWidth - 4;
+                const left = offset * dayWidth + 3;
+                const width = span * dayWidth - 6;
                 return (
                   <button
                     key={schedule.scheduleId}
                     onClick={() => onSelect(schedule)}
-                    className="absolute h-7 rounded-full px-2.5 flex items-center gap-1.5 text-[10px] font-bold text-white shadow-md shadow-black/20 hover:scale-[1.02] transition-transform overflow-hidden"
+                    className="absolute h-9 rounded-full px-3.5 flex items-center gap-2 text-[11px] font-bold text-white shadow-lg shadow-black/30 hover:scale-[1.02] transition-transform overflow-hidden"
                     style={{
                       left,
                       width,
-                      top: 12 + laneIdx * 36,
+                      top: lanePadTop + laneIdx * laneHeight + (laneHeight - 36) / 2,
                       backgroundColor: schedule.color,
                     }}
                   >
-                    {schedule.source === 'chat' && <MessageSquareText size={10} className="shrink-0" />}
-                    {schedule.achieved && <Trophy size={10} className="shrink-0" />}
-                    {schedule.isPublished && <Sparkles size={10} className="shrink-0" />}
+                    {schedule.source === 'chat' && <MessageSquareText size={12} className="shrink-0" />}
+                    {schedule.achieved && <Trophy size={12} className="shrink-0" />}
+                    {schedule.isPublished && <Sparkles size={12} className="shrink-0" />}
                     <span className="truncate text-left flex-1">{schedule.name}</span>
-                    <span className="text-[9px] opacity-80 shrink-0">{span}d</span>
+                    <span className="text-[10px] opacity-80 shrink-0">{span}d</span>
                   </button>
                 );
               })
