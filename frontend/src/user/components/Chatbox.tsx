@@ -16,6 +16,7 @@ import {
   CircleDashed,
   Sparkles,
   Table2,
+  RotateCcw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { buildApiUrl } from '../../config/api';
@@ -575,9 +576,9 @@ export function Chatbox() {
     }
   };
 
-  const handleSendMessage = async () => {
-    const trimmed = inputText.trim();
-    const imageToSend = selectedImage;
+  const handleSendMessage = async (override?: { text?: string; image?: SelectedImage | null }) => {
+    const trimmed = (override?.text ?? inputText).trim();
+    const imageToSend = override?.image !== undefined ? override.image : selectedImage;
     const latestContextImage = !imageToSend && trimmed && activeChat && wantsImageContext(trimmed)
       ? [...activeChat.messages].reverse().find(message => message.imageUrl)
       : null;
@@ -738,6 +739,64 @@ export function Chatbox() {
     "Recalculate macros"
   ];
 
+  const aiFallbackHints = [
+    'model vision chưa xác định đủ chắc',
+    'Mình chưa kịp trả lời',
+    'Service Cal-AI hiện không khả dụng',
+    'Mình không kết nối được Cal-AI',
+    'Cal-AI trả về lỗi',
+    'Mình chưa tìm thấy dữ liệu phù hợp',
+    'Mình chưa tạo được câu trả lời',
+  ];
+  const isAiFallback = (text?: string) => {
+    if (!text) return false;
+    return aiFallbackHints.some(hint => text.includes(hint));
+  };
+
+  const retryAiMessage = (failedAiId: string) => {
+    if (isTyping) return;
+    const messages = activeChat?.messages ?? [];
+    const failedIndex = messages.findIndex(m => m.id === failedAiId);
+    const previousUser = failedIndex > 0
+      ? [...messages].slice(0, failedIndex).reverse().find(m => m.sender === 'user')
+      : null;
+    if (!previousUser) return;
+    const overrideImage: SelectedImage | null = previousUser.imageUrl
+      ? {
+          dataUrl: previousUser.imageUrl,
+          name: previousUser.imageName ?? 'Uploaded image',
+          size: 0,
+          type: previousUser.imageUrl.startsWith('data:image/')
+            ? previousUser.imageUrl.slice(5, previousUser.imageUrl.indexOf(';'))
+            : 'image/jpeg',
+        }
+      : null;
+    const overrideText = previousUser.text.startsWith('Uploaded ') && previousUser.imageUrl
+      ? ''
+      : previousUser.text;
+    handleSendMessage({ text: overrideText, image: overrideImage });
+  };
+
+  const retryLastUserMessage = () => {
+    if (isTyping) return;
+    const messages = activeChat?.messages ?? [];
+    const lastUser = [...messages].reverse().find(m => m.sender === 'user');
+    if (lastUser) {
+      const overrideImage: SelectedImage | null = lastUser.imageUrl
+        ? {
+            dataUrl: lastUser.imageUrl,
+            name: lastUser.imageName ?? 'Uploaded image',
+            size: 0,
+            type: 'image/jpeg',
+          }
+        : null;
+      const overrideText = lastUser.text.startsWith('Uploaded ') && lastUser.imageUrl ? '' : lastUser.text;
+      handleSendMessage({ text: overrideText, image: overrideImage });
+      return;
+    }
+    if (inputText.trim() || selectedImage) handleSendMessage();
+  };
+
   return (
     <div className="flex h-screen bg-bg-dark ml-64 overflow-hidden">
       {/* Recent Chats Sidebar */}
@@ -827,8 +886,22 @@ export function Chatbox() {
           className="flex-1 overflow-y-auto p-8 space-y-8"
         >
           {error && (
-            <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">
-              {error}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">
+              <span>{error}</span>
+              {(activeChat?.messages.some(m => m.sender === 'user') || inputText.trim() || selectedImage) && (
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => { setError(''); retryLastUserMessage(); }}
+                  disabled={isTyping}
+                  className={`inline-flex items-center gap-2 rounded-full border border-red-300/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                    isTyping ? 'text-red-200/40 cursor-not-allowed' : 'text-red-100 hover:bg-red-300/10'
+                  }`}
+                >
+                  <RotateCcw size={12} />
+                  Retry
+                </motion.button>
+              )}
             </div>
           )}
           {!activeChatId && !isTyping ? (
@@ -971,6 +1044,22 @@ export function Chatbox() {
                           </div>
                           <div className="space-y-4 p-5 text-sm">
                             {msg.text ? renderRichText(msg.text) : null}
+                            {isAiFallback(msg.text) && (
+                              <motion.button
+                                whileHover={{ scale: 1.03 }}
+                                whileTap={{ scale: 0.97 }}
+                                onClick={() => retryAiMessage(msg.id)}
+                                disabled={isTyping}
+                                className={`inline-flex items-center gap-2 rounded-full border border-brand-orange/40 px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                                  isTyping
+                                    ? 'text-text-muted/40 cursor-not-allowed'
+                                    : 'text-brand-orange hover:bg-brand-orange/10'
+                                }`}
+                              >
+                                <RotateCcw size={14} />
+                                Retry
+                              </motion.button>
+                            )}
                           </div>
                         </div>
                       ) : (
@@ -1102,7 +1191,7 @@ export function Chatbox() {
                 <motion.button
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
-                  onClick={handleSendMessage}
+                  onClick={() => handleSendMessage()}
                   disabled={(!inputText.trim() && !selectedImage) || isTyping}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
                     (inputText.trim() || selectedImage) && !isTyping ? 'bg-brand-orange text-bg-dark' : 'bg-white/5 text-text-muted'

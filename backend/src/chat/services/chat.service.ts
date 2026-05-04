@@ -60,6 +60,16 @@ interface CalAiQueryResult {
   citations?: Array<Record<string, unknown>>;
 }
 
+type CalAiFailureReason = 'unreachable' | 'timeout' | 'http' | 'empty' | 'fetch_error';
+
+interface CalAiFailure {
+  ok: false;
+  reason: CalAiFailureReason;
+  detail?: string;
+}
+
+type CalAiOutcome = (CalAiQueryResult & { ok: true }) | CalAiFailure;
+
 const MAX_IMAGE_DATA_URL_LENGTH = Number(process.env.MAX_IMAGE_DATA_URL_LENGTH || 3_500_000);
 
 interface ImageData {
@@ -520,13 +530,13 @@ const askCalAi = async (
   message: string,
   runtimeContext?: ChatRuntimeContext | null,
   userProfile?: UserProfile | null
-) => {
+): Promise<CalAiOutcome> => {
   const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
-  if (!baseUrl) return null;
-  const timeoutMs = Number(process.env.CAL_AI_QUERY_TIMEOUT_MS || 70000);
+  if (!baseUrl) return { ok: false, reason: 'unreachable', detail: 'CAL_AI_BASE_URL chưa được cấu hình.' };
+  const timeoutMs = Number(process.env.CAL_AI_QUERY_TIMEOUT_MS || 180000);
 
   try {
-    return await withTimeout(async signal => {
+    return await withTimeout<CalAiOutcome>(async signal => {
       const response = await fetch(`${baseUrl}/api/agent/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -543,13 +553,21 @@ const askCalAi = async (
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');
         console.warn(`[ChatText] Cal-AI query failed with HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
-        return null;
+        return { ok: false, reason: 'http', detail: `HTTP ${response.status}` };
       }
-      return formatCalAiResult(await response.json());
+      const parsed = formatCalAiResult(await response.json());
+      if (!parsed) return { ok: false, reason: 'empty' };
+      return { ok: true, ...parsed };
     }, timeoutMs);
   } catch (error) {
-    console.warn('[ChatText] Cal-AI query unavailable:', error instanceof Error ? error.message : error);
-    return null;
+    const message = error instanceof Error ? error.message : String(error);
+    const isTimeout = error instanceof Error && (error.name === 'AbortError' || message.includes('aborted'));
+    if (isTimeout) {
+      console.warn(`[ChatText] Cal-AI query timed out after ${timeoutMs}ms`);
+      return { ok: false, reason: 'timeout', detail: `Quá ${Math.round(timeoutMs / 1000)}s` };
+    }
+    console.warn('[ChatText] Cal-AI query unavailable:', message);
+    return { ok: false, reason: 'fetch_error', detail: message };
   }
 };
 
@@ -983,8 +1001,7 @@ const generateAssistantReply = async (
     });
 
   const calAiResult = await askCalAi(message, runtimeContext, userProfile);
-  const calAiAnswer = calAiResult?.answer ?? null;
-  if (calAiResult) {
+  if (calAiResult.ok) {
     addThinkingStep(trace, 'Truy vấn Cal-AI context', 'Cal-AI /query đã trả về câu trả lời hoặc dữ liệu liên quan.', {
       detail: 'Cal-AI là nguồn model duy nhất cho câu trả lời text.',
       evidence: [
@@ -1006,14 +1023,38 @@ const generateAssistantReply = async (
       : 'UI sẽ render nội dung tư vấn dạng rich text.');
 
     return {
-      text: calAiAnswer,
+      text: calAiResult.answer,
       thinkingSteps: trace,
     };
   }
 
-  addThinkingStep(trace, 'Truy vấn Cal-AI context', 'Cal-AI /query không trả về dữ liệu đủ dùng hoặc hết thời gian chờ.', {
+  const failureMessages: Record<CalAiFailureReason, { trace: string; user: string }> = {
+    timeout: {
+      trace: 'Cal-AI không trả lời kịp trong thời gian chờ (LLM chạy quá lâu). Dữ liệu Qdrant có thể vẫn đầy đủ, vấn đề là tốc độ sinh câu trả lời.',
+      user: 'Mình chưa kịp trả lời vì model đang sinh câu trả lời quá lâu. Bạn hãy gửi lại câu hỏi (ngắn gọn hơn nếu có thể), hoặc tăng `CAL_AI_QUERY_TIMEOUT_MS` ở backend.',
+    },
+    unreachable: {
+      trace: 'Backend không gọi được Cal-AI vì chưa cấu hình URL hoặc service không chạy.',
+      user: 'Service Cal-AI hiện không khả dụng. Vui lòng kiểm tra Cal-AI Python server đã chạy ở đúng `CAL_AI_BASE_URL`.',
+    },
+    fetch_error: {
+      trace: 'Backend gọi Cal-AI nhưng gặp lỗi mạng/kết nối.',
+      user: 'Mình không kết nối được Cal-AI service. Hãy kiểm tra Cal-AI đang chạy và cùng máy với backend.',
+    },
+    http: {
+      trace: 'Cal-AI trả về HTTP lỗi, không có dữ liệu để render.',
+      user: 'Cal-AI trả về lỗi khi xử lý request. Hãy kiểm tra log của Cal-AI Python server.',
+    },
+    empty: {
+      trace: 'Cal-AI trả về 200 nhưng không có nội dung answer; có thể Qdrant không có dữ liệu phù hợp với câu hỏi này.',
+      user: 'Mình chưa tìm thấy dữ liệu phù hợp cho câu hỏi này. Bạn thử mô tả cụ thể tên món hoặc loại thực phẩm muốn tra cứu.',
+    },
+  };
+  const failure = failureMessages[calAiResult.reason];
+
+  addThinkingStep(trace, 'Truy vấn Cal-AI context', failure.trace, {
     status: 'warning',
-    detail: 'Không gọi model thay thế ở backend.',
+    detail: calAiResult.detail ?? 'Không gọi model thay thế ở backend.',
   });
 
   addThinkingStep(trace, 'Không thể tạo câu trả lời', 'Không có câu trả lời đáng tin cậy từ pipeline Agentic RAG.', {
@@ -1021,7 +1062,7 @@ const generateAssistantReply = async (
   });
 
   return {
-    text: 'Mình chưa tạo được câu trả lời đáng tin cậy cho request này vì dịch vụ phân tích không trả về dữ liệu đủ dùng trong thời gian chờ. Bạn hãy gửi lại câu hỏi hoặc bổ sung số liệu chính như tổng kcal, khẩu phần, chiều cao, cân nặng, tuổi, giới tính và mức vận động để mình tính chính xác.',
+    text: failure.user,
     thinkingSteps: trace,
   };
 };

@@ -294,7 +294,7 @@ export default function App({ onLogout }: UserAppProps) {
           }),
         ]);
 
-        setProfileState(prev => ({ ...prev, hasCompletedSetup: true }));
+        setProfileState(prev => prev.hasCompletedSetup ? prev : { ...prev, hasCompletedSetup: true });
       } catch (error) {
         console.error(error);
       }
