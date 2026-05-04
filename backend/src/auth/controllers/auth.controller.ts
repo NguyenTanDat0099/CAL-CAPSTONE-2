@@ -27,6 +27,7 @@ const errorStatusMap: Record<string, number> = {
   ACCOUNT_NOT_FOUND: 404,
   INVALID_RESET_CODE: 400,
   INVALID_REGISTER_OTP: 400,
+  INVALID_USERNAME: 400,
 };
 
 const handleAuthError = (error: unknown, res: Response) => {
@@ -38,13 +39,17 @@ const handleAuthError = (error: unknown, res: Response) => {
 
 export const requestRegisterOtp = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, username } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'email and password are required' });
+    if (!email || !password || !username) {
+      return res.status(400).json({ message: 'email, username and password are required' });
     }
 
-    const data = await requestRegisterOtpService({ email, password });
+    if (username.trim().length < 2) {
+      return res.status(400).json({ message: 'Username must be at least 2 characters' });
+    }
+
+    const data = await requestRegisterOtpService({ email, password, username: username.trim() });
     return res.status(200).json({
       message: 'Register OTP sent successfully',
       data,

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, ArrowRight, Flag, Zap, User, AlertTriangle, RotateCcw, Info, ArrowLeft, PlusCircle, Heart, Droplets, X } from 'lucide-react';
-import { DietItem } from '../types';
+import { DietItem, MealSchedule } from '../types';
 import { UserProfile, Goal, ActivityLevel, Gender } from '../App';
+import { MySchedule } from './MySchedule';
 
 interface DietPlan {
   id: string;
@@ -71,22 +72,37 @@ interface DietGoalsProps {
   dailyTarget: number;
   baseTarget: number;
   carryOver: number;
+  schedules: MealSchedule[];
+  onUpdateSchedule: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>) => Promise<void>;
+  onDeleteSchedule: (scheduleId: number) => Promise<void>;
+  onPublishSchedule: (scheduleId: number, publish: boolean) => Promise<void>;
 }
 
-export function DietGoals({ 
-  myDiets, 
-  onAddToMyDiet, 
+export function DietGoals({
+  myDiets,
+  onAddToMyDiet,
   onRemoveFromMyDiet,
   profile,
   setProfile,
   dailyTarget,
   baseTarget,
-  carryOver
+  carryOver,
+  schedules,
+  onUpdateSchedule,
+  onDeleteSchedule,
+  onPublishSchedule,
 }: DietGoalsProps) {
-  const hasValidProfile = profile.age > 0 && profile.height > 0 && profile.weight > 0;
-  const [isOnboarded, setIsOnboarded] = useState<boolean>(hasValidProfile);
+  const [isOnboarded, setIsOnboarded] = useState(profile.hasCompletedSetup);
+  const [isProfileLoaded, setIsProfileLoaded] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'all' | 'my'>('all');
+  useEffect(() => {
+    if (!isProfileLoaded) {
+      setIsOnboarded(profile.hasCompletedSetup);
+      setIsProfileLoaded(true);
+    }
+  }, [profile.hasCompletedSetup, isProfileLoaded]);
+
+  const [activeTab, setActiveTab] = useState<'my' | 'schedule'>('my');
   const [showResetWarning, setShowResetWarning] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<DietPlan | DietItem | null>(null);
   const [errors, setErrors] = useState<{ age?: string; height?: string; weight?: string }>({});
@@ -103,6 +119,7 @@ export function DietGoals({
   const handleCompleteOnboarding = () => {
     if (validate()) {
       setIsOnboarded(true);
+      setProfile(prev => ({ ...prev, hasCompletedSetup: true }));
     }
   };
 
@@ -110,31 +127,18 @@ export function DietGoals({
     setIsOnboarded(false);
     setShowResetWarning(false);
     setProfile({
-      name: 'Nguyen Tan Dat',
+      name: '',
       avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop',
       goal: 'lose',
-      activityLevel: 'sedentary',
+      activityLevel: 'moderate',
       gender: 'male',
       age: 0,
       height: 0,
       weight: 0,
       targetWeight: 0,
       startingWeight: 0,
+      hasCompletedSetup: false,
     });
-  };
-
-  React.useEffect(() => {
-    const hasProfile = profile.age > 0 && profile.height > 0 && profile.weight > 0;
-    setIsOnboarded(hasProfile);
-  }, [profile.age, profile.height, profile.weight]);
-
-  const handleInputFocus = () => {
-    setIsOnboarded(false);
-  };
-
-  const handleInputBlur = () => {
-    const hasProfile = profile.age > 0 && profile.height > 0 && profile.weight > 0;
-    setIsOnboarded(hasProfile);
   };
 
   if (isOnboarded) {
@@ -269,7 +273,6 @@ export function DietGoals({
       );
     }
 
-    const filteredPlans = dietPlans.filter(plan => plan.suitableFor.includes(profile.goal));
     const totalCalories = myDiets.reduce((sum, item) => sum + item.calories, 0);
     const progressPercentage = Math.min((totalCalories / dailyTarget) * 100, 100);
 
@@ -277,67 +280,35 @@ export function DietGoals({
       <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
         <header className="mb-8">
           <div className="flex items-center justify-between mb-6">
-            <h1 className="text-4xl font-black tracking-tight">Diet goals</h1>
+            <h1 className="text-4xl font-black tracking-tight">My goal</h1>
           </div>
-          
+
           <div className="flex gap-8 border-b border-white/10">
-            <button 
-              onClick={() => setActiveTab('all')}
-              className={`pb-4 text-sm font-bold transition-all relative ${activeTab === 'all' ? 'text-brand-orange' : 'text-text-muted hover:text-white'}`}
-            >
-              All Diets
-              {activeTab === 'all' && <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-orange" />}
-            </button>
-            <button 
+            <button
               onClick={() => setActiveTab('my')}
               className={`pb-4 text-sm font-bold transition-all relative ${activeTab === 'my' ? 'text-brand-orange' : 'text-text-muted hover:text-white'}`}
             >
               My Diets
               {activeTab === 'my' && <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-orange" />}
             </button>
+            <button
+              onClick={() => setActiveTab('schedule')}
+              className={`pb-4 text-sm font-bold transition-all relative ${activeTab === 'schedule' ? 'text-brand-orange' : 'text-text-muted hover:text-white'}`}
+            >
+              My schedule
+              {activeTab === 'schedule' && <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-orange" />}
+            </button>
           </div>
         </header>
 
-        {activeTab === 'all' ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-32">
-            {filteredPlans.map((plan) => (
-              <motion.div 
-                key={plan.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                onClick={() => setSelectedPlan(plan)}
-                className="bg-surface-dark rounded-3xl overflow-hidden border border-white/5 group cursor-pointer"
-              >
-                <div className="h-48 overflow-hidden relative">
-                  <img src={plan.image} alt={plan.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" referrerPolicy="no-referrer" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-bg-dark/80 to-transparent" />
-                </div>
-                <div className="p-6">
-                  <h3 className="text-xl font-bold mb-2">{plan.name}</h3>
-                  <div className="inline-block px-3 py-1 rounded-full bg-brand-orange/10 text-brand-orange text-xs font-bold mb-4">
-                    {plan.calories} kcal
-                  </div>
-                  <p className="text-text-muted text-sm leading-relaxed mb-6 h-12 overflow-hidden">
-                    {plan.description}
-                  </p>
-                  
-                  <div className="grid grid-cols-3 gap-4 pt-6 border-t border-white/5">
-                    <div className="text-center">
-                      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Protein</p>
-                      <p className="font-bold">{plan.macros.protein}g</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Fats</p>
-                      <p className="font-bold">{plan.macros.fats}g</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Carbs</p>
-                      <p className="font-bold">{plan.macros.carbs}g</p>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
+        {activeTab === 'schedule' ? (
+          <div className="pb-32">
+            <MySchedule
+              schedules={schedules}
+              onUpdate={onUpdateSchedule}
+              onDelete={onDeleteSchedule}
+              onPublish={onPublishSchedule}
+            />
           </div>
         ) : (
           <div className="pb-32">
@@ -579,7 +550,7 @@ export function DietGoals({
                   }
                 }}
                 className="w-full bg-surface-dark border border-white/5 rounded-2xl p-4 text-white focus:outline-none focus:border-brand-orange transition-colors"
-                placeholder="65"
+                placeholder=""
               />
             </div>
           </section>
@@ -656,8 +627,6 @@ export function DietGoals({
                   type="text"
                   inputMode="numeric"
                   value={profile.age || ''}
-                  onFocus={handleInputFocus}
-                  onBlur={handleInputBlur}
                   onChange={(e) => {
                     const raw = e.target.value;
                     if (raw === '') {
@@ -670,7 +639,7 @@ export function DietGoals({
                     }
                   }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.age ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
-                  placeholder="25"
+                  placeholder=""
                 />
                 {errors.age && <p className="text-red-500 text-xs mt-2 flex items-center gap-1"><Info size={12} /> {errors.age}</p>}
               </div>
@@ -681,8 +650,6 @@ export function DietGoals({
                   type="text"
                   inputMode="decimal"
                   value={profile.height || ''}
-                  onFocus={handleInputFocus}
-                  onBlur={handleInputBlur}
                   onChange={(e) => {
                     const raw = e.target.value;
                     if (raw === '') {
@@ -695,7 +662,7 @@ export function DietGoals({
                     }
                   }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.height ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
-                  placeholder="175"
+                  placeholder=""
                 />
                 {errors.height && <p className="text-red-500 text-xs mt-2 flex items-center gap-1"><Info size={12} /> {errors.height}</p>}
               </div>
@@ -718,7 +685,7 @@ export function DietGoals({
                     }
                   }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.weight ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
-                  placeholder="70"
+                  placeholder=""
                 />
                 {errors.weight && <p className="text-red-500 text-xs mt-2 flex items-center gap-1"><Info size={12} /> {errors.weight}</p>}
               </div>

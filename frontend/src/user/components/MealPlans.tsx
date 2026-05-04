@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, RotateCcw, Plus, Utensils, ArrowLeft, Info, Flame, Zap, Droplets, Heart, PlusCircle } from 'lucide-react';
+import { Search, RotateCcw, Plus, Utensils, ArrowLeft, Info, Flame, Zap, Droplets, Heart, PlusCircle, Sparkles, Trophy, CalendarDays } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Meal, MealCategory, DietItem } from '../types';
+import { Meal, MealCategory, DietItem, MealSchedule } from '../types';
 import { buildApiUrl } from '../../config/api';
 
 const mockMeals: Meal[] = [
@@ -103,31 +103,6 @@ const mockMeals: Meal[] = [
   }
 ];
 
-const AUTH_TOKEN_KEY = 'calai_token';
-
-const getAuthHeaders = (): Record<string, string> => {
-  let token = '';
-  try { token = sessionStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch {}
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
-
-const normalizeMealCategory = (value?: string | null): MealCategory => {
-  const normalized = (value || '').toLowerCase();
-  if (normalized === 'breakfast') return 'Breakfast';
-  if (normalized === 'lunch') return 'Lunch';
-  if (normalized === 'dinner') return 'Dinner';
-  if (normalized === 'snack') return 'Snack';
-  return 'Lunch';
-};
-
-const getMealImage = (category: MealCategory, image?: string | null) => {
-  if (image) return image;
-  if (category === 'Breakfast') return 'https://images.unsplash.com/photo-1494390248081-4e521a5940db?w=800&h=600&fit=crop';
-  if (category === 'Lunch') return 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&h=600&fit=crop';
-  if (category === 'Dinner') return 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=800&h=600&fit=crop';
-  return 'https://images.unsplash.com/photo-1509722747041-616f39b57569?w=800&h=600&fit=crop';
-};
-
 interface MealPlansProps {
   onAddToMyDiet: (
     item: Omit<DietItem, 'id' | 'date'>,
@@ -135,65 +110,39 @@ interface MealPlansProps {
   ) => void | Promise<void>;
 }
 
+const AUTH_TOKEN_KEY = 'calai_token';
+const getAuthHeaders = (): Record<string, string> => {
+  const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
   const [activeCategory, setActiveCategory] = useState<MealCategory | 'All'>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [minKcal, setMinKcal] = useState<string>('0');
   const [maxKcal, setMaxKcal] = useState<string>('1200');
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
-  const [meals, setMeals] = useState<Meal[]>([]);
-  const [loadingMeals, setLoadingMeals] = useState(true);
+  const [communitySchedules, setCommunitySchedules] = useState<MealSchedule[]>([]);
+  const [communitySelected, setCommunitySelected] = useState<MealSchedule | null>(null);
 
   useEffect(() => {
-    const loadMeals = async () => {
-      setLoadingMeals(true);
+    const load = async () => {
       try {
-        const response = await fetch(buildApiUrl(`/users/foods/search?q=${encodeURIComponent(searchQuery)}`), {
+        const response = await fetch(buildApiUrl('/users/discover/meals'), {
           headers: getAuthHeaders(),
         });
+        if (!response.ok) return;
         const result = await response.json();
-        if (!response.ok) {
-          throw new Error(result.message || 'Failed to load meals');
-        }
-
-        const mappedMeals: Meal[] = (result.data ?? []).map((food: {
-          id: number;
-          name: string;
-          calories: number;
-          protein: number;
-          carbs: number;
-          fats: number;
-          category?: string;
-          imagePath?: string | null;
-        }) => {
-          const category = normalizeMealCategory(food.category);
-          return {
-            id: String(food.id),
-            name: food.name,
-            calories: food.calories,
-            protein: food.protein,
-            carbs: food.carbs,
-            fats: food.fats,
-            image: getMealImage(category, food.imagePath),
-            category,
-            description: `${food.name} from the CalAI food library.`,
-            about: 'This nutrition profile is maintained by the admin Food Library and can be added to your daily diet log.',
-          };
-        });
-
-        setMeals(mappedMeals);
+        setCommunitySchedules((result.data ?? []) as MealSchedule[]);
       } catch {
-        setMeals(mockMeals);
-      } finally {
-        setLoadingMeals(false);
+        // discover is optional; ignore failures
       }
     };
-
-    loadMeals();
-  }, [searchQuery]);
+    load();
+  }, []);
 
   const filteredMeals = useMemo(() => {
-    return meals.filter(meal => {
+    return mockMeals.filter(meal => {
       const matchesCategory = activeCategory === 'All' || meal.category === activeCategory;
       const matchesSearch = meal.name.toLowerCase().includes(searchQuery.toLowerCase());
       const kcal = meal.calories;
@@ -202,7 +151,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
       const matchesKcal = kcal >= min && kcal <= max;
       return matchesCategory && matchesSearch && matchesKcal;
     });
-  }, [meals, activeCategory, searchQuery, minKcal, maxKcal]);
+  }, [activeCategory, searchQuery, minKcal, maxKcal]);
 
   const handleReset = () => {
     setMinKcal('0');
@@ -326,6 +275,71 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
         </p>
       </header>
 
+      {communitySchedules.length > 0 && (
+        <section className="mb-12">
+          <div className="flex items-end justify-between mb-5">
+            <div>
+              <div className="flex items-center gap-2 text-emerald-300 mb-2">
+                <Sparkles size={16} />
+                <span className="text-xs font-black uppercase tracking-widest">From the community</span>
+              </div>
+              <h2 className="text-2xl font-black">Meal plans shared by other CalAI users</h2>
+            </div>
+            <p className="text-xs text-text-muted">{communitySchedules.length} shared plan{communitySchedules.length === 1 ? '' : 's'}</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {communitySchedules.map(s => {
+              const totalKcal = s.items.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+              const dayCount = Math.max(1, Math.round((new Date(s.endDate).getTime() - new Date(s.startDate).getTime()) / 86400000) + 1);
+              return (
+                <button
+                  key={s.scheduleId}
+                  onClick={() => setCommunitySelected(s)}
+                  className="text-left bg-surface-dark rounded-3xl border border-white/5 hover:border-emerald-400/30 transition-colors overflow-hidden"
+                >
+                  <div className="h-1.5" style={{ backgroundColor: s.color }} />
+                  <div className="p-5">
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div className="min-w-0">
+                        <h3 className="text-base font-bold truncate">{s.name}</h3>
+                        <p className="text-[10px] uppercase tracking-widest text-text-muted mt-0.5">
+                          By {s.authorName ?? 'Community'} · {dayCount} day{dayCount === 1 ? '' : 's'}
+                        </p>
+                      </div>
+                      {s.achieved && (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-400/10 border border-emerald-400/30 rounded-full px-2 py-0.5 shrink-0">
+                          <Trophy size={10} />
+                          Achieved
+                        </span>
+                      )}
+                    </div>
+                    {s.description && (
+                      <p className="text-xs text-text-muted leading-relaxed mb-4 h-9 overflow-hidden">
+                        {s.description.length > 120 ? `${s.description.slice(0, 120)}…` : s.description}
+                      </p>
+                    )}
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="inline-flex items-center gap-1 text-text-muted">
+                        <CalendarDays size={12} /> {s.items.length} meal{s.items.length === 1 ? '' : 's'}
+                      </span>
+                      {totalKcal > 0 && (
+                        <span className="font-bold text-brand-orange">{totalKcal.toLocaleString()} kcal</span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <AnimatePresence>
+        {communitySelected && (
+          <CommunityScheduleModal schedule={communitySelected} onClose={() => setCommunitySelected(null)} />
+        )}
+      </AnimatePresence>
+
       {/* Navigation & Search */}
       <div className="flex items-center justify-between mb-8 border-b border-white/10">
         <div className="flex gap-8">
@@ -388,12 +402,6 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
       </div>
 
       {/* Meals Grid */}
-      {loadingMeals && (
-        <div className="py-16 text-center text-text-muted font-bold uppercase tracking-widest text-xs">
-          Loading food library...
-        </div>
-      )}
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-32">
         <AnimatePresence mode="popLayout">
           {filteredMeals.map((meal) => (
@@ -473,6 +481,68 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function CommunityScheduleModal({ schedule, onClose }: { schedule: MealSchedule; onClose: () => void }) {
+  const start = new Date(schedule.startDate);
+  const end = new Date(schedule.endDate);
+  const grouped = schedule.items.reduce<Record<number, MealSchedule['items']>>((acc, item) => {
+    const day = item.dayOffset ?? 0;
+    if (!acc[day]) acc[day] = [];
+    acc[day].push(item);
+    return acc;
+  }, {});
+  const dayKeys = Object.keys(grouped).map(Number).sort((a, b) => a - b);
+  const totalKcal = schedule.items.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-bg-dark/90 backdrop-blur-sm" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative bg-surface-dark rounded-[2rem] border border-white/10 max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col shadow-2xl">
+        <div className="h-2" style={{ backgroundColor: schedule.color }} />
+        <div className="px-7 py-5 border-b border-white/5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-widest text-emerald-300 mb-1">From the community</p>
+            <h2 className="text-2xl font-black truncate">{schedule.name}</h2>
+            <p className="text-text-muted text-sm mt-1">
+              By {schedule.authorName ?? 'Community'} · {start.toLocaleDateString()} → {end.toLocaleDateString()}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors shrink-0">
+            <ArrowLeft size={16} />
+          </button>
+        </div>
+        <div className="overflow-y-auto p-7 space-y-5">
+          {schedule.description && <p className="text-text-muted leading-relaxed text-sm">{schedule.description}</p>}
+          <div className="flex items-center justify-between text-xs text-text-muted">
+            <span>{schedule.items.length} meal{schedule.items.length === 1 ? '' : 's'}</span>
+            {totalKcal > 0 && <span className="font-bold text-brand-orange">{totalKcal.toLocaleString()} kcal total</span>}
+          </div>
+          {dayKeys.map(day => (
+            <div key={day} className="bg-bg-dark/60 rounded-2xl border border-white/5 p-4">
+              <p className="text-[10px] uppercase tracking-widest text-text-muted font-black mb-3">Day {day + 1}</p>
+              <div className="space-y-2">
+                {grouped[day].map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-sm">
+                    <div className="min-w-0">
+                      <p className="font-bold truncate">{item.name}</p>
+                      <p className="text-[10px] uppercase tracking-widest text-text-muted">{item.mealType}{item.serving ? ` · ${item.serving}` : ''}</p>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-text-muted shrink-0 ml-4">
+                      {item.calories != null && <span><span className="text-white font-bold">{Math.round(item.calories)}</span> kcal</span>}
+                      {item.protein != null && <span>P {Math.round(item.protein)}g</span>}
+                      {item.carbs != null && <span>C {Math.round(item.carbs)}g</span>}
+                      {item.fat != null && <span>F {Math.round(item.fat)}g</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </motion.div>
     </div>
   );
 }

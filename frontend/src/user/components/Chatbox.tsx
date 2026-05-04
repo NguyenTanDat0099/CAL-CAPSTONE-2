@@ -1,19 +1,45 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Plus, 
-  Send, 
-  Trash2, 
-  MessageSquare, 
+import {
+  Plus,
+  Send,
+  Trash2,
+  MessageSquare,
   Bot,
   User,
+  ChevronDown,
+  ChevronRight,
+  Brain,
+  Image as ImageIcon,
+  X,
+  CheckCircle2,
+  AlertTriangle,
+  CircleDashed,
+  Sparkles,
+  Table2,
+  RotateCcw,
+  CalendarPlus,
 } from 'lucide-react';
+import type { ScheduleItem, MealSchedule, MealType } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
+import { buildApiUrl } from '../../config/api';
+
+interface ThinkingStep {
+  step: number;
+  title?: string;
+  text: string;
+  detail?: string;
+  status?: 'done' | 'skipped' | 'warning';
+  evidence?: string[];
+}
 
 interface Message {
   id: string;
   text: string;
   sender: 'user' | 'ai';
   timestamp: string;
+  imageUrl?: string | null;
+  imageName?: string | null;
+  thinkingSteps?: ThinkingStep[];
 }
 
 interface Conversation {
@@ -24,9 +50,15 @@ interface Conversation {
   messages: Message[];
 }
 
-const API_BASE_URL = 'http://localhost:3000/api/chat';
 const AUTH_TOKEN_KEY = 'calai_token';
-const TEMP_CONVERSATION_PREFIX = 'temp-';
+const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+
+interface SelectedImage {
+  dataUrl: string;
+  name: string;
+  size: number;
+  type: string;
+}
 
 const getAuthHeaders = (includeJson = false) => {
   const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
@@ -40,123 +72,620 @@ const formatTime = (value: string) =>
   new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 const formatConversationTime = (value: string) => {
-  const date = new Date(value);
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const diffHours = Math.floor(diff / (1000 * 60 * 60));
-
-  if (diffHours < 1) return 'Just now';
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return `${Math.floor(diffHours / 24)}d ago`;
+  try {
+    const date = new Date(value);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const diffHours = Math.floor(diff / (1000 * 60 * 60));
+    if (diffHours < 1) return 'Just now';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${Math.floor(diffHours / 24)}d ago`;
+  } catch {
+    return '';
+  }
 };
 
-const isTemporaryConversationId = (value: string | null) =>
-  Boolean(value && value.startsWith(TEMP_CONVERSATION_PREFIX));
+const fileToDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 
-export function Chatbox() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [inputText, setInputText] = useState('');
-  const [typingChatId, setTypingChatId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'nutrition' | 'assistant'>('nutrition');
-  const [error, setError] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+const formatFileSize = (size: number) => `${(size / (1024 * 1024)).toFixed(1)} MB`;
 
-  const activeChat = conversations.find(c => c.id === activeChatId);
-  const isTyping = Boolean(activeChatId && typingChatId && activeChatId === typingChatId);
+const stripAccents = (value: string) =>
+  value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [activeChat?.messages]);
+const wantsImageContext = (message: string) => {
+  const normalized = stripAccents(message);
+  return normalized.includes('mon gi')
+    || normalized.includes('day la gi')
+    || normalized.includes('mon nay')
+    || normalized.includes('mon do')
+    || normalized.includes('anh nay')
+    || normalized.includes('hinh nay')
+    || normalized.includes('trong anh')
+    || normalized.includes('trong hinh')
+    || normalized.includes('calo')
+    || normalized.includes('kcal')
+    || normalized.includes('dinh duong')
+    || normalized.includes('what is')
+    || normalized.includes('this food')
+    || normalized.includes('this dish')
+    || normalized.includes('image')
+    || normalized.includes('photo');
+};
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+const isTableDivider = (line: string) => {
+  const cells = splitTableRow(line);
+  return cells.length > 1 && cells.every(cell => /^:?-{3,}:?$/.test(cell.trim()));
+};
 
-  const mapMessages = (rows: Array<{ messageId: number; message: string; sender: 'user' | 'ai'; createdAt: string }>): Message[] =>
-    rows.map(row => ({
-      id: String(row.messageId),
-      text: row.message,
-      sender: row.sender,
-      timestamp: formatTime(row.createdAt),
-    }));
+const numFromCell = (cell?: string): number | null => {
+  if (!cell) return null;
+  const cleaned = cell.replace(/,/g, '').replace(/\*\*/g, '').trim();
+  const expr = cleaned.match(/^(-?\d+(?:\.\d+)?)\s*([*x×])\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (expr) {
+    const result = Number(expr[1]) * Number(expr[3]);
+    return Number.isFinite(result) ? result : null;
+  }
+  const sum = cleaned.match(/^(-?\d+(?:\.\d+)?)\s*\+\s*(-?\d+(?:\.\d+)?)$/);
+  if (sum) {
+    const result = Number(sum[1]) + Number(sum[2]);
+    return Number.isFinite(result) ? result : null;
+  }
+  const match = cleaned.match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
+};
 
-  const loadSessions = async (preferredSessionId?: string) => {
-    const response = await fetch(`${API_BASE_URL}/sessions`, {
-      headers: getAuthHeaders(),
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.message || 'Failed to load chat sessions');
+const detectMealType = (cell?: string): MealType => {
+  const norm = stripAccents(cell ?? '');
+  if (/sang|breakfast/.test(norm)) return 'breakfast';
+  if (/toi|dinner/.test(norm)) return 'dinner';
+  if (/snack|phu|nhe/.test(norm)) return 'snack';
+  return 'lunch';
+};
+
+interface ParsedPlan {
+  items: ScheduleItem[];
+  totalKcal: number;
+  rawTable: string;
+}
+
+const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
+  if (!text) return null;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length - 1; i++) {
+    const line = lines[i].trim();
+    if (!line.includes('|')) continue;
+    if (!isTableDivider(lines[i + 1])) continue;
+
+    const headers = splitTableRow(line).map(h => stripAccents(h));
+    const findCol = (...needles: string[]) =>
+      headers.findIndex(h => needles.some(n => h.includes(n)));
+    const monIdx = findCol('mon');
+    const kcalIdx = findCol('kcal', 'calo');
+    if (monIdx < 0 || kcalIdx < 0) continue;
+    const servingIdx = findCol('khau phan', 'phan', 'serving');
+    const proteinIdx = findCol('p(g)', 'protein');
+    const carbsIdx = findCol('c(g)', 'carb');
+    const fatIdx = findCol('f(g)', 'fat', 'beo');
+
+    const matchedSignals = [proteinIdx, carbsIdx, fatIdx].filter(idx => idx >= 0).length;
+    if (matchedSignals < 2) continue;
+
+    const items: ScheduleItem[] = [];
+    let totalKcal = 0;
+    const rawLines: string[] = [line, lines[i + 1]];
+    let cursor = i + 2;
+    while (cursor < lines.length && lines[cursor].trim().includes('|')) {
+      rawLines.push(lines[cursor]);
+      const cells = splitTableRow(lines[cursor]);
+      const name = cells[monIdx]?.replace(/\*\*/g, '').trim();
+      if (name && !/^total|^tong|^tổng/i.test(stripAccents(name))) {
+        const kcal = numFromCell(cells[kcalIdx]);
+        items.push({
+          mealType: detectMealType(cells[monIdx]),
+          name,
+          serving: servingIdx >= 0 ? cells[servingIdx] || null : null,
+          calories: kcal,
+          protein: proteinIdx >= 0 ? numFromCell(cells[proteinIdx]) : null,
+          carbs: carbsIdx >= 0 ? numFromCell(cells[carbsIdx]) : null,
+          fat: fatIdx >= 0 ? numFromCell(cells[fatIdx]) : null,
+          dayOffset: 0,
+        });
+        if (kcal != null) totalKcal += kcal;
+      }
+      cursor += 1;
+    }
+    if (items.length === 0) continue;
+    return { items, totalKcal, rawTable: rawLines.join('\n') };
+  }
+  return null;
+};
+
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const addDaysISO = (iso: string, days: number) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(y, (m ?? 1) - 1, d ?? 1);
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const splitTableRow = (line: string) => {
+  const trimmed = line.trim();
+  const content = trimmed.startsWith('|') && trimmed.endsWith('|')
+    ? trimmed.slice(1, -1)
+    : trimmed;
+  const cells: string[] = [];
+  let current = '';
+  let escaped = false;
+
+  for (const char of content) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '|') {
+      cells.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+};
+
+const renderInlineMarkdown = (value: string, keyPrefix: string) => {
+  const nodes: React.ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(value.slice(lastIndex, match.index));
     }
 
-    const sessions = (result.data ?? []) as Array<{
-      sessionId: number;
-      lastMessage: string;
-      startedAt: string;
-    }>;
+    const token = match[0];
+    if (token.startsWith('**')) {
+      nodes.push(
+        <strong key={`${keyPrefix}-b-${match.index}`} className="font-bold text-white">
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else {
+      nodes.push(
+        <code key={`${keyPrefix}-c-${match.index}`} className="rounded bg-white/10 px-1.5 py-0.5 text-[0.9em] text-brand-orange">
+          {token.slice(1, -1)}
+        </code>
+      );
+    }
 
-    const mappedSessions: Conversation[] = sessions.map(session => ({
-      id: String(session.sessionId),
-      title: session.lastMessage === 'No messages yet' ? 'New Conversation' : session.lastMessage.slice(0, 30),
-      lastMessage: session.lastMessage,
-      timestamp: formatConversationTime(session.startedAt),
-      messages: [],
-    }));
+    lastIndex = match.index + token.length;
+  }
 
-    setConversations(mappedSessions);
+  if (lastIndex < value.length) {
+    nodes.push(value.slice(lastIndex));
+  }
 
-    const nextActiveId = preferredSessionId ?? mappedSessions[0]?.id ?? null;
-    setActiveChatId(nextActiveId);
+  return nodes;
+};
+
+const sanitizeLatex = (text: string) => {
+  if (!text) return text;
+  return text
+    .replace(/\\\[/g, '')
+    .replace(/\\\]/g, '')
+    .replace(/\\\(/g, '')
+    .replace(/\\\)/g, '')
+    .replace(/\$\$/g, '')
+    .replace(/\\text\{([^}]*)\}/g, '$1')
+    .replace(/\\mathrm\{([^}]*)\}/g, '$1')
+    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1) / ($2)')
+    .replace(/\\Delta/g, 'Δ')
+    .replace(/\\approx/g, '≈')
+    .replace(/\\leq/g, '≤')
+    .replace(/\\geq/g, '≥')
+    .replace(/\\times/g, '×')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\div/g, '÷')
+    .replace(/\\pm/g, '±')
+    .replace(/\\,/g, ' ')
+    .replace(/\\!/g, '')
+    .replace(/\\;/g, ' ')
+    .replace(/\\\\/g, '\n');
+};
+
+const renderRichText = (rawText: string) => {
+  const text = sanitizeLatex(rawText);
+  const lines = text.split(/\r?\n/);
+  const blocks: React.ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (trimmed.includes('|') && index + 1 < lines.length && isTableDivider(lines[index + 1])) {
+      const headers = splitTableRow(trimmed);
+      const rows: string[][] = [];
+      index += 2;
+
+      while (index < lines.length && lines[index].trim().includes('|')) {
+        rows.push(splitTableRow(lines[index]));
+        index += 1;
+      }
+
+      blocks.push(
+        <div key={`table-${blocks.length}`} className="overflow-x-auto rounded-xl border border-white/10 bg-black/15">
+          <table className="w-full min-w-[560px] border-collapse text-left text-[13px]">
+            <thead className="bg-white/[0.04] text-[11px] uppercase tracking-[0.16em] text-text-muted">
+              <tr>
+                {headers.map((header, headerIndex) => (
+                  <th key={headerIndex} className="border-b border-white/10 px-4 py-3 font-black">
+                    {renderInlineMarkdown(header, `th-${blocks.length}-${headerIndex}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex} className="border-b border-white/5 last:border-0">
+                  {headers.map((_, cellIndex) => (
+                    <td key={cellIndex} className="px-4 py-3 align-top text-white/88">
+                      {renderInlineMarkdown(row[cellIndex] ?? '', `td-${blocks.length}-${rowIndex}-${cellIndex}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    if (/^#{1,3}\s+/.test(trimmed)) {
+      const level = trimmed.match(/^#+/)?.[0].length ?? 2;
+      const content = trimmed.replace(/^#{1,3}\s+/, '');
+      const HeadingTag = level === 1 ? 'h3' : 'h4';
+      blocks.push(
+        <HeadingTag key={`heading-${blocks.length}`} className="pt-1 text-sm font-black tracking-wide text-white">
+          {renderInlineMarkdown(content, `h-${blocks.length}`)}
+        </HeadingTag>
+      );
+      index += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^[-*]\s+/, ''));
+        index += 1;
+      }
+
+      blocks.push(
+        <ul key={`list-${blocks.length}`} className="space-y-2 pl-4 text-white/88">
+          {items.map((item, itemIndex) => (
+            <li key={itemIndex} className="list-disc leading-relaxed">
+              {renderInlineMarkdown(item, `li-${blocks.length}-${itemIndex}`)}
+            </li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    const paragraph: string[] = [];
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !(lines[index].trim().includes('|') && index + 1 < lines.length && isTableDivider(lines[index + 1]))
+      && !/^#{1,3}\s+/.test(lines[index].trim())
+      && !/^[-*]\s+/.test(lines[index].trim())
+    ) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+
+    blocks.push(
+      <p key={`p-${blocks.length}`} className="leading-7 text-white/90">
+        {renderInlineMarkdown(paragraph.join(' '), `p-${blocks.length}`)}
+      </p>
+    );
+  }
+
+  return blocks;
+};
+
+const getThinkingStatusMeta = (status?: ThinkingStep['status']) => {
+  if (status === 'warning') {
+    return {
+      label: 'Needs review',
+      icon: AlertTriangle,
+      dotClass: 'bg-amber-400/15 text-amber-300 border-amber-300/30',
+    };
+  }
+
+  if (status === 'skipped') {
+    return {
+      label: 'Skipped',
+      icon: CircleDashed,
+      dotClass: 'bg-white/5 text-text-muted border-white/10',
+    };
+  }
+
+  return {
+    label: 'Done',
+    icon: CheckCircle2,
+    dotClass: 'bg-emerald-400/15 text-emerald-300 border-emerald-300/30',
+  };
+};
+
+interface SavePlanPayload {
+  name: string;
+  description?: string;
+  startDate: string;
+  endDate: string;
+  color?: string;
+  targetCalories?: number;
+  source: 'manual' | 'chat';
+  planPayload?: unknown;
+  items?: ScheduleItem[];
+}
+
+interface ChatboxProps {
+  onSavePlanToSchedule?: (payload: SavePlanPayload) => Promise<MealSchedule>;
+}
+
+interface PendingSave {
+  message: string;
+  parsed: ParsedPlan;
+  defaultName: string;
+}
+
+export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
+  const storedActiveChatId = (() => {
+    try { return sessionStorage.getItem('calai_active_chat'); } catch { return null; }
+  })();
+
+  const storedConversations = (() => {
+    try {
+      const raw = sessionStorage.getItem('calai_conversations');
+      if (raw) return JSON.parse(raw) as Conversation[];
+    } catch { /* ignore */ }
+    return [];
+  })();
+
+  const storedPendingRequestId = (() => {
+    try { return sessionStorage.getItem('calai_pending_request'); } catch { return null; }
+  })();
+
+  const [conversations, setConversations] = useState<Conversation[]>(storedConversations);
+  const [activeChatId, setActiveChatId] = useState<string | null>(storedActiveChatId);
+  const [inputText, setInputText] = useState('');
+  const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
+  const [activeTab, setActiveTab] = useState<'nutrition' | 'assistant'>('nutrition');
+  const [error, setError] = useState('');
+  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [saveForm, setSaveForm] = useState({ name: '', startDate: todayISO(), endDate: addDaysISO(todayISO(), 6), color: '#FB923C' });
+  // Per-conversation typing state: { [conversationId]: boolean }
+  const [isTypingMap, setIsTypingMap] = useState<Record<string, boolean>>({});
+  // Tracks which message IDs have expanded thinking steps
+  const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Track if user has scrolled up (away from bottom)
+  const isAtBottomRef = useRef(true);
+
+  // Ref to track pending request separately from render cycle
+  const pendingRequestIdRef = useRef<string | null>(storedPendingRequestId);
+  // AbortController to cancel in-flight requests when switching conversations
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const isTyping = isTypingMap[activeChatId ?? ''] ?? false;
+
+  // Restore isTyping on mount if there was a pending request for the active chat
+  useEffect(() => {
+    const pending = pendingRequestIdRef.current;
+    if (pending && activeChatId && pending === activeChatId) {
+      setIsTypingMap(prev => ({ ...prev, [activeChatId]: true }));
+    }
+  }, []); // only on mount
+
+  // Persist state across navigations
+  useEffect(() => {
+    try {
+      if (activeChatId) {
+        sessionStorage.setItem('calai_active_chat', activeChatId);
+      } else {
+        sessionStorage.removeItem('calai_active_chat');
+      }
+    } catch { /* ignore */ }
+  }, [activeChatId]);
+
+  useEffect(() => {
+    try {
+      if (conversations.length > 0) {
+        sessionStorage.setItem('calai_conversations', JSON.stringify(conversations));
+      }
+    } catch { /* ignore */ }
+  }, [conversations]);
+
+  const activeChat = conversations.find(c => c.id === activeChatId);
+  const displayMessages = (activeChat?.messages ?? []).filter(Boolean);
+
+  useEffect(() => {
+    if (isAtBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [displayMessages, isTyping]);
+
+  // Attach scroll listener once on mount
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      isAtBottomRef.current = distFromBottom < 80;
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const mapMessages = (rows: Array<{ messageId?: number; message?: string; sender?: string; createdAt?: string; imageUrl?: string | null; imageName?: string | null; thinkingSteps?: ThinkingStep[] }>): Message[] => {
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .filter(row => row != null)
+      .map((row, index) => ({
+        id: `msg-${row.messageId ?? index}-${row.sender ?? 'ai'}`,
+        text: String(row.message ?? ''),
+        sender: row.sender === 'user' || row.sender === 'ai' ? row.sender : 'ai',
+        timestamp: row.createdAt ? formatTime(row.createdAt) : formatTime(new Date().toISOString()),
+        imageUrl: row.imageUrl ?? null,
+        imageName: row.imageName ?? null,
+        thinkingSteps: row.thinkingSteps,
+      }));
+  };
+
+  const loadSessions = async () => {
+    try {
+      const response = await fetch(buildApiUrl('/chat/sessions'), {
+        headers: getAuthHeaders(),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result?.message || 'Failed to load chat sessions');
+      }
+
+      const sessions = result?.data ?? [];
+
+      // Build server sessions, then merge with stored conversations to preserve messages
+      const storedMap = new Map(storedConversations.map(c => [c.id, c.messages]));
+      const mappedSessions: Conversation[] = sessions.map((session: { sessionId?: number; lastMessage?: string; startedAt?: string }) => {
+        const sid = String(session.sessionId ?? '');
+        const storedMsgs = storedMap.get(sid) ?? [];
+        return {
+          id: sid,
+          title: (session.lastMessage ?? 'New Conversation').slice(0, 30),
+          lastMessage: session.lastMessage ?? 'No messages yet',
+          timestamp: formatConversationTime(session.startedAt ?? new Date().toISOString()),
+          messages: storedMsgs,
+        };
+      });
+
+      setConversations(mappedSessions);
+
+    if (!activeChatId) {
+      setActiveChatId(mappedSessions[0]?.id ?? null);
+    }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load chats');
+    }
   };
 
   const loadMessages = async (sessionId: string) => {
-    const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages`, {
-      headers: getAuthHeaders(),
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.message || 'Failed to load chat messages');
-    }
+    try {
+      const response = await fetch(buildApiUrl(`/chat/sessions/${sessionId}/messages`), {
+        headers: getAuthHeaders(),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result?.message || 'Failed to load chat messages');
+      }
 
-    const mapped = mapMessages(result.data ?? []);
-    setConversations(prev =>
-      prev.map(conversation =>
-        conversation.id === sessionId
-          ? {
-              ...conversation,
-              messages: mapped,
-              lastMessage: mapped[mapped.length - 1]?.text ?? conversation.lastMessage,
-            }
-          : conversation
-      )
-    );
+      const mapped = mapMessages(result?.data ?? []);
+
+      setConversations(prev =>
+        prev.map(conversation =>
+          conversation.id === sessionId
+            ? {
+                ...conversation,
+                messages: mapped,
+                lastMessage: mapped.length > 0 ? (mapped[mapped.length - 1]?.text ?? conversation.lastMessage) : conversation.lastMessage,
+              }
+            : conversation
+        )
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load messages');
+    }
   };
 
   useEffect(() => {
-    loadSessions().catch(err => setError(err instanceof Error ? err.message : 'Failed to load chats'));
+    loadSessions();
   }, []);
 
+  const pendingSessionIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!activeChatId || isTemporaryConversationId(activeChatId)) return;
-    loadMessages(activeChatId).catch(err => setError(err instanceof Error ? err.message : 'Failed to load messages'));
+    if (!activeChatId) return;
+    setError('');
+    if (activeChatId.startsWith('new-')) return;
+    // Skip if we just sent a message and are waiting for the server response for this session
+    if (pendingSessionIdRef.current === activeChatId) return;
+    loadMessages(activeChatId);
   }, [activeChatId]);
 
   const createNewChat = () => {
     setActiveChatId(null);
     setInputText('');
+    setSelectedImage(null);
+    setError('');
+    try { sessionStorage.removeItem('calai_active_chat'); } catch { /* ignore */ }
+  };
+
+  const handleSelectChat = (chatId: string) => {
+    setActiveChatId(chatId);
+    setError('');
+  };
+
+  const toggleThinking = (msgId: string) => {
+    setExpandedThinking(prev => {
+      const next = new Set(prev);
+      if (next.has(msgId)) {
+        next.delete(msgId);
+      } else {
+        next.add(msgId);
+      }
+      return next;
+    });
   };
 
   const deleteChat = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      const response = await fetch(`${API_BASE_URL}/sessions/${id}`, {
+      const response = await fetch(buildApiUrl(`/chat/sessions/${id}`), {
         method: 'DELETE',
         headers: getAuthHeaders(),
       });
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.message || 'Failed to delete chat');
+        throw new Error(result?.message || 'Failed to delete chat');
       }
       const nextSessions = conversations.filter(c => c.id !== id);
       setConversations(nextSessions);
@@ -168,113 +697,189 @@ export function Chatbox() {
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!inputText.trim()) return;
+  const handleImageChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
 
-    const currentMessage = inputText.trim();
-    const optimisticMessage: Message = {
-      id: `temp-user-${Date.now()}`,
-      text: currentMessage,
-      sender: 'user',
-      timestamp: formatTime(new Date().toISOString()),
-    };
-    const optimisticChatId =
-      activeChatId && !isTemporaryConversationId(activeChatId)
-        ? activeChatId
-        : `${TEMP_CONVERSATION_PREFIX}${Date.now()}`;
+    if (!file.type.startsWith('image/')) {
+      setError('Please choose an image file.');
+      return;
+    }
 
-    setInputText('');
-    setTypingChatId(optimisticChatId);
-    setError('');
-    setActiveChatId(optimisticChatId);
-    setConversations(prev => {
-      const existingConversation = prev.find(conversation => conversation.id === optimisticChatId);
-
-      if (existingConversation) {
-        const updatedConversation: Conversation = {
-          ...existingConversation,
-          title: existingConversation.title === 'New Conversation'
-            ? currentMessage.slice(0, 30)
-            : existingConversation.title,
-          lastMessage: currentMessage,
-          timestamp: 'Just now',
-          messages: [...existingConversation.messages, optimisticMessage],
-        };
-
-        return [
-          updatedConversation,
-          ...prev.filter(conversation => conversation.id !== optimisticChatId),
-        ];
-      }
-
-      const newConversation: Conversation = {
-        id: optimisticChatId,
-        title: currentMessage.slice(0, 30),
-        lastMessage: currentMessage,
-        timestamp: 'Just now',
-        messages: [optimisticMessage],
-      };
-
-      return [newConversation, ...prev];
-    });
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(`Image is too large. Maximum size is ${formatFileSize(MAX_UPLOAD_BYTES)}.`);
+      return;
+    }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/messages`, {
+      const dataUrl = await fileToDataUrl(file);
+      setSelectedImage({
+        dataUrl,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
+      setError('');
+    } catch {
+      setError('Could not read the selected image.');
+    }
+  };
+
+  const handleSendMessage = async (override?: { text?: string; image?: SelectedImage | null }) => {
+    const trimmed = (override?.text ?? inputText).trim();
+    const imageToSend = override?.image !== undefined ? override.image : selectedImage;
+    const latestContextImage = !imageToSend && trimmed && activeChat && wantsImageContext(trimmed)
+      ? [...activeChat.messages].reverse().find(message => message.imageUrl)
+      : null;
+    if (!trimmed && !imageToSend) return;
+
+    const displayText = trimmed || (imageToSend ? `Uploaded ${imageToSend.name}` : '');
+
+    const userMessage: Message = {
+      id: `temp-${Date.now()}`,
+      text: displayText,
+      sender: 'user',
+      timestamp: formatTime(new Date().toISOString()),
+      imageUrl: imageToSend?.dataUrl ?? null,
+      imageName: imageToSend?.name ?? null,
+    };
+
+    setInputText('');
+    setSelectedImage(null);
+    setError('');
+
+    // Create or update conversation optimistically
+    const isNewChat = !activeChatId;
+    const tempId = isNewChat ? `new-${Date.now()}` : activeChatId!;
+
+    // Abort any in-flight request for a DIFFERENT conversation
+    // so switching chats cancels old responses cleanly
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
+    // Mark this conversation as typing
+    setIsTypingMap(prev => ({ ...prev, [tempId]: true }));
+
+    pendingRequestIdRef.current = tempId;
+    try { sessionStorage.setItem('calai_pending_request', tempId); } catch { /* ignore */ }
+
+    setConversations(prev => {
+      const existing = prev.find(c => c.id === tempId);
+      if (existing) {
+        return prev.map(c =>
+          c.id === tempId
+            ? { ...c, messages: [...c.messages, userMessage], lastMessage: displayText, timestamp: 'Just now' }
+            : c
+        );
+      }
+      const newConv: Conversation = {
+        id: tempId,
+        title: (trimmed || imageToSend?.name || 'Image upload').slice(0, 30),
+        lastMessage: displayText,
+        timestamp: 'Just now',
+        messages: [userMessage],
+      };
+      return [newConv, ...prev];
+    });
+
+    if (!activeChatId) {
+      setActiveChatId(tempId);
+    }
+
+    try {
+      const response = await fetch(buildApiUrl('/chat/message'), {
         method: 'POST',
         headers: getAuthHeaders(true),
+        signal: abortControllerRef.current.signal,
         body: JSON.stringify({
-          message: currentMessage,
-          sessionId:
-            activeChatId && !isTemporaryConversationId(activeChatId)
-              ? Number(activeChatId)
-              : undefined,
+          message: trimmed,
+          imageUrl: imageToSend?.dataUrl,
+          imageName: imageToSend?.name,
+          contextImageUrl: latestContextImage?.imageUrl,
+          contextImageName: latestContextImage?.imageName,
+          sessionId: !isNewChat ? Number(activeChatId) : undefined,
         }),
       });
-      const result = await response.json();
+
       if (!response.ok) {
-        throw new Error(result.message || 'Failed to send message');
+        const errResult = await response.json().catch(() => ({}));
+        throw new Error(errResult?.message || 'Failed to send message');
       }
 
-      const sessionId = String(result.data.sessionId);
-      const mappedMessages = mapMessages(result.data.messages ?? []);
+      const result = await response.json();
+      const data = result?.data;
+
+      if (!data) {
+        throw new Error('Invalid server response');
+      }
+
+      const sessionId = String(data.sessionId ?? tempId);
+      const mapped = mapMessages(data.messages ?? []);
+
+      // Replace temp user message with server version (has real id from DB)
+      // This avoids duplicate display if server echoed the user's message back
+      const serverUserMsg = [...mapped].reverse().find(m => m.sender === 'user');
+      if (serverUserMsg) {
+        // Use server's user message id to prevent duplicate rendering
+        userMessage.id = serverUserMsg.id;
+      }
+      const hasUserMsg = mapped.some(m => m.id === userMessage.id);
+      const finalMessages = hasUserMsg
+        ? mapped.map(m => m.id === userMessage.id ? userMessage : m)
+        : [userMessage, ...mapped];
 
       setConversations(prev => {
-        const fallbackConversation = prev.find(conversation => conversation.id === optimisticChatId);
-        const nextConversation: Conversation = {
-          id: sessionId,
-          title: mappedMessages[0]?.text?.slice(0, 30) || fallbackConversation?.title || 'New Conversation',
-          lastMessage: mappedMessages[mappedMessages.length - 1]?.text || fallbackConversation?.lastMessage || currentMessage,
-          timestamp: 'Just now',
-          messages: mappedMessages,
-        };
-
+        const withoutOld = prev.filter(c => c.id !== tempId && c.id !== sessionId);
         return [
-          nextConversation,
-          ...prev.filter(conversation => conversation.id !== optimisticChatId && conversation.id !== sessionId),
+          {
+            id: sessionId,
+            title: mapped[0]?.text?.slice(0, 30) || (trimmed || imageToSend?.name || 'Image upload').slice(0, 30),
+            lastMessage: mapped.length > 0 ? (mapped[mapped.length - 1]?.text ?? displayText) : displayText,
+            timestamp: 'Just now',
+            messages: finalMessages,
+          },
+          ...withoutOld,
         ];
       });
-      setActiveChatId(sessionId);
-      setTypingChatId(null);
-    } catch (error) {
-      setConversations(prev =>
-        prev.map(conversation =>
-          conversation.id === optimisticChatId
-            ? {
-                ...conversation,
-                messages: conversation.messages.filter(message => message.id !== optimisticMessage.id),
-                lastMessage:
-                  conversation.lastMessage === currentMessage
-                    ? conversation.messages[conversation.messages.length - 2]?.text ?? 'No messages yet'
-                    : conversation.lastMessage,
-              }
-            : conversation
-        ).filter(conversation => conversation.messages.length > 0)
-      );
-      if (optimisticChatId === activeChatId || isTemporaryConversationId(optimisticChatId)) {
-        setActiveChatId(prev => (prev === optimisticChatId ? null : prev));
+
+      // Only update activeChatId if the current active chat matches the tempId we sent from
+      if (isNewChat || activeChatId === tempId || activeChatId === sessionId) {
+        setActiveChatId(sessionId);
       }
-      setTypingChatId(null);
-      setError(error instanceof Error ? error.message : 'Failed to send message');
+      pendingSessionIdRef.current = null;
+      try { sessionStorage.removeItem('calai_pending_request'); } catch { /* ignore */ }
+    } catch (err) {
+      // Don't treat AbortError as a real error
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+      pendingSessionIdRef.current = null;
+      setConversations(prev =>
+        prev.map(c =>
+          c.id === tempId
+            ? { ...c, messages: c.messages.filter(m => m.id !== userMessage.id) }
+            : c
+        ).filter(c => c.messages.length > 0 || c.id !== tempId)
+      );
+      if (!isNewChat && activeChatId) {
+        setActiveChatId(activeChatId);
+      }
+      setInputText(trimmed);
+      setSelectedImage(imageToSend);
+      setError(err instanceof Error ? err.message : 'Failed to send message');
+    } finally {
+      pendingRequestIdRef.current = null;
+      pendingSessionIdRef.current = null;
+      // Only clear typing for the conversation this request was for
+      setIsTypingMap(prev => {
+        const next = { ...prev };
+        delete next[tempId];
+        return next;
+      });
+      try { sessionStorage.removeItem('calai_pending_request'); } catch { /* ignore */ }
     }
   };
 
@@ -283,6 +888,172 @@ export function Chatbox() {
     "Plan my lunch",
     "Recalculate macros"
   ];
+
+  const aiFallbackHints = [
+    'model vision chưa xác định đủ chắc',
+    'Mình chưa kịp trả lời',
+    'Service Cal-AI hiện không khả dụng',
+    'Mình không kết nối được Cal-AI',
+    'Cal-AI trả về lỗi',
+    'Mình chưa tìm thấy dữ liệu phù hợp',
+    'Mình chưa tạo được câu trả lời',
+  ];
+  const isAiFallback = (text?: string) => {
+    if (!text) return false;
+    return aiFallbackHints.some(hint => text.includes(hint));
+  };
+
+  const truncateMessagesAfter = async (sessionId: number, messageId: number, inclusive: boolean) => {
+    try {
+      const url = buildApiUrl(`/chat/sessions/${sessionId}/messages/after/${messageId}`) +
+        (inclusive ? '?inclusive=true' : '');
+      await fetch(url, { method: 'DELETE', headers: getAuthHeaders() });
+    } catch (err) {
+      console.warn('truncate failed:', err);
+    }
+  };
+
+  const retryAiMessage = async (failedAiId: string) => {
+    if (isTyping) return;
+    const messages = activeChat?.messages ?? [];
+    const failedIndex = messages.findIndex(m => m.id === failedAiId);
+    const previousUser = failedIndex > 0
+      ? [...messages].slice(0, failedIndex).reverse().find(m => m.sender === 'user')
+      : null;
+    if (!previousUser) return;
+
+    const sessionIdNum = Number(activeChatId);
+    const aiMsgIdNum = Number(failedAiId);
+    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && Number.isFinite(aiMsgIdNum) && aiMsgIdNum > 0) {
+      await truncateMessagesAfter(sessionIdNum, aiMsgIdNum, true);
+      setConversations(prev =>
+        prev.map(c =>
+          c.id === String(sessionIdNum)
+            ? { ...c, messages: c.messages.filter(m => Number(m.id) < aiMsgIdNum || !Number.isFinite(Number(m.id))) }
+            : c
+        )
+      );
+    }
+
+    const overrideImage: SelectedImage | null = previousUser.imageUrl
+      ? {
+          dataUrl: previousUser.imageUrl,
+          name: previousUser.imageName ?? 'Uploaded image',
+          size: 0,
+          type: previousUser.imageUrl.startsWith('data:image/')
+            ? previousUser.imageUrl.slice(5, previousUser.imageUrl.indexOf(';'))
+            : 'image/jpeg',
+        }
+      : null;
+    const overrideText = previousUser.text.startsWith('Uploaded ') && previousUser.imageUrl
+      ? ''
+      : previousUser.text;
+    handleSendMessage({ text: overrideText, image: overrideImage });
+  };
+
+  const openSaveModal = (msgText: string) => {
+    const parsed = parsePlanFromMarkdown(msgText);
+    if (!parsed) return;
+    const defaultName = `Meal plan · ${new Date().toLocaleDateString()}`;
+    setPendingSave({ message: msgText, parsed, defaultName });
+    setSaveForm({
+      name: defaultName,
+      startDate: todayISO(),
+      endDate: addDaysISO(todayISO(), 6),
+      color: '#FB923C',
+    });
+    setSaveError('');
+  };
+
+  const closeSaveModal = () => {
+    setPendingSave(null);
+    setSaveError('');
+    setSavingPlan(false);
+  };
+
+  const handleConfirmSavePlan = async () => {
+    if (!pendingSave || !onSavePlanToSchedule) return;
+    if (!saveForm.name.trim()) { setSaveError('Please enter a name.'); return; }
+    if (saveForm.startDate > saveForm.endDate) { setSaveError('End date must be on or after start date.'); return; }
+    const startMs = new Date(`${saveForm.startDate}T00:00:00`).getTime();
+    const endMs = new Date(`${saveForm.endDate}T00:00:00`).getTime();
+    const days = Math.round((endMs - startMs) / 86400000) + 1;
+    if (days > 60) { setSaveError('Schedule cannot exceed 60 days. Pick a shorter range.'); return; }
+    setSavingPlan(true);
+    setSaveError('');
+    try {
+      const totalKcal = pendingSave.parsed.items.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+      const description = `Saved from CalAI chat — ${pendingSave.parsed.items.length} meal${pendingSave.parsed.items.length === 1 ? '' : 's'}, ~${Math.round(totalKcal)} kcal total.`;
+      const result = await onSavePlanToSchedule({
+        name: saveForm.name.trim(),
+        description,
+        startDate: saveForm.startDate,
+        endDate: saveForm.endDate,
+        color: saveForm.color,
+        targetCalories: totalKcal > 0 ? Math.round(totalKcal) : undefined,
+        source: 'chat',
+        planPayload: { table: pendingSave.parsed.rawTable, items: pendingSave.parsed.items },
+        items: pendingSave.parsed.items,
+      });
+      setSaveSuccess(`Saved "${result.name}" to My schedule.`);
+      setPendingSave(null);
+      setTimeout(() => setSaveSuccess(null), 3500);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save schedule');
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+
+  const retryUserMessage = async (msg: Message) => {
+    if (isTyping) return;
+
+    const sessionIdNum = Number(activeChatId);
+    const userMsgIdNum = Number(msg.id);
+    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && Number.isFinite(userMsgIdNum) && userMsgIdNum > 0) {
+      await truncateMessagesAfter(sessionIdNum, userMsgIdNum, true);
+      setConversations(prev =>
+        prev.map(c =>
+          c.id === String(sessionIdNum)
+            ? { ...c, messages: c.messages.filter(m => Number(m.id) < userMsgIdNum || !Number.isFinite(Number(m.id))) }
+            : c
+        )
+      );
+    }
+
+    const overrideImage: SelectedImage | null = msg.imageUrl
+      ? {
+          dataUrl: msg.imageUrl,
+          name: msg.imageName ?? 'Uploaded image',
+          size: 0,
+          type: msg.imageUrl.startsWith('data:image/')
+            ? msg.imageUrl.slice(5, msg.imageUrl.indexOf(';'))
+            : 'image/jpeg',
+        }
+      : null;
+    const overrideText = msg.text.startsWith('Uploaded ') && msg.imageUrl ? '' : msg.text;
+    handleSendMessage({ text: overrideText, image: overrideImage });
+  };
+
+  const retryLastUserMessage = () => {
+    if (isTyping) return;
+    const messages = activeChat?.messages ?? [];
+    const lastUser = [...messages].reverse().find(m => m.sender === 'user');
+    if (lastUser) {
+      const overrideImage: SelectedImage | null = lastUser.imageUrl
+        ? {
+            dataUrl: lastUser.imageUrl,
+            name: lastUser.imageName ?? 'Uploaded image',
+            size: 0,
+            type: 'image/jpeg',
+          }
+        : null;
+      const overrideText = lastUser.text.startsWith('Uploaded ') && lastUser.imageUrl ? '' : lastUser.text;
+      handleSendMessage({ text: overrideText, image: overrideImage });
+      return;
+    }
+    if (inputText.trim() || selectedImage) handleSendMessage();
+  };
 
   return (
     <div className="flex h-screen bg-bg-dark ml-64 overflow-hidden">
@@ -301,37 +1072,41 @@ export function Chatbox() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 space-y-2">
-          {conversations.map((chat) => (
-            <motion.div
-              key={chat.id}
-              onClick={() => setActiveChatId(chat.id)}
-              className={`p-4 rounded-2xl cursor-pointer transition-all relative group ${
-                activeChatId === chat.id 
-                  ? 'bg-surface-lighter border border-white/10' 
-                  : 'hover:bg-white/5 border border-transparent'
-              }`}
-            >
-              <div className="flex justify-between items-start mb-1">
-                {activeChatId === chat.id && (
-                  <span className="text-[10px] font-black text-brand-orange uppercase tracking-widest">Current</span>
-                )}
-                <span className="text-[10px] text-text-muted font-medium ml-auto">{chat.timestamp}</span>
-              </div>
-              <h3 className={`font-bold text-sm mb-1 truncate pr-6 ${activeChatId === chat.id ? 'text-white' : 'text-text-muted'}`}>
-                {chat.title}
-              </h3>
-              <p className="text-xs text-text-muted truncate opacity-60">
-                {chat.lastMessage}
-              </p>
-              
-              <button
-                onClick={(e) => deleteChat(chat.id, e)}
-                className="absolute top-4 right-4 text-text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+          {conversations.map((chat) => {
+            const isCurrent = activeChatId === chat.id;
+
+            return (
+              <motion.div
+                key={chat.id}
+                onClick={() => handleSelectChat(chat.id)}
+                className={`p-4 rounded-2xl cursor-pointer transition-all relative group ${
+                  isCurrent
+                    ? 'bg-surface-lighter border border-white/10'
+                    : 'hover:bg-white/5 border border-transparent'
+                }`}
               >
-                <Trash2 size={14} />
-              </button>
-            </motion.div>
-          ))}
+                <div className="flex justify-between items-start mb-1">
+                  {isCurrent && (
+                    <span className="text-[10px] font-black text-brand-orange uppercase tracking-widest">Current</span>
+                  )}
+                  <span className="text-[10px] text-text-muted font-medium ml-auto">{chat.timestamp}</span>
+                </div>
+                <h3 className={`font-bold text-sm mb-1 truncate pr-6 ${isCurrent ? 'text-white' : 'text-text-muted'}`}>
+                  {chat.title || 'New Conversation'}
+                </h3>
+                <p className="text-xs text-text-muted truncate opacity-60">
+                  {chat.lastMessage || 'No messages yet'}
+                </p>
+
+                <button
+                  onClick={(e) => deleteChat(chat.id, e)}
+                  className="absolute top-4 right-4 text-text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </motion.div>
+            );
+          })}
           {conversations.length === 0 && (
             <div className="text-center py-10 text-text-muted">
               <MessageSquare size={32} className="mx-auto mb-4 opacity-20" />
@@ -345,7 +1120,7 @@ export function Chatbox() {
       <div className="flex-1 flex flex-col relative">
         {/* Header Tabs */}
         <div className="p-6 border-b border-white/5 flex items-center gap-8">
-          <button 
+          <button
             onClick={() => setActiveTab('nutrition')}
             className={`text-sm font-black uppercase tracking-widest transition-colors ${
               activeTab === 'nutrition' ? 'text-brand-orange' : 'text-text-muted hover:text-white'
@@ -353,7 +1128,7 @@ export function Chatbox() {
           >
             Nutrition AI
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('assistant')}
             className={`text-sm font-black uppercase tracking-widest transition-colors ${
               activeTab === 'assistant' ? 'text-brand-orange' : 'text-text-muted hover:text-white'
@@ -364,13 +1139,35 @@ export function Chatbox() {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-8 space-y-8">
-          {error && (
-            <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">
-              {error}
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 overflow-y-auto p-8 space-y-8"
+        >
+          {saveSuccess && (
+            <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200 mb-4">
+              {saveSuccess}
             </div>
           )}
-          {!activeChatId ? (
+          {error && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm text-red-200">
+              <span>{error}</span>
+              {(activeChat?.messages.some(m => m.sender === 'user') || inputText.trim() || selectedImage) && (
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => { setError(''); retryLastUserMessage(); }}
+                  disabled={isTyping}
+                  className={`inline-flex items-center gap-2 rounded-full border border-red-300/40 px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest transition-colors ${
+                    isTyping ? 'text-red-200/40 cursor-not-allowed' : 'text-red-100 hover:bg-red-300/10'
+                  }`}
+                >
+                  <RotateCcw size={12} />
+                  Retry
+                </motion.button>
+              )}
+            </div>
+          )}
+          {!activeChatId && !isTyping ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
               <div className="w-20 h-20 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange mb-6">
                 <Bot size={40} />
@@ -388,40 +1185,212 @@ export function Chatbox() {
             </div>
           ) : (
             <>
-              {activeChat?.messages.map((msg) => (
-                <div key={msg.id} className={`flex gap-4 ${msg.sender === 'user' ? 'flex-row-reverse' : ''}`}>
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                    msg.sender === 'ai' ? 'bg-brand-orange/20 text-brand-orange' : 'bg-surface-lighter text-white'
-                  }`}>
-                    {msg.sender === 'ai' ? <Bot size={20} /> : <User size={20} />}
-                  </div>
-                  <div className={`max-w-[70%] space-y-2 ${msg.sender === 'user' ? 'text-right' : ''}`}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">
-                        {msg.sender === 'ai' ? 'CalAI Nutrition Assistant' : 'You'}
-                      </span>
-                      <span className="text-[10px] text-text-muted opacity-50">{msg.timestamp}</span>
-                    </div>
-                    <div className={`p-6 rounded-[2rem] text-sm leading-relaxed ${
-                      msg.sender === 'ai' 
-                        ? 'bg-surface-dark border border-white/5 text-white rounded-tl-none' 
-                        : 'bg-brand-orange text-bg-dark font-medium rounded-tr-none'
+              {displayMessages.filter(Boolean).map((msg) => {
+                const isAi = msg.sender === 'ai';
+                const isExpanded = expandedThinking.has(msg.id);
+
+                return (
+                  <div key={msg.id} className={`flex gap-4 ${isAi ? '' : 'flex-row-reverse'}`}>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                      isAi ? 'bg-brand-orange/20 text-brand-orange' : 'bg-surface-lighter text-white'
                     }`}>
-                      {msg.text}
+                      {isAi ? <Bot size={20} /> : <User size={20} />}
+                    </div>
+
+                    <div className={`${isAi ? 'max-w-[82%]' : 'max-w-[70%] text-right'} min-w-0 space-y-3`}>
+                      <div className={`flex items-center gap-2 ${isAi ? '' : 'justify-end'}`}>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">
+                          {isAi ? 'CalAI Nutrition Assistant' : 'You'}
+                        </span>
+                        <span className="text-[10px] text-text-muted opacity-50">{msg.timestamp}</span>
+                      </div>
+
+                      {isAi && msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+                        <div>
+                          <button
+                            onClick={() => toggleThinking(msg.id)}
+                            className="inline-flex items-center gap-2 rounded-full border border-brand-orange/20 bg-brand-orange/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-brand-orange transition-colors hover:border-brand-orange/40"
+                          >
+                            <Brain size={13} />
+                            <span>Reasoning trace</span>
+                            <span className="rounded-full bg-black/20 px-2 py-0.5 text-[9px] text-brand-orange/80">
+                              {msg.thinkingSteps.length} steps
+                            </span>
+                            {isExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          </button>
+
+                          <AnimatePresence>
+                            {isExpanded && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.25, ease: 'easeInOut' }}
+                                className="overflow-hidden"
+                              >
+                                <div className="mt-3 rounded-2xl border border-white/10 bg-[#141414] p-4 text-left">
+                                  <div className="mb-4 flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-white/80">
+                                      <Brain size={14} className="text-brand-orange" />
+                                      Analysis Path
+                                    </div>
+                                    <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                                      Runtime trace
+                                    </span>
+                                  </div>
+
+                                  <div className="space-y-4">
+                                    {msg.thinkingSteps.map((step, idx) => {
+                                      const meta = getThinkingStatusMeta(step.status);
+                                      const StatusIcon = meta.icon;
+
+                                      return (
+                                        <div key={idx} className="relative flex gap-3">
+                                          {idx < (msg.thinkingSteps?.length ?? 0) - 1 && (
+                                            <span className="absolute left-[13px] top-8 h-[calc(100%+0.25rem)] w-px bg-white/10" />
+                                          )}
+                                          <span className={`z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${meta.dotClass}`}>
+                                            <StatusIcon size={14} />
+                                          </span>
+                                          <div className="min-w-0 flex-1 pb-1">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <span className="text-sm font-bold text-white">
+                                                {step.title || `Step ${step.step}`}
+                                              </span>
+                                              <span className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-text-muted">
+                                                {meta.label}
+                                              </span>
+                                            </div>
+                                            <p className="mt-1 text-xs leading-relaxed text-white/70">
+                                              {step.text}
+                                            </p>
+                                            {step.detail && (
+                                              <p className="mt-2 rounded-xl bg-white/[0.04] px-3 py-2 text-[11px] leading-relaxed text-text-muted">
+                                                {step.detail}
+                                              </p>
+                                            )}
+                                            {step.evidence && step.evidence.length > 0 && (
+                                              <div className="mt-2 flex flex-wrap gap-2">
+                                                {step.evidence.slice(0, 6).map((item, evidenceIndex) => (
+                                                  <span
+                                                    key={evidenceIndex}
+                                                    className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] text-white/65"
+                                                  >
+                                                    {item}
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      )}
+
+                      {isAi ? (
+                        <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#151515] text-left shadow-2xl shadow-black/20">
+                          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-3">
+                            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-white/80">
+                              <Sparkles size={14} className="text-brand-orange" />
+                              CalAI Pro Response
+                            </div>
+                            <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                              <Table2 size={12} />
+                              Structured
+                            </div>
+                          </div>
+                          <div className="space-y-4 p-5 text-sm">
+                            {msg.text ? renderRichText(msg.text) : null}
+                            <div className="flex flex-wrap gap-2">
+                              {isAiFallback(msg.text) && (
+                                <motion.button
+                                  whileHover={{ scale: 1.03 }}
+                                  whileTap={{ scale: 0.97 }}
+                                  onClick={() => retryAiMessage(msg.id)}
+                                  disabled={isTyping}
+                                  className={`inline-flex items-center gap-2 rounded-full border border-brand-orange/40 px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                                    isTyping
+                                      ? 'text-text-muted/40 cursor-not-allowed'
+                                      : 'text-brand-orange hover:bg-brand-orange/10'
+                                  }`}
+                                >
+                                  <RotateCcw size={14} />
+                                  Retry
+                                </motion.button>
+                              )}
+                              {onSavePlanToSchedule && parsePlanFromMarkdown(msg.text) && (
+                                <motion.button
+                                  whileHover={{ scale: 1.03 }}
+                                  whileTap={{ scale: 0.97 }}
+                                  onClick={() => openSaveModal(msg.text)}
+                                  className="inline-flex items-center gap-2 rounded-full border border-emerald-400/40 bg-emerald-400/10 px-4 py-2 text-xs font-bold uppercase tracking-widest text-emerald-300 hover:bg-emerald-400/20 transition-colors"
+                                >
+                                  <CalendarPlus size={14} />
+                                  Save to My schedule
+                                </motion.button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="rounded-3xl rounded-tr-none bg-brand-orange p-5 text-left text-sm font-medium leading-relaxed text-bg-dark">
+                            {msg.imageUrl && (
+                              <img
+                                src={msg.imageUrl}
+                                alt={msg.imageName || 'Uploaded image'}
+                                className={`max-h-64 w-full max-w-sm rounded-2xl object-cover ${msg.text ? 'mb-4' : ''}`}
+                              />
+                            )}
+                            {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+                          </div>
+                          <div className="flex justify-end">
+                            <motion.button
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              onClick={() => retryUserMessage(msg)}
+                              disabled={isTyping}
+                              title="Resend this message"
+                              className={`inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                isTyping
+                                  ? 'text-text-muted/40 cursor-not-allowed'
+                                  : 'text-text-muted hover:text-brand-orange hover:border-brand-orange/30'
+                              }`}
+                            >
+                              <RotateCcw size={11} />
+                              Resend
+                            </motion.button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {isTyping && (
                 <div className="flex gap-4">
                   <div className="w-10 h-10 rounded-xl bg-brand-orange/20 text-brand-orange flex items-center justify-center">
                     <Bot size={20} />
                   </div>
-                  <div className="bg-surface-dark border border-white/5 p-4 rounded-2xl rounded-tl-none">
-                    <div className="flex gap-1">
-                      <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1 }} className="w-1.5 h-1.5 bg-brand-orange rounded-full" />
-                      <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-1.5 h-1.5 bg-brand-orange rounded-full" />
-                      <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-1.5 h-1.5 bg-brand-orange rounded-full" />
+                  <div className="w-full max-w-[520px] rounded-2xl border border-white/10 bg-[#151515] p-4">
+                    <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-white/75">
+                      <Brain size={14} className="text-brand-orange" />
+                      Analyzing
+                    </div>
+                    <div className="space-y-2">
+                      <motion.div animate={{ opacity: [0.35, 0.8, 0.35] }} transition={{ repeat: Infinity, duration: 1.4 }} className="h-2 w-4/5 rounded-full bg-white/10" />
+                      <motion.div animate={{ opacity: [0.25, 0.7, 0.25] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.15 }} className="h-2 w-2/3 rounded-full bg-white/10" />
+                      <div className="flex gap-1 pt-1">
+                        <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1 }} className="h-1.5 w-1.5 rounded-full bg-brand-orange" />
+                        <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="h-1.5 w-1.5 rounded-full bg-brand-orange" />
+                        <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="h-1.5 w-1.5 rounded-full bg-brand-orange" />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -441,8 +1410,13 @@ export function Chatbox() {
                   key={i}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
-                  onClick={() => setInputText(action)}
-                  className="px-4 py-2 bg-surface-dark border border-white/5 rounded-full text-xs font-bold text-text-muted hover:text-white hover:border-brand-orange/30 transition-all whitespace-nowrap"
+                  onClick={() => !isTyping && setInputText(action)}
+                  disabled={isTyping}
+                  className={`px-4 py-2 bg-surface-dark border border-white/5 rounded-full text-xs font-bold transition-all whitespace-nowrap ${
+                    isTyping
+                      ? 'text-text-muted/30 cursor-not-allowed'
+                      : 'text-text-muted hover:text-white hover:border-brand-orange/30'
+                  }`}
                 >
                   {action}
                 </motion.button>
@@ -450,9 +1424,50 @@ export function Chatbox() {
             </div>
 
             {/* Input Box */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={handleImageChange}
+            />
+            {selectedImage && (
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-surface-dark p-3">
+                <img
+                  src={selectedImage.dataUrl}
+                  alt={selectedImage.name}
+                  className="h-16 w-16 rounded-xl object-cover"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 text-sm font-bold text-white">
+                    <ImageIcon size={16} className="shrink-0 text-brand-orange" />
+                    <span className="truncate">{selectedImage.name}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-text-muted">
+                    {formatFileSize(selectedImage.size)} ready to send
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedImage(null)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/5 text-text-muted transition-colors hover:text-white"
+                  aria-label="Remove selected image"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            )}
             <div className="relative">
               <div className="absolute left-4 top-1/2 -translate-y-1/2">
-                <button className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-text-muted hover:text-white transition-colors">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isTyping}
+                  className={`w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center transition-colors ${
+                    isTyping ? 'text-text-muted/30 cursor-not-allowed' : 'text-text-muted hover:text-white'
+                  }`}
+                  aria-label="Upload image"
+                >
                   <Plus size={20} />
                 </button>
               </div>
@@ -461,17 +1476,20 @@ export function Chatbox() {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder="Ask CalAI anything..."
-                className="w-full bg-surface-dark border border-white/10 rounded-2xl py-6 pl-16 pr-16 text-sm focus:outline-none focus:border-brand-orange/50 transition-colors"
+                placeholder={selectedImage ? 'Add a note for this image...' : 'Ask CalAI anything...'}
+                disabled={isTyping}
+                className={`w-full bg-surface-dark border border-white/10 rounded-2xl py-6 pl-16 pr-16 text-sm transition-colors ${
+                  isTyping ? 'opacity-50 cursor-not-allowed' : 'focus:outline-none focus:border-brand-orange/50'
+                }`}
               />
               <div className="absolute right-4 top-1/2 -translate-y-1/2">
                 <motion.button
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
-                  onClick={handleSendMessage}
-                  disabled={!inputText.trim()}
+                  onClick={() => handleSendMessage()}
+                  disabled={(!inputText.trim() && !selectedImage) || isTyping}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-                    inputText.trim() ? 'bg-brand-orange text-bg-dark' : 'bg-white/5 text-text-muted'
+                    (inputText.trim() || selectedImage) && !isTyping ? 'bg-brand-orange text-bg-dark' : 'bg-white/5 text-text-muted'
                   }`}
                 >
                   <Send size={20} />
@@ -481,6 +1499,114 @@ export function Chatbox() {
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {pendingSave && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeSaveModal}
+              className="absolute inset-0 bg-bg-dark/90 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-surface-dark p-7 rounded-3xl border border-white/10 max-w-lg w-full shadow-2xl"
+            >
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-400/10 text-emerald-300 flex items-center justify-center">
+                  <CalendarPlus size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold">Save to My schedule</h3>
+                  <p className="text-xs text-text-muted">{pendingSave.parsed.items.length} meal{pendingSave.parsed.items.length === 1 ? '' : 's'} detected · ~{pendingSave.parsed.totalKcal} kcal</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Schedule name</label>
+                  <input
+                    type="text"
+                    value={saveForm.name}
+                    onChange={(e) => setSaveForm(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Start date</label>
+                    <input
+                      type="date"
+                      value={saveForm.startDate}
+                      onChange={(e) => setSaveForm(prev => ({ ...prev, startDate: e.target.value }))}
+                      className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">End date</label>
+                    <input
+                      type="date"
+                      value={saveForm.endDate}
+                      onChange={(e) => setSaveForm(prev => ({ ...prev, endDate: e.target.value }))}
+                      className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                    />
+                  </div>
+                </div>
+                {(() => {
+                  const startMs = new Date(`${saveForm.startDate}T00:00:00`).getTime();
+                  const endMs = new Date(`${saveForm.endDate}T00:00:00`).getTime();
+                  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+                  const days = Math.round((endMs - startMs) / 86400000) + 1;
+                  if (days <= 0) return <p className="text-[11px] text-red-400">End date must be on or after start date.</p>;
+                  return (
+                    <p className={`text-[11px] ${days > 60 ? 'text-red-400' : 'text-text-muted'}`}>
+                      Duration: {days} day{days === 1 ? '' : 's'}{days > 60 ? ' — too long, max 60 days' : days === 7 ? ' (1 week)' : days === 14 ? ' (2 weeks)' : ''}
+                    </p>
+                  );
+                })()}
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Color</label>
+                  <div className="flex gap-2">
+                    {['#FB923C', '#34D399', '#A78BFA', '#F472B6', '#60A5FA', '#FBBF24'].map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setSaveForm(prev => ({ ...prev, color: c }))}
+                        className={`w-8 h-8 rounded-full border-2 transition-all ${saveForm.color === c ? 'border-white scale-110' : 'border-transparent opacity-70 hover:opacity-100'}`}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {saveError && (
+                <p className="text-red-400 text-xs mt-4">{saveError}</p>
+              )}
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={closeSaveModal}
+                  disabled={savingPlan}
+                  className="flex-1 py-3 rounded-2xl font-bold bg-white/5 hover:bg-white/10 text-sm transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmSavePlan}
+                  disabled={savingPlan}
+                  className="flex-1 py-3 rounded-2xl font-bold text-sm bg-emerald-400 hover:bg-emerald-300 text-bg-dark transition-colors disabled:opacity-50"
+                >
+                  {savingPlan ? 'Saving…' : 'Save schedule'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -167,7 +167,7 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
           <div className="relative z-10 max-w-xl">
             <h2 className="text-4xl font-black mb-4">Your Nutrition Analysis</h2>
             <p className="text-text-muted text-lg mb-8 leading-relaxed">
-              Track trends. Spot patterns. Crush your goals. Your average intake is optimized for your {profile.goal === 'lose' ? 'weight-loss' : profile.goal === 'gain' ? 'muscle-gain' : 'maintenance'} phase.
+              Track trends. Spot patterns. Crush your goals. Your average intake is optimized for your {profile.goal === 'lose' ? 'weight-loss' : profile.goal === 'gain' ? 'muscle-gain' : profile.goal === 'maintain' ? 'maintenance' : 'health'} phase.
             </p>
             <button className="bg-brand-orange text-bg-dark font-black py-4 px-8 rounded-2xl hover:bg-brand-orange-dark transition-colors">
               View Detailed Insights

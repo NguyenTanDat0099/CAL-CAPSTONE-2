@@ -205,6 +205,89 @@ const initializeUserModuleSchema = async () => {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS usergoals (
+      goal_id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      target_calories INT,
+      target_protein INT,
+      target_carbs INT,
+      target_fat INT,
+      target_weight DECIMAL(5,2),
+      goal_type VARCHAR(50) DEFAULT 'weight_loss',
+      activity_level VARCHAR(50) DEFAULT 'moderate',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      INDEX idx_usergoals_user (user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS foods (
+      food_id INT AUTO_INCREMENT PRIMARY KEY,
+      food_name VARCHAR(255) NOT NULL,
+      category_id INT NULL,
+      calories DECIMAL(10,2),
+      protein DECIMAL(10,2),
+      carbs DECIMAL(10,2),
+      fat DECIMAL(10,2),
+      fiber DECIMAL(10,2),
+      sugar DECIMAL(10,2),
+      sodium DECIMAL(10,2),
+      serving_size VARCHAR(100),
+      image_path VARCHAR(500),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_foods_category FOREIGN KEY (category_id) REFERENCES foodcategories(category_id) ON DELETE SET NULL,
+      INDEX idx_foods_category (category_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meals (
+      meal_id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      meal_type ENUM('breakfast', 'lunch', 'dinner', 'snack') NOT NULL,
+      meal_date DATE NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      INDEX idx_meals_user_date (user_id, meal_date)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mealitems (
+      mealitem_id INT AUTO_INCREMENT PRIMARY KEY,
+      meal_id INT NOT NULL,
+      food_id INT NOT NULL,
+      quantity DECIMAL(10,2) DEFAULT 1.0,
+      calories DECIMAL(10,2),
+      protein DECIMAL(10,2),
+      carbs DECIMAL(10,2),
+      fat DECIMAL(10,2),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (meal_id) REFERENCES meals(meal_id) ON DELETE CASCADE,
+      FOREIGN KEY (food_id) REFERENCES foods(food_id) ON DELETE CASCADE,
+      INDEX idx_mealitems_meal (meal_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dailynutritionlogs (
+      log_id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      date DATE NOT NULL,
+      total_calories DECIMAL(10,2) DEFAULT 0,
+      total_protein DECIMAL(10,2) DEFAULT 0,
+      total_carbs DECIMAL(10,2) DEFAULT 0,
+      total_fat DECIMAL(10,2) DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      UNIQUE KEY uk_user_date (user_id, date),
+      INDEX idx_nutritionlogs_user (user_id)
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS foodimages (
       image_id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
@@ -228,6 +311,31 @@ const initializeUserModuleSchema = async () => {
       FOREIGN KEY (food_id) REFERENCES foods(food_id) ON DELETE CASCADE,
       INDEX idx_foodresults_image (image_id),
       INDEX idx_foodresults_food (food_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chatsessions (
+      session_id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      INDEX idx_chatsessions_user (user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chatmessages (
+      message_id INT AUTO_INCREMENT PRIMARY KEY,
+      session_id INT NOT NULL,
+      sender ENUM('user', 'ai') NOT NULL,
+      message_text TEXT,
+      image_url LONGTEXT NULL,
+      image_name VARCHAR(255) NULL,
+      thinking_steps JSON DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (session_id) REFERENCES chatsessions(session_id) ON DELETE CASCADE,
+      INDEX idx_chatmessages_session (session_id)
     )
   `);
 
@@ -257,6 +365,72 @@ const initializeUserModuleSchema = async () => {
     await pool.query(`
       ALTER TABLE foodimages
       ADD COLUMN source ENUM('upload', 'camera') NOT NULL DEFAULT 'upload'
+    `);
+  }
+
+  await pool.query(`
+    ALTER TABLE foodimages
+    MODIFY COLUMN image_url LONGTEXT NOT NULL
+  `);
+
+  if (!(await hasColumn('meals', 'meal_date'))) {
+    await pool.query(`
+      ALTER TABLE meals
+      ADD COLUMN meal_date DATE NULL
+    `);
+    await pool.query(`
+      UPDATE meals
+      SET meal_date = DATE(COALESCE(created_at, NOW()))
+      WHERE meal_date IS NULL
+    `);
+  }
+
+  if (!(await hasColumn('mealitems', 'mealitem_id')) && (await hasColumn('mealitems', 'meal_item_id'))) {
+    await pool.query(`
+      ALTER TABLE mealitems
+      CHANGE COLUMN meal_item_id mealitem_id INT NOT NULL AUTO_INCREMENT
+    `);
+  }
+
+  if (!(await hasColumn('mealitems', 'protein'))) {
+    await pool.query(`
+      ALTER TABLE mealitems
+      ADD COLUMN protein DECIMAL(10,2) NULL
+    `);
+  }
+
+  if (!(await hasColumn('mealitems', 'carbs'))) {
+    await pool.query(`
+      ALTER TABLE mealitems
+      ADD COLUMN carbs DECIMAL(10,2) NULL
+    `);
+  }
+
+  if (!(await hasColumn('mealitems', 'fat'))) {
+    await pool.query(`
+      ALTER TABLE mealitems
+      ADD COLUMN fat DECIMAL(10,2) NULL
+    `);
+  }
+
+  if (!(await hasColumn('chatmessages', 'thinking_steps'))) {
+    await pool.query(`
+      ALTER TABLE chatmessages
+      ADD COLUMN thinking_steps JSON DEFAULT NULL
+    `);
+  }
+
+  if (!(await hasColumn('chatmessages', 'image_url'))) {
+    await pool.query(`
+      ALTER TABLE chatmessages
+      ADD COLUMN image_url LONGTEXT NULL
+    `);
+  }
+
+  if (!(await hasColumn('chatmessages', 'image_name'))) {
+    await pool.query(`
+      ALTER TABLE chatmessages
+      ADD COLUMN image_name VARCHAR(255) NULL
     `);
   }
 
@@ -304,75 +478,12 @@ const ensureUserModuleSchema = async () => {
   await userModuleSchemaInitPromise;
 };
 
-const FOOD_TEMPLATES: FoodTemplate[] = [
-  {
-    name: 'Chicken Hummus Bowl',
-    source: 'upload',
-    categoryName: 'Balanced Bowl',
-    estimatedPortion: '1 serving bowl',
-    confidence: 0.93,
-    totalKcal: 575,
-    protein: 42,
-    carbs: 68,
-    fats: 14,
-    ingredients: [
-      { name: 'Grilled Chicken Strips', amount: '150g', category: 'Lean Protein', calories: 220 },
-      { name: 'Whole Grain Naan', amount: '1 piece', category: 'Complex Carb', calories: 260 },
-      { name: 'Bell Peppers', amount: '80g', category: 'Vegetable', calories: 45 },
-      { name: 'Hummus', amount: '45g', category: 'Healthy Fat', calories: 50 },
-    ],
-    healthScore: 8.4,
-    sodium: 'LOW',
-  },
-  {
-    name: 'Fried Chicken Rice',
-    source: 'camera',
-    categoryName: 'Comfort Meal',
-    estimatedPortion: '1 large plate',
-    confidence: 0.62,
-    totalKcal: 860,
-    protein: 34,
-    carbs: 92,
-    fats: 38,
-    ingredients: [
-      { name: 'Fried Chicken', amount: '180g', category: 'Protein', calories: 420 },
-      { name: 'White Rice', amount: '200g', category: 'Carb', calories: 260 },
-      { name: 'Pickled Vegetables', amount: '40g', category: 'Vegetable', calories: 30 },
-      { name: 'Sauce', amount: '35g', category: 'Sauce', calories: 150 },
-    ],
-    healthScore: 5.8,
-    sodium: 'HIGH',
-  },
-];
-
 const SEED_FOODS = [
   { name: 'Chicken Salad', category: 'Healthy Meal', calories: 350, protein: 30, carbs: 18, fats: 14 },
   { name: 'Oatmeal with Banana', category: 'Breakfast', calories: 280, protein: 8, carbs: 52, fats: 4 },
   { name: 'Grilled Salmon', category: 'Dinner', calories: 500, protein: 38, carbs: 12, fats: 28 },
   { name: 'Greek Yogurt Bowl', category: 'Snack', calories: 220, protein: 16, carbs: 24, fats: 6 },
-  { name: 'Boiled Eggs', category: 'Breakfast', calories: 155, protein: 13, carbs: 1, fats: 11 },
-  { name: 'Banh Mi Egg', category: 'Breakfast', calories: 390, protein: 17, carbs: 52, fats: 13 },
-  { name: 'Avocado Toast', category: 'Breakfast', calories: 310, protein: 8, carbs: 32, fats: 18 },
-  { name: 'Com Tam', category: 'Lunch', calories: 650, protein: 32, carbs: 78, fats: 24 },
-  { name: 'Pho Bo', category: 'Lunch', calories: 430, protein: 25, carbs: 55, fats: 12 },
-  { name: 'Bun Thit Nuong', category: 'Lunch', calories: 520, protein: 28, carbs: 68, fats: 16 },
-  { name: 'Grilled Chicken Rice', category: 'Lunch', calories: 560, protein: 42, carbs: 62, fats: 14 },
-  { name: 'Mediterranean Quinoa', category: 'Lunch', calories: 320, protein: 14, carbs: 45, fats: 8 },
-  { name: 'Chicken Rice', category: 'Dinner', calories: 620, protein: 36, carbs: 72, fats: 18 },
-  { name: 'Beef Stir Fry', category: 'Dinner', calories: 540, protein: 35, carbs: 38, fats: 26 },
-  { name: 'Tofu Stir Fry', category: 'Dinner', calories: 310, protein: 18, carbs: 42, fats: 12 },
-  { name: 'Salmon with Quinoa', category: 'Dinner', calories: 556, protein: 44, carbs: 46, fats: 28 },
-  { name: 'Turkey Wrap', category: 'Snack', calories: 280, protein: 24, carbs: 32, fats: 8 },
-  { name: 'Apple', category: 'Snack', calories: 95, protein: 1, carbs: 25, fats: 0 },
-  { name: 'Banana', category: 'Snack', calories: 105, protein: 1, carbs: 27, fats: 0 },
-  { name: 'Protein Shake', category: 'Snack', calories: 180, protein: 25, carbs: 9, fats: 4 },
-  { name: 'Mixed Nuts', category: 'Snack', calories: 210, protein: 6, carbs: 8, fats: 18 },
 ];
-
-const getRandomTemplate = () => {
-  const index = Math.floor(Math.random() * FOOD_TEMPLATES.length);
-  return FOOD_TEMPLATES[index];
-};
 
 const getDemoAvatar = () =>
   'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop';
@@ -400,6 +511,154 @@ const normalizeMealType = (value?: string | null) => {
   return 'dinner';
 };
 
+const toRecord = (value: unknown): Record<string, unknown> => (
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+);
+
+const toNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const match = value.match(/-?\d+(?:\.\d+)?/);
+    if (match) return Number(match[0]);
+  }
+  return null;
+};
+
+const toStringArray = (value: unknown): string[] => (
+  Array.isArray(value)
+    ? value.map(item => String(item ?? '').trim()).filter(Boolean)
+    : []
+);
+
+const parseImageDataUrl = (imageUrl: string) => {
+  const match = imageUrl.match(/^data:(image\/(?:png|jpe?g|webp));base64,([a-z0-9+/=]+)$/i);
+  if (!match) {
+    throw new Error('INVALID_IMAGE');
+  }
+
+  const buffer = Buffer.from(match[2], 'base64');
+  const bytes = new ArrayBuffer(buffer.byteLength);
+  new Uint8Array(bytes).set(buffer);
+  return {
+    mime: match[1].toLowerCase(),
+    bytes,
+  };
+};
+
+const extractBestNutrition = (record: Record<string, unknown>) => {
+  const summary = toRecord(record.nutrition_summary);
+  const retrieved = toRecord(record.retrieved_nutrition);
+  const per100g = toRecord(summary.per_100g);
+  const estimate = toRecord(summary.estimated_visible_portion ?? record.estimated_nutrition);
+
+  const kcalKeys = ['calories', 'Caloric Value', 'Energ_Kcal', 'energy-kcal_100g'];
+  const proteinKeys = ['protein', 'Protein', 'Protein_(g)', 'proteins_100g'];
+  const carbKeys = ['carbohydrate', 'Carbohydrates', 'Carbohydrt_(g)', 'carbohydrates_100g', 'carbs'];
+  const fatKeys = ['fat', 'Fat', 'Lipid_Tot_(g)', 'fat_100g', 'total_fat'];
+
+  const pick = (sources: Record<string, unknown>[], keys: string[]) => {
+    for (const src of sources) {
+      for (const key of keys) {
+        const v = toNumber(src[key]);
+        if (v != null && v > 0) return v;
+      }
+    }
+    return null;
+  };
+
+  const sources = [estimate, per100g, retrieved];
+  return {
+    calories: pick(sources, kcalKeys),
+    protein: pick(sources, proteinKeys),
+    carbs: pick(sources, carbKeys),
+    fat: pick(sources, fatKeys),
+  };
+};
+
+const buildFoodTemplateFromCalAi = (data: unknown, source: AnalysisSource): FoodTemplate => {
+  const record = toRecord(data);
+  const vision = toRecord(record.vision_detail);
+  const summary = toRecord(record.nutrition_summary);
+  const estimate = toRecord(summary.estimated_visible_portion ?? record.estimated_nutrition);
+
+  const rawName = String(record.dish_name || '').trim();
+  const name = rawName && rawName.toLowerCase() !== 'unknown'
+    ? rawName
+    : 'Unidentified food';
+
+  const best = extractBestNutrition(record);
+  const totalKcal = best.calories ?? 0;
+  const protein = best.protein ?? 0;
+  const carbs = best.carbs ?? 0;
+  const fats = best.fat ?? 0;
+  const confidence = toNumber(record.confidence) ?? 0;
+  const categoryName = typeof vision.category === 'string' && vision.category.trim()
+    ? vision.category.trim()
+    : 'AI Analysis';
+  const estimatedPortion = typeof estimate.serving_size === 'string' && estimate.serving_size.trim()
+    ? estimate.serving_size.trim()
+    : (typeof vision.portion_description === 'string' && vision.portion_description.trim()
+        ? vision.portion_description.trim()
+        : '1 serving');
+  const ingredientNames = toStringArray(vision.ingredients).slice(0, 6);
+  const caloriesPerIngredient = ingredientNames.length > 0 && totalKcal > 0
+    ? Math.round(totalKcal / ingredientNames.length)
+    : Math.round(totalKcal);
+
+  const ingredients = (ingredientNames.length ? ingredientNames : [name]).map((ingredient, index) => ({
+    name: ingredient,
+    amount: index === 0 ? estimatedPortion : 'visible ingredient',
+    category: index === 0 ? categoryName : 'Ingredient',
+    calories: index === 0 && ingredientNames.length === 0 ? Math.round(totalKcal) : caloriesPerIngredient,
+  }));
+
+  const sodium = getSodiumLevel(totalKcal);
+  return {
+    name,
+    source,
+    categoryName,
+    estimatedPortion,
+    confidence,
+    totalKcal: Math.round(totalKcal),
+    protein: Math.round(protein),
+    carbs: Math.round(carbs),
+    fats: Math.round(fats),
+    ingredients,
+    healthScore: computeHealthScore(totalKcal, protein, sodium),
+    sodium,
+  };
+};
+
+const analyzeImageWithCalAi = async (imageUrl: string, source: AnalysisSource): Promise<FoodTemplate> => {
+  const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
+  if (!baseUrl) {
+    throw new Error('CAL_AI_UNAVAILABLE');
+  }
+
+  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 150000);
+  const image = parseImageDataUrl(imageUrl);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const form = new FormData();
+    form.append('file', new Blob([image.bytes], { type: image.mime }), `food-scan.${image.mime.split('/')[1] || 'jpg'}`);
+
+    const response = await fetch(`${baseUrl}/api/food/analyze`, {
+      method: 'POST',
+      body: form,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error('CAL_AI_UNAVAILABLE');
+    }
+
+    return buildFoodTemplateFromCalAi(await response.json(), source);
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
 const getUserByAccountId = async (accountId?: number | null): Promise<UserRow | null> => {
   if (!accountId) {
     return null;
@@ -416,24 +675,6 @@ const getUserByAccountId = async (accountId?: number | null): Promise<UserRow | 
   );
 
   return (rows as UserRow[])[0] ?? null;
-};
-
-const getFallbackUser = async (): Promise<UserRow> => {
-  const [users] = await pool.query(
-    `
-      SELECT user_id, account_id, full_name, gender, age, height, weight, created_at, has_completed_setup
-      FROM users
-      ORDER BY user_id
-      LIMIT 1
-    `
-  );
-  const existing = (users as UserRow[])[0];
-
-  if (!existing) {
-    throw new Error('USER_NOT_FOUND');
-  }
-
-  return existing;
 };
 
 const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
@@ -1130,11 +1371,7 @@ export const analyzeFoodImageService = async (
   );
   const imageId = (imageResult as { insertId: number }).insertId;
 
-  // Try Python AI first, fallback to templates
-  let template = source === 'camera'
-    ? FOOD_TEMPLATES.find(item => item.source === 'camera') || getRandomTemplate()
-    : FOOD_TEMPLATES.find(item => item.source === 'upload') || getRandomTemplate();
-
+  const template = await analyzeImageWithCalAi(imageUrl, source);
   const foodId = await createFoodRecord(template);
 
   const [resultInsert] = await pool.query(

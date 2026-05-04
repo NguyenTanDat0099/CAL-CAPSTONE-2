@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Camera, CheckCircle2, Image as ImageIcon, Loader2, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { DietItem } from '../types';
+import { buildApiUrl } from '../../config/api';
 
-const API_BASE_URL = 'http://localhost:3000/api/users';
 const AUTH_TOKEN_KEY = 'calai_token';
 
 type AnalysisSource = 'upload' | 'camera';
@@ -73,7 +73,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
   const [error, setError] = useState('');
 
   const refreshHistory = async () => {
-    const response = await fetch(`${API_BASE_URL}/food-analysis/history`, {
+    const response = await fetch(buildApiUrl('/users/food-analysis/history'), {
       headers: getAuthHeaders(),
     });
     const result = await response.json();
@@ -111,7 +111,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     setMessage('Analyzing food image...');
     setError('');
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/analyze`, {
+      const response = await fetch(buildApiUrl('/users/food-analysis/analyze'), {
         method: 'POST',
         headers: getAuthHeaders(true),
         body: JSON.stringify({ imageUrl, source }),
@@ -173,7 +173,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/confirm`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}/confirm`), {
         method: 'PATCH',
         headers: getAuthHeaders(true),
         body: JSON.stringify(form),
@@ -193,7 +193,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/save`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}/save`), {
         method: 'POST',
         headers: getAuthHeaders(),
       });
@@ -222,7 +222,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/reanalyze`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}/reanalyze`), {
         method: 'POST',
         headers: getAuthHeaders(),
       });
@@ -241,7 +241,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}`), {
         method: 'DELETE',
         headers: getAuthHeaders(),
       });

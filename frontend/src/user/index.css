@@ -23,10 +23,25 @@
   .glass-effect {
     @apply bg-white/5 backdrop-blur-xl border border-white/10;
   }
-  
+
   .scan-line {
     height: 2px;
     background: linear-gradient(90deg, transparent, #ff9060, transparent);
     box-shadow: 0 0 15px #ff9060;
+  }
+
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #3a3a3a transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #3a3a3a;
+    border-radius: 9999px;
   }
 }

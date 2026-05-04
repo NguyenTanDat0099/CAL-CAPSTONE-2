@@ -169,7 +169,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               <div className="relative z-10">
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">Current Objective</p>
                 <h3 className="text-4xl font-black mb-12">
-                  {profile.goal === 'lose' ? 'Weight Loss' : profile.goal === 'gain' ? 'Muscle Gain' : 'Maintenance'}
+                  {profile.goal === 'lose' ? 'Weight Loss' : profile.goal === 'gain' ? 'Muscle Gain' : profile.goal === 'maintain' ? 'Maintenance' : 'Health'}
                 </h3>
                 
                 <div className="space-y-4">
