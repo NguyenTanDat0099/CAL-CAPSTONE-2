@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255),
     email_verified TINYINT DEFAULT 0,
-    status ENUM('ACTIVE', 'INACTIVE', 'SUSPENDED') DEFAULT 'ACTIVE',
+    status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_email (email)
@@ -43,6 +43,23 @@ CREATE TABLE IF NOT EXISTS accountroles (
 );
 
 -- =====================================================
+-- Admin Audit Logs
+-- =====================================================
+CREATE TABLE IF NOT EXISTS adminauditlogs (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    admin_account_id INT NULL,
+    action VARCHAR(100) NOT NULL,
+    target_type VARCHAR(100) NOT NULL,
+    target_id INT NULL,
+    detail TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (admin_account_id) REFERENCES accounts(account_id) ON DELETE SET NULL,
+    INDEX idx_adminauditlogs_admin (admin_account_id),
+    INDEX idx_adminauditlogs_target (target_type, target_id),
+    INDEX idx_adminauditlogs_created (created_at)
+);
+
+-- =====================================================
 -- Users (profile information)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS users (
@@ -50,13 +67,28 @@ CREATE TABLE IF NOT EXISTS users (
     account_id INT NOT NULL UNIQUE,
     full_name VARCHAR(255),
     gender ENUM('male', 'female', 'other') DEFAULT 'other',
-    date_of_birth DATE,
+    age INT,
     height DECIMAL(5,2),
     weight DECIMAL(5,2),
+    has_completed_setup TINYINT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE,
     INDEX idx_account (account_id)
+);
+
+-- =====================================================
+-- Weight History
+-- =====================================================
+CREATE TABLE IF NOT EXISTS weight_history (
+    weight_history_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    weight DECIMAL(5,2) NOT NULL,
+    recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    source VARCHAR(50) DEFAULT 'manual',
+    note VARCHAR(255) NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    INDEX idx_weight_history_user_date (user_id, recorded_at)
 );
 
 -- =====================================================
@@ -71,6 +103,7 @@ CREATE TABLE IF NOT EXISTS usergoals (
     target_fat INT,
     target_weight DECIMAL(5,2),
     goal_type ENUM('weight_loss', 'muscle_gain', 'maintenance', 'general') DEFAULT 'general',
+    activity_level VARCHAR(50) DEFAULT 'moderate',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     INDEX idx_user (user_id)
@@ -203,16 +236,66 @@ CREATE TABLE IF NOT EXISTS chatmessages (
     session_id INT NOT NULL,
     sender ENUM('user', 'ai') NOT NULL,
     message_text TEXT,
+    image_url LONGTEXT NULL,
+    image_name VARCHAR(255) NULL,
+    thinking_steps JSON DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES chatsessions(session_id) ON DELETE CASCADE,
     INDEX idx_session (session_id)
 );
 
 -- =====================================================
+-- Meal Schedules (multi-day plans saved by user, optionally shared to Discover)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS mealschedules (
+    schedule_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    color VARCHAR(20) DEFAULT '#FB923C',
+    target_calories INT,
+    source ENUM('manual','chat','shared') NOT NULL DEFAULT 'manual',
+    is_published TINYINT NOT NULL DEFAULT 0,
+    published_at TIMESTAMP NULL,
+    achieved TINYINT NOT NULL DEFAULT 0,
+    plan_payload JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    INDEX idx_mealschedules_user (user_id),
+    INDEX idx_mealschedules_published (is_published)
+);
+
+-- =====================================================
+-- Meal Schedule Items (individual meals inside a schedule)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS mealscheduleitems (
+    item_id INT AUTO_INCREMENT PRIMARY KEY,
+    schedule_id INT NOT NULL,
+    day_offset INT DEFAULT 0,
+    meal_type ENUM('breakfast','lunch','dinner','snack') NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    serving VARCHAR(100),
+    calories DECIMAL(10,2),
+    protein DECIMAL(10,2),
+    carbs DECIMAL(10,2),
+    fat DECIMAL(10,2),
+    notes TEXT,
+    sort_order INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (schedule_id) REFERENCES mealschedules(schedule_id) ON DELETE CASCADE,
+    INDEX idx_mealscheduleitems_schedule (schedule_id)
+);
+
+-- =====================================================
 -- Procedure to update daily nutrition logs
 -- =====================================================
+DROP PROCEDURE IF EXISTS update_daily_nutrition;
+
 DELIMITER //
-CREATE PROCEDURE IF NOT EXISTS update_daily_nutrition(IN p_user_id INT, IN p_date DATE)
+CREATE PROCEDURE update_daily_nutrition(IN p_user_id INT, IN p_date DATE)
 BEGIN
     INSERT INTO dailynutritionlogs (user_id, date, total_calories, total_protein, total_carbs, total_fat)
     SELECT

@@ -2,66 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, ArrowRight, Flag, Zap, User, AlertTriangle, RotateCcw, Info, ArrowLeft, PlusCircle, Heart, Droplets, X } from 'lucide-react';
 import { DietItem, MealSchedule } from '../types';
-import { UserProfile, Goal, ActivityLevel, Gender } from '../App';
+import { UserProfile, Goal, ActivityLevel, Gender, WeightHistoryEntry } from '../App';
 import { MySchedule } from './MySchedule';
-
-interface DietPlan {
-  id: string;
-  name: string;
-  calories: number;
-  description: string;
-  image: string;
-  macros: {
-    protein: number;
-    fats: number;
-    carbs: number;
-  };
-  suitableFor: Goal[];
-  about: string;
-}
-
-const dietPlans: DietPlan[] = [
-  {
-    id: 'mediterranean',
-    name: 'Mediterranean Lifestyle',
-    calories: 2100,
-    description: 'Heart-healthy fats and fresh produce. High in Omega-3 and antioxidants.',
-    image: 'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?w=1200&h=800&fit=crop',
-    macros: { protein: 79, fats: 82, carbs: 263 },
-    suitableFor: ['lose', 'maintain'],
-    about: 'The Mediterranean diet focuses on plant-based foods, such as vegetables, fruits, whole grains, legumes and nuts. It replaces butter with healthy fats, such as olive oil and canola oil, and uses herbs and spices instead of salt to flavor foods. This approach emphasizes consuming fish and poultry at least twice a week, while limiting red meat to only a few times a month.'
-  },
-  {
-    id: 'keto',
-    name: 'Keto Plan',
-    calories: 1800,
-    description: 'High fat, low carb metabolic state. Perfect for rapid fat loss and energy.',
-    image: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=1200&h=800&fit=crop',
-    macros: { protein: 113, fats: 140, carbs: 23 },
-    suitableFor: ['lose'],
-    about: 'The Ketogenic diet is a very low-carb, high-fat diet that shares many similarities with the Atkins and low-carb diets. It involves drastically reducing carbohydrate intake and replacing it with fat. This reduction in carbs puts your body into a metabolic state called ketosis. When this happens, your body becomes incredibly efficient at burning fat for energy.'
-  },
-  {
-    id: 'vegan',
-    name: 'Vegan Balance',
-    calories: 1950,
-    description: 'Plant-based nutritional excellence. Balanced nutrients for ethical fitness.',
-    image: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=1200&h=800&fit=crop',
-    macros: { protein: 98, fats: 54, carbs: 268 },
-    suitableFor: ['lose', 'maintain'],
-    about: 'A vegan diet contains only plants (such as vegetables, grains, nuts and fruits) and foods made from plants. Vegans do not eat foods that come from animals, including dairy products and eggs. This plan ensures you get all necessary nutrients through a variety of plant-based sources, focusing on high-protein legumes and nutrient-dense greens.'
-  },
-  {
-    id: 'lean-gains',
-    name: 'Lean Gains (16/8)',
-    calories: 2400,
-    description: 'Time-restricted feeding window. Focus on metabolic flexibility and growth.',
-    image: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?w=1200&h=800&fit=crop',
-    macros: { protein: 180, fats: 80, carbs: 240 },
-    suitableFor: ['gain', 'maintain'],
-    about: 'Lean Gains is a popular form of intermittent fasting that involves an 8-hour eating window followed by a 16-hour fast. This approach is designed to maximize muscle growth while minimizing fat gain. It works by optimizing hormone levels and improving insulin sensitivity, making it an effective strategy for body recomposition.'
-  }
-];
 
 interface DietGoalsProps {
   myDiets: DietItem[];
@@ -104,7 +46,7 @@ export function DietGoals({
 
   const [activeTab, setActiveTab] = useState<'my' | 'schedule'>('my');
   const [showResetWarning, setShowResetWarning] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<DietPlan | DietItem | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<DietItem | null>(null);
   const [errors, setErrors] = useState<{ age?: string; height?: string; weight?: string }>({});
 
   const validate = () => {
@@ -119,7 +61,26 @@ export function DietGoals({
   const handleCompleteOnboarding = () => {
     if (validate()) {
       setIsOnboarded(true);
-      setProfile(prev => ({ ...prev, hasCompletedSetup: true }));
+      setProfile(prev => {
+        const currentWeight = Number(prev.weight || 0);
+        const hasWeightHistory = (prev.weightHistory || []).length > 0;
+        const initialWeightEntry: WeightHistoryEntry | null = currentWeight > 0 && !hasWeightHistory
+          ? {
+              id: Date.now(),
+              weight: currentWeight,
+              recordedAt: new Date().toISOString(),
+              source: 'onboarding',
+              note: 'Initial onboarding weight',
+            }
+          : null;
+
+        return {
+          ...prev,
+          hasCompletedSetup: true,
+          startingWeight: prev.startingWeight || currentWeight,
+          weightHistory: initialWeightEntry ? [initialWeightEntry] : prev.weightHistory,
+        };
+      });
     }
   };
 
@@ -137,24 +98,20 @@ export function DietGoals({
       weight: 0,
       targetWeight: 0,
       startingWeight: 0,
+      weightHistory: [],
       hasCompletedSetup: false,
     });
   };
 
   if (isOnboarded) {
     if (selectedPlan) {
-      const isMyDietItem = 'date' in selectedPlan;
-      const macros = isMyDietItem 
-        ? { protein: (selectedPlan as DietItem).protein, fats: (selectedPlan as DietItem).fats, carbs: (selectedPlan as DietItem).carbs }
-        : (selectedPlan as DietPlan).macros;
-      
-      const description = isMyDietItem 
-        ? (selectedPlan as DietItem).description || 'A personalized meal added to your diet log.'
-        : (selectedPlan as DietPlan).description;
-
-      const about = isMyDietItem
-        ? (selectedPlan as DietItem).about || 'This item was added to your diet log to help you track your nutritional intake. It contributes to your daily energy and macronutrient goals.'
-        : (selectedPlan as DietPlan).about;
+      const macros = {
+        protein: selectedPlan.protein,
+        fats: selectedPlan.fats,
+        carbs: selectedPlan.carbs,
+      };
+      const description = selectedPlan.description || 'A personalized meal added to your diet log.';
+      const about = selectedPlan.about || 'This item was added to your diet log to help you track your nutritional intake. It contributes to your daily energy and macronutrient goals.';
 
       return (
         <div className="flex-1 ml-64 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
@@ -172,7 +129,7 @@ export function DietGoals({
 
             <div className="absolute bottom-12 left-10 right-10">
               <span className="px-3 py-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black uppercase tracking-widest mb-4 inline-block">
-                {isMyDietItem ? 'Logged Item' : 'Healthy Choice'}
+                Logged Item
               </span>
               <h1 className="text-6xl font-black tracking-tight mb-4">{selectedPlan.name}</h1>
               <p className="text-white/80 text-lg max-w-2xl leading-relaxed">
@@ -188,7 +145,7 @@ export function DietGoals({
                 <div className="w-10 h-10 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
                   <Info size={20} />
                 </div>
-                <h2 className="text-xl font-bold">About this {isMyDietItem ? 'Meal' : 'Diet'}</h2>
+                <h2 className="text-xl font-bold">About this Meal</h2>
               </div>
               <p className="text-text-muted leading-relaxed text-lg">
                 {about}
@@ -230,43 +187,18 @@ export function DietGoals({
                   <p className="text-xl font-bold">Heart Health & Weight Maintenance</p>
                 </div>
               </div>
-              {isMyDietItem ? (
-                <motion.button 
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => {
-                    onRemoveFromMyDiet((selectedPlan as DietItem).id);
-                    setSelectedPlan(null);
-                  }}
-                  className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white font-black py-4 px-10 rounded-2xl flex items-center gap-3 transition-all border border-red-500/20"
-                >
-                  <X size={20} />
-                  Remove from My Diet
-                </motion.button>
-              ) : (
-                <motion.button 
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => {
-                    onAddToMyDiet({
-                      name: selectedPlan.name,
-                      calories: selectedPlan.calories,
-                      protein: macros.protein,
-                      carbs: macros.carbs,
-                      fats: macros.fats,
-                      image: selectedPlan.image,
-                      description: (selectedPlan as DietPlan).description,
-                      about: (selectedPlan as DietPlan).about
-                    });
-                    setSelectedPlan(null);
-                    setActiveTab('my');
-                  }}
-                  className="bg-brand-orange text-bg-dark font-black py-4 px-10 rounded-2xl flex items-center gap-3 shadow-xl shadow-brand-orange/20"
-                >
-                  <PlusCircle size={20} />
-                  Add to My Diet
-                </motion.button>
-              )}
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  onRemoveFromMyDiet(selectedPlan.id);
+                  setSelectedPlan(null);
+                }}
+                className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white font-black py-4 px-10 rounded-2xl flex items-center gap-3 transition-all border border-red-500/20"
+              >
+                <X size={20} />
+                Remove from My Diet
+              </motion.button>
             </div>
           </div>
         </div>
@@ -360,7 +292,7 @@ export function DietGoals({
               <div className="flex flex-col items-center justify-center py-20 text-text-muted bg-surface-dark/30 rounded-[3rem] border border-dashed border-white/10">
                 <PlusCircle size={48} className="mb-4 opacity-20" />
                 <p className="font-medium">No diets logged yet.</p>
-                <p className="text-sm opacity-60">Start scanning your meals or add from All Diets!</p>
+                <p className="text-sm opacity-60">Start scanning your meals or add food from Meal Plans.</p>
               </div>
             )}
           </div>
@@ -676,10 +608,10 @@ export function DietGoals({
                   onChange={(e) => {
                     const raw = e.target.value;
                     if (raw === '') {
-                      setProfile({ ...profile, weight: 0, startingWeight: 0 });
+                      setProfile({ ...profile, weight: 0, startingWeight: 0, weightHistory: [] });
                       return;
                     }
-                    const parsed = parseInt(raw);
+                    const parsed = parseFloat(raw);
                     if (!isNaN(parsed)) {
                       setProfile({ ...profile, weight: parsed, startingWeight: parsed });
                     }

@@ -32,8 +32,9 @@ interface UpdateUserGoalsPayload {
 }
 
 interface CreateMealPayload {
-  foodName: string;
-  calories: number;
+  foodId?: number;
+  foodName?: string;
+  calories?: number;
   mealType: string;
   quantity?: number;
   protein?: number;
@@ -49,6 +50,17 @@ interface UpdateMealPayload {
   protein?: number;
   carbs?: number;
   fats?: number;
+}
+
+interface SearchFoodsOptions {
+  limit?: number;
+  category?: string;
+}
+
+interface MealHistoryOptions {
+  limit?: number;
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 interface FoodIngredient {
@@ -105,6 +117,15 @@ interface GoalRow {
   target_weight: number | null;
   goal_type: string | null;
   activity_level: string | null;
+}
+
+interface WeightHistoryRow {
+  weight_history_id: number;
+  user_id: number;
+  weight: number;
+  recorded_at: string;
+  source: string | null;
+  note: string | null;
 }
 
 let userModuleSchemaInitPromise: Promise<void> | null = null;
@@ -218,6 +239,19 @@ const initializeUserModuleSchema = async () => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
       INDEX idx_usergoals_user (user_id)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS weight_history (
+      weight_history_id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      weight DECIMAL(5,2) NOT NULL,
+      recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      source VARCHAR(50) DEFAULT 'manual',
+      note VARCHAR(255) NULL,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      INDEX idx_weight_history_user_date (user_id, recorded_at)
     )
   `);
 
@@ -686,6 +720,101 @@ const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
   return user;
 };
 
+const mapWeightHistory = (row: WeightHistoryRow) => ({
+  id: row.weight_history_id,
+  weight: Number(row.weight),
+  recordedAt: new Date(row.recorded_at).toISOString(),
+  source: row.source ?? 'manual',
+  note: row.note,
+});
+
+const getWeightHistoryByUserId = async (userId: number, limit = 30) => {
+  const safeLimit = Math.min(365, Math.max(1, Number(limit) || 30));
+  const [rows] = await pool.query(
+    `
+      SELECT *
+      FROM (
+        SELECT weight_history_id, user_id, weight, recorded_at, source, note
+        FROM weight_history
+        WHERE user_id = ?
+        ORDER BY recorded_at DESC, weight_history_id DESC
+        LIMIT ?
+      ) latest_weights
+      ORDER BY recorded_at ASC, weight_history_id ASC
+    `,
+    [userId, safeLimit]
+  );
+
+  return (rows as WeightHistoryRow[]).map(mapWeightHistory);
+};
+
+const getFirstWeightHistory = async (userId: number) => {
+  const [rows] = await pool.query(
+    `
+      SELECT weight_history_id, user_id, weight, recorded_at, source, note
+      FROM weight_history
+      WHERE user_id = ?
+      ORDER BY recorded_at ASC, weight_history_id ASC
+      LIMIT 1
+    `,
+    [userId]
+  );
+
+  return (rows as WeightHistoryRow[])[0] ?? null;
+};
+
+const getLatestWeightHistory = async (userId: number) => {
+  const [rows] = await pool.query(
+    `
+      SELECT weight_history_id, user_id, weight, recorded_at, source, note
+      FROM weight_history
+      WHERE user_id = ?
+      ORDER BY recorded_at DESC, weight_history_id DESC
+      LIMIT 1
+    `,
+    [userId]
+  );
+
+  return (rows as WeightHistoryRow[])[0] ?? null;
+};
+
+const recordWeightHistory = async (
+  userId: number,
+  weight: number | null | undefined,
+  source: 'onboarding' | 'settings' | 'profile_sync' | 'manual',
+  note?: string | null
+) => {
+  const nextWeight = Number(weight);
+  if (!Number.isFinite(nextWeight) || nextWeight <= 0) return;
+
+  const latest = await getLatestWeightHistory(userId);
+  if (latest && Math.abs(Number(latest.weight) - nextWeight) < 0.01) {
+    return;
+  }
+
+  await pool.query(
+    `
+      INSERT INTO weight_history (user_id, weight, source, note)
+      VALUES (?, ?, ?, ?)
+    `,
+    [userId, nextWeight, source, note ?? null]
+  );
+};
+
+const ensureInitialWeightHistory = async (user: UserRow) => {
+  const weight = Number(user.weight);
+  if (!Number.isFinite(weight) || weight <= 0) return;
+
+  const [rows] = await pool.query(
+    'SELECT weight_history_id FROM weight_history WHERE user_id = ? LIMIT 1',
+    [user.user_id]
+  );
+
+  if ((rows as Array<{ weight_history_id: number }>).length === 0) {
+    await recordWeightHistory(user.user_id, weight, 'onboarding', 'Initial profile weight');
+  }
+};
+
 const ensureUserGoal = async (userId: number): Promise<GoalRow | null> => {
   const [goals] = await pool.query(
     `
@@ -961,6 +1090,10 @@ export const initializeUserServices = async () => {
 export const getUserProfileService = async (accountId?: number | null) => {
   try {
     const user = await resolveUser(accountId);
+    await ensureInitialWeightHistory(user);
+    const weightHistory = await getWeightHistoryByUserId(user.user_id, 365);
+    const firstWeight = await getFirstWeightHistory(user.user_id);
+
     return {
       id: user.user_id,
       name: user.full_name || null,
@@ -970,6 +1103,8 @@ export const getUserProfileService = async (accountId?: number | null) => {
       age: user.age ?? null,
       height: user.height || null,
       weight: user.weight || null,
+      startingWeight: firstWeight ? Number(firstWeight.weight) : user.weight ?? null,
+      weightHistory,
       goal: null,
       avatar: null,
       hasCompletedSetup: Boolean(user.has_completed_setup),
@@ -997,14 +1132,29 @@ export const getUserGoalsService = async (accountId?: number | null) => {
   }
 };
 
-export const getUserMealsService = async (accountId?: number | null) => {
+export const getUserMealsService = async (accountId?: number | null, options: MealHistoryOptions = {}) => {
   try {
     const user = await resolveUser(accountId);
+    const safeLimit = Math.min(1000, Math.max(1, Number(options.limit) || 10));
+    const conditions = ['m.user_id = ?'];
+    const params: (number | string)[] = [user.user_id];
+
+    if (options.dateFrom?.trim()) {
+      conditions.push('m.meal_date >= ?');
+      params.push(options.dateFrom.trim());
+    }
+
+    if (options.dateTo?.trim()) {
+      conditions.push('m.meal_date <= ?');
+      params.push(options.dateTo.trim());
+    }
+
     const [rows] = await pool.query(
       `
         SELECT
           m.meal_id,
           m.meal_type,
+          m.meal_date,
           m.created_at,
           f.food_name,
           mi.quantity,
@@ -1015,16 +1165,17 @@ export const getUserMealsService = async (accountId?: number | null) => {
         FROM meals m
         INNER JOIN mealitems mi ON mi.meal_id = m.meal_id
         INNER JOIN foods f ON f.food_id = mi.food_id
-        WHERE m.user_id = ?
+        WHERE ${conditions.join(' AND ')}
         ORDER BY m.created_at DESC
-        LIMIT 10
+        LIMIT ?
       `,
-      [user.user_id]
+      [...params, safeLimit]
     );
 
-  return (rows as Array<{
-    meal_id: number;
+    return (rows as Array<{
+      meal_id: number;
       meal_type: string;
+      meal_date: string;
       created_at: string;
       food_name: string;
       quantity: number;
@@ -1041,14 +1192,15 @@ export const getUserMealsService = async (accountId?: number | null) => {
       carbs: Math.round((row.carbs ?? 0) * row.quantity),
       fats: Math.round((row.fat ?? 0) * row.quantity),
       createdAt: row.created_at,
+      mealDate: row.meal_date,
     }));
   } catch {
     return [];
   }
 };
 
-export const getUserMealHistoryService = async (accountId?: number | null) => {
-  return getUserMealsService(accountId);
+export const getUserMealHistoryService = async (accountId?: number | null, options: MealHistoryOptions = {}) => {
+  return getUserMealsService(accountId, { ...options, limit: options.limit ?? 400 });
 };
 
 export const getUserDashboardService = async (accountId?: number | null) => {
@@ -1093,6 +1245,7 @@ export const updateUserProfileService = async (accountId: number | null | undefi
     throw new Error('USER_NOT_FOUND');
   }
 
+  const previousWeight = Number(user.weight ?? 0);
   const nextName = payload.name ?? user.full_name ?? '';
   const nextGender = payload.gender ?? user.gender ?? '';
   const nextHeight = payload.height ?? user.height ?? 0;
@@ -1107,6 +1260,19 @@ export const updateUserProfileService = async (accountId: number | null | undefi
     `,
     [nextName, nextGender, nextAge, nextHeight, nextWeight, user.user_id]
   );
+
+  const numericNextWeight = Number(nextWeight);
+  const hasWeightPayload = payload.weight !== undefined && Number.isFinite(numericNextWeight) && numericNextWeight > 0;
+  if (hasWeightPayload && Math.abs(previousWeight - numericNextWeight) >= 0.01) {
+    await recordWeightHistory(
+      user.user_id,
+      numericNextWeight,
+      user.has_completed_setup ? 'settings' : 'onboarding',
+      user.has_completed_setup ? 'Updated from Settings' : 'Initial onboarding weight'
+    );
+  } else {
+    await ensureInitialWeightHistory({ ...user, weight: numericNextWeight });
+  }
 
   return getUserProfileService(accountId);
 };
@@ -1157,10 +1323,24 @@ export const updateUserGoalsService = async (accountId: number | null | undefine
   return getUserGoalsService(accountId);
 };
 
-export const searchFoodsService = async (query: string) => {
+export const searchFoodsService = async (query: string, options: SearchFoodsOptions = {}) => {
   await ensureSeedFoods();
 
-  const searchTerm = `%${query || ''}%`;
+  const safeLimit = Math.min(100, Math.max(1, Number(options.limit) || 50));
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (query.trim()) {
+    conditions.push('f.food_name LIKE ?');
+    params.push(`%${query.trim()}%`);
+  }
+
+  if (options.category?.trim()) {
+    conditions.push('LOWER(fc.category_name) = LOWER(?)');
+    params.push(options.category.trim());
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const [rows] = await pool.query(
     `
       SELECT
@@ -1170,14 +1350,19 @@ export const searchFoodsService = async (query: string) => {
         f.protein,
         f.carbs,
         f.fat,
+        f.fiber,
+        f.sugar,
+        f.sodium,
+        f.serving_size,
+        f.image_path,
         fc.category_name
       FROM foods f
       LEFT JOIN foodcategories fc ON fc.category_id = f.category_id
-      WHERE f.food_name LIKE ?
+      ${whereClause}
       ORDER BY f.food_name ASC
-      LIMIT 20
+      LIMIT ?
     `,
-    [searchTerm]
+    [...params, safeLimit]
   );
 
   return (rows as Array<{
@@ -1187,14 +1372,24 @@ export const searchFoodsService = async (query: string) => {
     protein: number;
     carbs: number;
     fat: number;
+    fiber: number | null;
+    sugar: number | null;
+    sodium: number | null;
+    serving_size: string | null;
+    image_path: string | null;
     category_name: string | null;
   }>).map(row => ({
     id: row.food_id,
     name: row.food_name,
-    calories: Math.round(row.calories),
-    protein: Math.round(row.protein),
-    carbs: Math.round(row.carbs),
-    fats: Math.round(row.fat),
+    calories: Math.round(Number(row.calories ?? 0)),
+    protein: Math.round(Number(row.protein ?? 0)),
+    carbs: Math.round(Number(row.carbs ?? 0)),
+    fats: Math.round(Number(row.fat ?? 0)),
+    fiber: row.fiber === null ? null : Number(row.fiber),
+    sugar: row.sugar === null ? null : Number(row.sugar),
+    sodium: row.sodium === null ? null : Number(row.sodium),
+    servingSize: row.serving_size,
+    imagePath: row.image_path,
     category: row.category_name ?? 'Food',
   }));
 };
@@ -1202,26 +1397,41 @@ export const searchFoodsService = async (query: string) => {
 export const createMealService = async (accountId: number | null | undefined, payload: CreateMealPayload) => {
   const user = await resolveUser(accountId);
   const normalizedMealType = normalizeMealType(payload.mealType);
-  const categoryId = await ensureFoodCategory(payload.mealType || 'Meal');
+  let foodId = Number(payload.foodId) || 0;
+  let mealItemCalories = Number(payload.calories) || 0;
 
-  const [foodInsert] = await pool.query(
-    `
-      INSERT INTO foods (food_name, category_id, calories, protein, carbs, fat, fiber, sugar)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    [
-      payload.foodName,
-      categoryId,
-      payload.calories,
-      payload.protein ?? 0,
-      payload.carbs ?? 0,
-      payload.fats ?? 0,
-      0,
-      0,
-    ]
-  );
+  if (foodId > 0) {
+    const [foodRows] = await pool.query(
+      'SELECT food_id, calories FROM foods WHERE food_id = ? LIMIT 1',
+      [foodId]
+    );
+    const food = (foodRows as Array<{ food_id: number; calories: number }>)[0];
+    if (!food) {
+      throw new Error('FOOD_NOT_FOUND');
+    }
+    mealItemCalories = mealItemCalories || Math.round(Number(food.calories ?? 0));
+  } else {
+    const categoryId = await ensureFoodCategory(payload.mealType || 'Meal');
 
-  const foodId = (foodInsert as { insertId: number }).insertId;
+    const [foodInsert] = await pool.query(
+      `
+        INSERT INTO foods (food_name, category_id, calories, protein, carbs, fat, fiber, sugar)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        payload.foodName,
+        categoryId,
+        payload.calories,
+        payload.protein ?? 0,
+        payload.carbs ?? 0,
+        payload.fats ?? 0,
+        0,
+        0,
+      ]
+    );
+
+    foodId = (foodInsert as { insertId: number }).insertId;
+  }
 
   const [mealInsert] = await pool.query(
     'INSERT INTO meals (user_id, meal_type, meal_date) VALUES (?, ?, CURDATE())',
@@ -1231,7 +1441,7 @@ export const createMealService = async (accountId: number | null | undefined, pa
 
   await pool.query(
     'INSERT INTO mealitems (meal_id, food_id, quantity, calories) VALUES (?, ?, ?, ?)',
-    [mealId, foodId, payload.quantity ?? 1, payload.calories]
+    [mealId, foodId, payload.quantity ?? 1, mealItemCalories]
   );
 
   await updateDailyNutritionLog(user.user_id);

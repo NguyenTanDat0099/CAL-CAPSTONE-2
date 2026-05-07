@@ -1,21 +1,18 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Camera, 
-  Edit3, 
-  Save, 
-  X, 
-  User, 
-  Calendar, 
-  Ruler, 
-  Venus, 
-  Mars, 
+import {
+  Camera,
+  Edit3,
+  X,
+  Calendar,
+  Ruler,
+  Venus,
+  Mars,
   Weight,
   Zap,
-  Target,
   Quote
 } from 'lucide-react';
-import { UserProfile, Gender } from '../App';
+import { UserProfile, WeightHistoryEntry } from '../App';
 
 interface SettingsProps {
   profile: UserProfile;
@@ -28,7 +25,26 @@ export function Settings({ profile, setProfile }: SettingsProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
-    setProfile(editForm);
+    const previousWeight = Number(profile.weight || 0);
+    const nextWeight = Number(editForm.weight || 0);
+    let nextProfile = { ...editForm };
+
+    if (nextWeight > 0 && Math.abs(previousWeight - nextWeight) >= 0.01) {
+      const entry: WeightHistoryEntry = {
+        id: Date.now(),
+        weight: nextWeight,
+        recordedAt: new Date().toISOString(),
+        source: 'settings',
+        note: 'Updated from Settings',
+      };
+      nextProfile = {
+        ...nextProfile,
+        startingWeight: profile.startingWeight || previousWeight || nextWeight,
+        weightHistory: [...(profile.weightHistory || []), entry],
+      };
+    }
+
+    setProfile(nextProfile);
     setIsEditing(false);
   };
 
@@ -52,7 +68,40 @@ export function Settings({ profile, setProfile }: SettingsProps) {
     fileInputRef.current?.click();
   };
 
-  const progressPercentage = 68; // Mocked as per image
+  const objectiveLabel = profile.goal === 'lose'
+    ? 'Weight Loss'
+    : profile.goal === 'gain'
+      ? 'Muscle Gain'
+      : profile.goal === 'maintain'
+        ? 'Maintenance'
+        : 'Health';
+  const activityLabels: Record<string, string> = {
+    sedentary: 'Sedentary',
+    light: 'Lightly Active',
+    moderate: 'Moderately Active',
+    active: 'Very Active',
+  };
+  const activityDescriptions: Record<string, string> = {
+    sedentary: 'Little structured exercise and mostly seated daily activity.',
+    light: 'Light exercise or regular walking 1-3 days per week.',
+    moderate: 'Moderate exercise 3-5 days per week.',
+    active: 'Hard exercise or physically demanding activity most days.',
+  };
+  const totalWeightDistance = Math.abs((profile.startingWeight || 0) - (profile.targetWeight || 0));
+  const remainingWeightDistance = Math.abs((profile.weight || 0) - (profile.targetWeight || 0));
+  const hasWeightGoal = profile.weight > 0 && profile.targetWeight > 0 && totalWeightDistance > 0;
+  const progressPercentage = hasWeightGoal
+    ? Math.max(0, Math.min(100, Math.round(((totalWeightDistance - remainingWeightDistance) / totalWeightDistance) * 100)))
+    : 0;
+  const sortedWeightHistory = [...(profile.weightHistory || [])].sort(
+    (a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime()
+  );
+  const latestWeight = sortedWeightHistory[sortedWeightHistory.length - 1];
+  const previousWeight = sortedWeightHistory[sortedWeightHistory.length - 2];
+  const weightChangeLabel = latestWeight && previousWeight
+    ? `${latestWeight.weight - previousWeight.weight >= 0 ? '+' : ''}${(latestWeight.weight - previousWeight.weight).toFixed(1)}kg since last entry`
+    : 'No previous weight entry yet';
+  const narrative = `${objectiveLabel} goal with ${(activityLabels[profile.activityLevel] || 'Moderate').toLowerCase()} activity. Current weight is ${profile.weight || '--'}kg${profile.targetWeight ? ` with a ${profile.targetWeight}kg target` : ''}.`;
 
   return (
     <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
@@ -77,21 +126,32 @@ export function Settings({ profile, setProfile }: SettingsProps) {
                   referrerPolicy="no-referrer"
                 />
               </div>
-              <div className="absolute -bottom-2 -right-2 w-10 h-10 rounded-full bg-brand-orange text-bg-dark flex items-center justify-center shadow-lg border-4 border-bg-dark">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditForm(profile);
+                  setIsEditing(true);
+                }}
+                className="absolute -bottom-2 -right-2 w-10 h-10 rounded-full bg-brand-orange text-bg-dark flex items-center justify-center shadow-lg border-4 border-bg-dark hover:scale-105 transition-transform"
+                aria-label="Edit profile photo"
+              >
                 <Camera size={18} />
-              </div>
+              </button>
             </div>
             <div>
               <h1 className="text-6xl font-black tracking-tighter mb-2">{profile.name}</h1>
               <span className="px-3 py-1 rounded-full bg-surface-lighter text-brand-orange text-[10px] font-black uppercase tracking-widest">
-                Member
+                {profile.hasCompletedSetup ? 'Profile Complete' : 'Setup Pending'}
               </span>
             </div>
           </div>
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => setIsEditing(true)}
+            onClick={() => {
+              setEditForm(profile);
+              setIsEditing(true);
+            }}
             className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-surface-lighter border border-white/5 text-sm font-bold hover:bg-white/5 transition-colors"
           >
             <Edit3 size={18} className="text-brand-orange" />
@@ -108,7 +168,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               <div className="relative z-10">
                 <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-6">Personal Narrative</p>
                 <p className="text-2xl font-medium leading-relaxed italic text-white/90">
-                  "Pushing for high-performance nutrition while maintaining a sustainable lifestyle. Focused on lean muscle growth and kinetic energy."
+                  "{narrative}"
                 </p>
               </div>
             </section>
@@ -169,21 +229,26 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               <div className="relative z-10">
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">Current Objective</p>
                 <h3 className="text-4xl font-black mb-12">
-                  {profile.goal === 'lose' ? 'Weight Loss' : profile.goal === 'gain' ? 'Muscle Gain' : profile.goal === 'maintain' ? 'Maintenance' : 'Health'}
+                  {objectiveLabel}
                 </h3>
-                
+
                 <div className="space-y-4">
                   <div className="flex justify-between items-end">
                     <span className="text-[10px] font-black uppercase tracking-widest opacity-60">Progress</span>
                     <span className="text-3xl font-black">{progressPercentage}%</span>
                   </div>
                   <div className="h-4 w-full bg-bg-dark/10 rounded-full overflow-hidden">
-                    <motion.div 
+                    <motion.div
                       initial={{ width: 0 }}
                       animate={{ width: `${progressPercentage}%` }}
                       className="h-full bg-bg-dark"
                     />
                   </div>
+                  <p className="text-[11px] font-bold leading-relaxed opacity-70">
+                    {hasWeightGoal
+                      ? `${weightChangeLabel}. ${sortedWeightHistory.length} weight ${sortedWeightHistory.length === 1 ? 'entry' : 'entries'} recorded.`
+                      : 'Set a current weight and target weight to calculate progress.'}
+                  </p>
                 </div>
               </div>
             </section>
@@ -194,12 +259,10 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               <div className="relative z-10">
                 <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-4">Activity Level</p>
                 <h3 className="text-3xl font-black mb-4 capitalize">
-                  {profile.activityLevel === 'sedentary' ? 'Sedentary' : 
-                   profile.activityLevel === 'light' ? 'Lightly Active' :
-                   profile.activityLevel === 'moderate' ? 'Moderately Active' : 'Very Active'}
+                  {activityLabels[profile.activityLevel] || 'Moderately Active'}
                 </h3>
                 <p className="text-sm text-text-muted leading-relaxed">
-                  {profile.activityLevel === 'active' ? '6+ workouts per week with high intensity focus.' : 'Regular activity and consistent movement.'}
+                  {activityDescriptions[profile.activityLevel] || activityDescriptions.moderate}
                 </p>
 
                 <div className="flex gap-2 mt-12">
@@ -317,10 +380,11 @@ export function Settings({ profile, setProfile }: SettingsProps) {
                     </div>
                     <div>
                       <label className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-2 block">Weight (kg)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
+                        step="0.1"
                         value={editForm.weight}
-                        onChange={(e) => setEditForm({ ...editForm, weight: parseInt(e.target.value) || 0 })}
+                        onChange={(e) => setEditForm({ ...editForm, weight: parseFloat(e.target.value) || 0 })}
                         className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-brand-orange transition-colors font-bold"
                       />
                     </div>

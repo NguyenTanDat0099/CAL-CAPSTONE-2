@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import AdminApp from './admin/App';
 import AuthApp from './auth/AuthApp';
+import { buildApiUrl } from './config/api';
 import UserApp from './user/App';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const AUTH_TOKEN_KEY = 'calai_token';
 const AUTH_ROLE_KEY = 'calai_role';
 
@@ -40,7 +40,7 @@ export default function App() {
     }
 
     try {
-      const response = await fetch(`${API_BASE}/api/auth/validate`, {
+      const response = await fetch(buildApiUrl('/auth/validate'), {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${savedToken}`,
@@ -59,7 +59,7 @@ export default function App() {
       setActiveView('auth');
     } catch {
       clearStoredAuth();
-      setError('Backend chưa sẵn sàng. Vui lòng đăng nhập lại sau khi server chạy.');
+      setError('Backend is not ready. Please sign in again after the server is running.');
       setActiveView('auth');
     }
   };

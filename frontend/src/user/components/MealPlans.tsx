@@ -4,104 +4,62 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Meal, MealCategory, DietItem, MealSchedule } from '../types';
 import { buildApiUrl } from '../../config/api';
 
-const mockMeals: Meal[] = [
-  {
-    id: '1',
-    name: 'Avocado Salmon Bowl',
-    calories: 450,
-    protein: 32,
-    carbs: 12,
-    fats: 28,
-    image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&h=600&fit=crop',
-    category: 'Lunch',
-    description: 'Fresh salmon with creamy avocado and mixed greens.',
-    about: 'This nutrient-dense bowl combines high-quality protein from fresh salmon with healthy monounsaturated fats from avocado. It is rich in Omega-3 fatty acids, which support heart health and brain function, while the mixed greens provide essential vitamins and minerals with minimal calories.'
-  },
-  {
-    id: '2',
-    name: 'Mediterranean Quinoa',
-    calories: 320,
-    protein: 14,
-    carbs: 45,
-    fats: 8,
-    image: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&h=600&fit=crop',
-    category: 'Lunch',
-    description: 'Light and refreshing quinoa with Mediterranean herbs.',
-    about: 'A complete plant-based protein source, quinoa is the star of this Mediterranean-inspired dish. Combined with fresh herbs, cucumbers, and a light lemon-olive oil dressing, it provides sustained energy through complex carbohydrates and a healthy dose of fiber for digestive health.'
-  },
-  {
-    id: '3',
-    name: 'Grilled Chicken & Veggies',
-    calories: 380,
-    protein: 48,
-    carbs: 10,
-    fats: 15,
-    image: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=800&h=600&fit=crop',
-    category: 'Dinner',
-    description: 'Lean grilled chicken breast with seasonal roasted vegetables.',
-    about: 'This classic fitness meal is designed for muscle recovery and growth. The lean chicken breast provides a massive 48g of protein, while the roasted seasonal vegetables offer a spectrum of phytonutrients and fiber to keep you full and satisfied without excess calories.'
-  },
-  {
-    id: '4',
-    name: 'Protein Berry Bowl',
-    calories: 290,
-    protein: 22,
-    carbs: 35,
-    fats: 6,
-    image: 'https://images.unsplash.com/photo-1494390248081-4e521a5940db?w=800&h=600&fit=crop',
-    category: 'Breakfast',
-    description: 'Greek yogurt topped with fresh berries and protein granola.',
-    about: 'Start your day with a powerful combination of probiotics and antioxidants. Greek yogurt provides a creamy, high-protein base, while fresh berries deliver a burst of vitamin C and fiber. The protein granola adds a satisfying crunch and extra amino acids for a balanced morning meal.'
-  },
-  {
-    id: '5',
-    name: 'Steak with Sweet Potato',
-    calories: 520,
-    protein: 45,
-    carbs: 38,
-    fats: 22,
-    image: 'https://images.unsplash.com/photo-1544025162-d76694265947?w=800&h=600&fit=crop',
-    category: 'Dinner',
-    description: 'Juicy sirloin steak served with roasted sweet potato cubes.',
-    about: 'A hearty meal for those with higher energy needs or looking to build strength. Sirloin steak is an excellent source of iron, zinc, and B vitamins. Sweet potatoes provide slow-releasing carbohydrates and beta-carotene, making this an ideal post-workout dinner.'
-  },
-  {
-    id: '6',
-    name: 'Tofu Stir Fry',
-    calories: 310,
-    protein: 18,
-    carbs: 42,
-    fats: 12,
-    image: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRdFWhBCSahgQhMF0SHI26DJ9ilAmvxu55Q0A&sw=800&h=600&fit=crop',
-    category: 'Lunch',
-    description: 'Crispy tofu with broccoli and peppers in a light soy glaze.',
-    about: 'This vibrant stir-fry is a testament to how delicious plant-based eating can be. Tofu absorbs the savory soy glaze while providing all essential amino acids. Broccoli and bell peppers add a satisfying crunch and a significant dose of vitamin K and vitamin C.'
-  },
-  {
-    id: '7',
-    name: 'Oatmeal with Nuts',
-    calories: 340,
-    protein: 12,
-    carbs: 48,
-    fats: 14,
-    image: 'https://images.unsplash.com/photo-1517673400267-0251440c45dc?w=800&h=600&fit=crop',
-    category: 'Breakfast',
-    description: 'Warm rolled oats with walnuts and a hint of cinnamon.',
-    about: 'A comforting and heart-healthy breakfast choice. Rolled oats are famous for their beta-glucan fiber, which helps lower cholesterol. Walnuts add a satisfying texture and essential ALA Omega-3 fatty acids, while cinnamon helps regulate blood sugar levels.'
-  },
-  {
-    id: '8',
-    name: 'Turkey Wrap',
-    calories: 280,
-    protein: 24,
-    carbs: 32,
-    fats: 8,
-    image: 'https://images.unsplash.com/photo-1509722747041-616f39b57569?w=800&h=600&fit=crop',
-    category: 'Snack',
-    description: 'Lean turkey breast with lettuce and tomato in a whole wheat wrap.',
-    about: 'The perfect high-protein snack or light lunch on the go. Lean turkey breast is one of the lowest-fat protein sources available. Wrapped in a whole wheat tortilla with fresh vegetables, it provides a balanced mix of macros to keep your energy stable between meals.'
-  }
-];
+interface FoodCatalogItem {
+  id: number;
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fats: number;
+  fiber?: number | null;
+  sugar?: number | null;
+  sodium?: number | null;
+  servingSize?: string | null;
+  imagePath?: string | null;
+  category?: string | null;
+}
+
+const categoryTabs: Array<MealCategory | 'All'> = ['All', 'Breakfast', 'Lunch', 'Dinner', 'Snack', 'Other'];
+
+const normalizeMealCategory = (category?: string | null): MealCategory => {
+  const normalized = (category || '').trim().toLowerCase();
+  if (normalized === 'breakfast') return 'Breakfast';
+  if (normalized === 'lunch') return 'Lunch';
+  if (normalized === 'dinner') return 'Dinner';
+  if (normalized === 'snack') return 'Snack';
+  return 'Other';
+};
+
+const buildDescription = (food: FoodCatalogItem) => {
+  const serving = food.servingSize || '1 serving';
+  const category = food.category || 'Food';
+  return `${Math.round(food.calories)} kcal per ${serving} in ${category}.`;
+};
+
+const buildAbout = (food: FoodCatalogItem) => {
+  const serving = food.servingSize || 'serving';
+  const fiberText = food.fiber != null ? ` Fiber: ${Math.round(food.fiber)}g.` : '';
+  const sugarText = food.sugar != null ? ` Sugar: ${Math.round(food.sugar)}g.` : '';
+  return `This item comes from the admin-managed Content Manager food library. Nutrition per ${serving}: ${Math.round(food.calories)} kcal, ${Math.round(food.protein)}g protein, ${Math.round(food.carbs)}g carbs, and ${Math.round(food.fats)}g fat.${fiberText}${sugarText}`;
+};
+
+const mapFoodToMeal = (food: FoodCatalogItem): Meal => ({
+  id: String(food.id),
+  sourceFoodId: food.id,
+  name: food.name,
+  calories: Math.round(food.calories),
+  protein: Math.round(food.protein),
+  carbs: Math.round(food.carbs),
+  fats: Math.round(food.fats),
+  fiber: food.fiber ?? null,
+  sugar: food.sugar ?? null,
+  image: food.imagePath?.trim() || '',
+  category: normalizeMealCategory(food.category),
+  displayCategory: food.category || 'Food',
+  servingSize: food.servingSize ?? null,
+  description: buildDescription(food),
+  about: buildAbout(food),
+});
 
 interface MealPlansProps {
   onAddToMyDiet: (
@@ -112,7 +70,7 @@ interface MealPlansProps {
 
 const AUTH_TOKEN_KEY = 'calai_token';
 const getAuthHeaders = (): Record<string, string> => {
-  const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+  const token = sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
@@ -121,9 +79,35 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [minKcal, setMinKcal] = useState<string>('0');
   const [maxKcal, setMaxKcal] = useState<string>('1200');
+  const [meals, setMeals] = useState<Meal[]>([]);
+  const [mealsLoading, setMealsLoading] = useState(true);
+  const [mealsError, setMealsError] = useState('');
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [communitySchedules, setCommunitySchedules] = useState<MealSchedule[]>([]);
   const [communitySelected, setCommunitySelected] = useState<MealSchedule | null>(null);
+
+  const loadMeals = async () => {
+    setMealsLoading(true);
+    setMealsError('');
+    try {
+      const response = await fetch(buildApiUrl('/users/foods/search?limit=100'), {
+        headers: getAuthHeaders(),
+      });
+      const result = await response.json().catch(() => ({ message: 'Failed to load foods' }));
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to load foods');
+      }
+      setMeals(((result.data ?? []) as FoodCatalogItem[]).map(mapFoodToMeal));
+    } catch (error) {
+      setMealsError(error instanceof Error ? error.message : 'Failed to load foods');
+    } finally {
+      setMealsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMeals();
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -142,16 +126,19 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
   }, []);
 
   const filteredMeals = useMemo(() => {
-    return mockMeals.filter(meal => {
+    return meals.filter(meal => {
       const matchesCategory = activeCategory === 'All' || meal.category === activeCategory;
-      const matchesSearch = meal.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const normalizedSearch = searchQuery.trim().toLowerCase();
+      const matchesSearch = !normalizedSearch || [meal.name, meal.displayCategory, meal.description]
+        .filter(Boolean)
+        .some(value => value!.toLowerCase().includes(normalizedSearch));
       const kcal = meal.calories;
       const min = parseInt(minKcal) || 0;
       const max = parseInt(maxKcal) || 1200;
       const matchesKcal = kcal >= min && kcal <= max;
       return matchesCategory && matchesSearch && matchesKcal;
     });
-  }, [activeCategory, searchQuery, minKcal, maxKcal]);
+  }, [meals, activeCategory, searchQuery, minKcal, maxKcal]);
 
   const handleReset = () => {
     setMinKcal('0');
@@ -164,7 +151,13 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
     return (
       <div className="flex-1 ml-64 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
         <div className="h-[450px] relative">
-          <img src={selectedMeal.image} alt={selectedMeal.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          {selectedMeal.image ? (
+            <img src={selectedMeal.image} alt={selectedMeal.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          ) : (
+            <div className="w-full h-full bg-surface-dark flex items-center justify-center text-brand-orange">
+              <Utensils size={72} />
+            </div>
+          )}
           <div className="absolute inset-0 bg-gradient-to-b from-bg-dark/40 via-transparent to-bg-dark" />
           
           <button 
@@ -177,7 +170,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
 
           <div className="absolute bottom-12 left-10 right-10">
             <span className="px-3 py-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black uppercase tracking-widest mb-4 inline-block">
-              {selectedMeal.category}
+              {selectedMeal.displayCategory ?? selectedMeal.category}
             </span>
             <h1 className="text-6xl font-black tracking-tight mb-4">{selectedMeal.name}</h1>
             <p className="text-white/80 text-lg max-w-2xl leading-relaxed">
@@ -235,22 +228,23 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
                 <p className="text-xl font-bold">Heart Health & Weight Maintenance</p>
               </div>
             </div>
-            <motion.button 
+            <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-                onClick={() => {
-                  onAddToMyDiet({
-                    name: selectedMeal.name,
+              onClick={() => {
+                onAddToMyDiet({
+                  name: selectedMeal.name,
+                  foodId: selectedMeal.sourceFoodId,
                   calories: selectedMeal.calories,
                   protein: selectedMeal.protein,
                   carbs: selectedMeal.carbs,
                   fats: selectedMeal.fats,
-                    image: selectedMeal.image,
-                    description: selectedMeal.description,
-                    about: selectedMeal.about
-                  }, { mealType: selectedMeal.category });
-                  setSelectedMeal(null);
-                }}
+                  image: selectedMeal.image,
+                  description: selectedMeal.description,
+                  about: selectedMeal.about
+                }, { mealType: selectedMeal.category === 'Other' ? undefined : selectedMeal.category });
+                setSelectedMeal(null);
+              }}
               className="bg-brand-orange text-bg-dark font-black py-4 px-10 rounded-2xl flex items-center gap-3 shadow-xl shadow-brand-orange/20"
             >
               <PlusCircle size={20} />
@@ -271,7 +265,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
         </div>
         <h1 className="text-5xl font-black tracking-tight mb-4">Discover New Meals</h1>
         <p className="text-text-muted text-lg max-w-2xl leading-relaxed">
-          Find perfectly balanced meals tailored to your current macro goals and preferences. Filter by nutrient range to stay on track.
+          Browse foods curated by admins in Content Manager. Filter by meal type and calories before adding an item to your diet log.
         </p>
       </header>
 
@@ -343,10 +337,10 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
       {/* Navigation & Search */}
       <div className="flex items-center justify-between mb-8 border-b border-white/10">
         <div className="flex gap-8">
-          {['All', 'Breakfast', 'Lunch', 'Dinner', 'Snack'].map((cat) => (
+          {categoryTabs.map((cat) => (
             <button
               key={cat}
-              onClick={() => setActiveCategory(cat as any)}
+              onClick={() => setActiveCategory(cat)}
               className={`pb-4 text-sm font-bold transition-all relative ${
                 activeCategory === cat ? 'text-brand-orange' : 'text-text-muted hover:text-white'
               }`}
@@ -401,78 +395,108 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
         </button>
       </div>
 
-      {/* Meals Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-32">
-        <AnimatePresence mode="popLayout">
-          {filteredMeals.map((meal) => (
-            <motion.div
-              key={meal.id}
-              layout
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              onClick={() => setSelectedMeal(meal)}
-              className="bg-surface-dark rounded-[2.5rem] overflow-hidden border border-white/5 group relative cursor-pointer"
-            >
-              <div className="h-56 relative overflow-hidden">
-                <img
-                  src={meal.image}
-                  alt={meal.name}
-                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-bg-dark/80 via-transparent to-transparent" />
-                
-                <motion.button
-                  whileHover={{ scale: 1.1 }}
-                  whileTap={{ scale: 0.9 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAddToMyDiet({
-                      name: meal.name,
-                      calories: meal.calories,
-                      protein: meal.protein,
-                      carbs: meal.carbs,
-                      fats: meal.fats,
-                      image: meal.image,
-                      description: meal.description,
-                      about: meal.about
-                    }, { mealType: meal.category });
-                  }}
-                  className="absolute top-6 right-6 w-10 h-10 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white hover:bg-brand-orange hover:text-bg-dark transition-all shadow-xl"
-                >
-                  <Plus size={20} />
-                </motion.button>
-              </div>
+      {mealsLoading && (
+        <div className="flex items-center justify-center py-20 text-text-muted">
+          <div className="text-sm font-bold uppercase tracking-widest">Loading food library...</div>
+        </div>
+      )}
 
-              <div className="p-6">
-                <h3 className="text-lg font-bold mb-6 truncate">{meal.name}</h3>
-                
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-[#A594F9]/10 rounded-2xl p-3 border border-[#A594F9]/20">
-                    <p className="text-[8px] text-[#A594F9] uppercase tracking-widest font-black mb-1">Calories</p>
-                    <p className="text-sm font-black text-white">{meal.calories} <span className="text-[10px] font-normal opacity-60">kcal</span></p>
-                  </div>
-                  <div className="bg-[#2DD4BF]/10 rounded-2xl p-3 border border-[#2DD4BF]/20">
-                    <p className="text-[8px] text-[#2DD4BF] uppercase tracking-widest font-black mb-1">Protein</p>
-                    <p className="text-sm font-black text-white">{meal.protein} <span className="text-[10px] font-normal opacity-60">g</span></p>
-                  </div>
-                  <div className="bg-[#FCD34D]/10 rounded-2xl p-3 border border-[#FCD34D]/20">
-                    <p className="text-[8px] text-[#FCD34D] uppercase tracking-widest font-black mb-1">Carbs</p>
-                    <p className="text-sm font-black text-white">{meal.carbs} <span className="text-[10px] font-normal opacity-60">g</span></p>
-                  </div>
-                  <div className="bg-[#FB7185]/10 rounded-2xl p-3 border border-[#FB7185]/20">
-                    <p className="text-[8px] text-[#FB7185] uppercase tracking-widest font-black mb-1">Fat</p>
-                    <p className="text-sm font-black text-white">{meal.fats} <span className="text-[10px] font-normal opacity-60">g</span></p>
+      {mealsError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 mb-10 flex items-center justify-between gap-4">
+          <p className="text-sm text-red-100">{mealsError}</p>
+          <button onClick={loadMeals} className="px-4 py-2 rounded-xl border border-red-300/40 text-xs font-black uppercase tracking-widest text-red-100 hover:bg-red-500/20 transition-colors">
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Meals Grid */}
+      {!mealsLoading && !mealsError && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-32">
+          <AnimatePresence mode="popLayout">
+            {filteredMeals.map((meal) => (
+              <motion.div
+                key={meal.id}
+                layout
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                onClick={() => setSelectedMeal(meal)}
+                className="bg-surface-dark rounded-[2.5rem] overflow-hidden border border-white/5 group relative cursor-pointer"
+              >
+                <div className="h-56 relative overflow-hidden">
+                  {meal.image ? (
+                    <img
+                      src={meal.image}
+                      alt={meal.name}
+                      className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-bg-dark/80 flex items-center justify-center text-brand-orange/70">
+                      <Utensils size={44} />
+                    </div>
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-bg-dark/80 via-transparent to-transparent" />
+                  <span className="absolute left-5 top-5 px-2.5 py-1 rounded-full bg-bg-dark/60 border border-white/10 text-[9px] font-black uppercase tracking-widest text-white/80 backdrop-blur-md">
+                    {meal.displayCategory ?? meal.category}
+                  </span>
+
+                  <motion.button
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddToMyDiet({
+                        name: meal.name,
+                        foodId: meal.sourceFoodId,
+                        calories: meal.calories,
+                        protein: meal.protein,
+                        carbs: meal.carbs,
+                        fats: meal.fats,
+                        image: meal.image,
+                        description: meal.description,
+                        about: meal.about
+                      }, { mealType: meal.category === 'Other' ? undefined : meal.category });
+                    }}
+                    className="absolute top-6 right-6 w-10 h-10 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white hover:bg-brand-orange hover:text-bg-dark transition-all shadow-xl"
+                  >
+                    <Plus size={20} />
+                  </motion.button>
+                </div>
+
+                <div className="p-6">
+                  <h3 className="text-lg font-bold mb-2 truncate">{meal.name}</h3>
+                  <p className="text-[10px] uppercase tracking-widest text-text-muted mb-5 truncate">
+                    {meal.servingSize || '1 serving'}
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-[#A594F9]/10 rounded-2xl p-3 border border-[#A594F9]/20">
+                      <p className="text-[8px] text-[#A594F9] uppercase tracking-widest font-black mb-1">Calories</p>
+                      <p className="text-sm font-black text-white">{meal.calories} <span className="text-[10px] font-normal opacity-60">kcal</span></p>
+                    </div>
+                    <div className="bg-[#2DD4BF]/10 rounded-2xl p-3 border border-[#2DD4BF]/20">
+                      <p className="text-[8px] text-[#2DD4BF] uppercase tracking-widest font-black mb-1">Protein</p>
+                      <p className="text-sm font-black text-white">{meal.protein} <span className="text-[10px] font-normal opacity-60">g</span></p>
+                    </div>
+                    <div className="bg-[#FCD34D]/10 rounded-2xl p-3 border border-[#FCD34D]/20">
+                      <p className="text-[8px] text-[#FCD34D] uppercase tracking-widest font-black mb-1">Carbs</p>
+                      <p className="text-sm font-black text-white">{meal.carbs} <span className="text-[10px] font-normal opacity-60">g</span></p>
+                    </div>
+                    <div className="bg-[#FB7185]/10 rounded-2xl p-3 border border-[#FB7185]/20">
+                      <p className="text-[8px] text-[#FB7185] uppercase tracking-widest font-black mb-1">Fat</p>
+                      <p className="text-sm font-black text-white">{meal.fats} <span className="text-[10px] font-normal opacity-60">g</span></p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
 
-      {filteredMeals.length === 0 && (
+      {!mealsLoading && !mealsError && filteredMeals.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-text-muted">
           <Utensils size={48} className="mb-4 opacity-20" />
           <p className="font-medium">No meals found matching your criteria.</p>
