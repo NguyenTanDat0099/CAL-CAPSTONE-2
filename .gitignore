@@ -1,0 +1,16 @@
+node_modules/
+**/node_modules/
+dist/
+build/
+coverage/
+*.log
+.codex-run/
+ngrok.yml
+
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.cache/
