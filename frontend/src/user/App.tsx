@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
-import { FoodScan } from './components/FoodScan';
 import { DietGoals } from './components/DietGoals';
 import { MealPlans } from './components/MealPlans';
 import { Homepage } from './components/Homepage';
@@ -570,7 +569,6 @@ export default function App({ onLogout }: UserAppProps) {
             dailyTarget={dailyTarget}
           />
         )}
-        {activeTab === 'scan' && <FoodScan onAddToMyDiet={handleAddToMyDiet} />}
         {activeTab === 'goals' && (
           <DietGoals
             myDiets={myDiets}
@@ -595,7 +593,7 @@ export default function App({ onLogout }: UserAppProps) {
             setProfile={handleProfileChange}
           />
         )}
-        {activeTab !== 'home' && activeTab !== 'scan' && activeTab !== 'goals' && activeTab !== 'meals' && activeTab !== 'dashboard' && activeTab !== 'chat' && activeTab !== 'settings' && (
+        {activeTab !== 'home' && activeTab !== 'goals' && activeTab !== 'meals' && activeTab !== 'dashboard' && activeTab !== 'chat' && activeTab !== 'settings' && (
           <div className="flex-1 ml-64 p-10 flex items-center justify-center text-text-muted">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2">Section "{activeTab}"</h2>

@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS chatmessages (
     sender ENUM('user', 'ai') NOT NULL,
     message_text TEXT,
     thinking_steps JSON DEFAULT NULL,
+    food_insight JSON DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES chatsessions(session_id) ON DELETE CASCADE,
     INDEX idx_session (session_id)

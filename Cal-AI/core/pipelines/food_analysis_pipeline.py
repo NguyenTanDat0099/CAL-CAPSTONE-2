@@ -100,6 +100,17 @@ class FoodAnalysisPipeline:
                 item.get("label"),
                 *(item.get("aliases") or [])[:3],
             ])
+        visual_matches = (
+            ((classification or {}).get("qdrant_visual_analysis") or {})
+            .get("top_matches") or []
+        )
+        for item in visual_matches[:5]:
+            terms.extend([
+                item.get("name"),
+                item.get("image_caption"),
+                " ".join(item.get("ingredients") or []),
+                " ".join(str(tag) for tag in (item.get("visual_tags") or [])),
+            ])
         return " ".join(str(term) for term in terms if term).strip()
 
     def _merge_classifier_with_vision(self, vision, classification):
@@ -130,11 +141,33 @@ class FoodAnalysisPipeline:
             for item in predictions[:3]
             if item.get("name")
         ]
-        vision["possible_dishes"] = existing[:5] or classifier_dishes
+        visual_matches = (
+            (classification.get("qdrant_visual_analysis") or {})
+            .get("top_matches") or []
+        )
+        qdrant_dishes = [
+            {
+                "name": item.get("name"),
+                "probability": item.get("score"),
+                "why": f"Qdrant visual nearest neighbor ({item.get('collection')})",
+            }
+            for item in visual_matches[:5]
+            if item.get("name")
+        ]
+        vision["possible_dishes"] = (existing[:5] or classifier_dishes) + qdrant_dishes
+        vision["possible_dishes"] = vision["possible_dishes"][:8]
+        vision["visual_rag_matches"] = visual_matches[:8]
         if not vision.get("identification_evidence"):
             vision["identification_evidence"] = [
                 f"ViT/CNN classifier top-1: {top.get('name')}."
             ]
+        if visual_matches:
+            vision.setdefault("image_observations", [])
+            vision["image_observations"].extend([
+                f"Qdrant visual match: {item.get('name')} (score {item.get('score')})."
+                for item in visual_matches[:3]
+                if item.get("name")
+            ])
         return vision
 
     def _normalize_vision_details(self, vision):
@@ -175,6 +208,16 @@ class FoodAnalysisPipeline:
             for item in (vision.get("sub_items") or [])
             if isinstance(item, dict)
         )
+        visual_rag = " ".join(
+            " ".join([
+                str(item.get("name") or ""),
+                str(item.get("image_caption") or ""),
+                " ".join(item.get("ingredients") or []),
+                " ".join(str(tag) for tag in (item.get("visual_tags") or [])),
+            ])
+            for item in (vision.get("visual_rag_matches") or [])[:5]
+            if isinstance(item, dict)
+        )
 
         if "cơm tấm" in dish.lower():
             return (
@@ -190,11 +233,11 @@ class FoodAnalysisPipeline:
 
         if "sushi" in self._normalize_text(f"{dish} {desc} {ingredients} {classifier_text} {sub_items}"):
             return (
-                f"{dish}. {desc}. {ingredients}. {classifier_text}. {sub_items}. "
+                f"{dish}. {desc}. {ingredients}. {classifier_text}. {sub_items}. {visual_rag}. "
                 "sushi platter sushi set salmon nigiri maki roll uramaki avocado cucumber nori seaweed rice tempura shrimp sashimi Japanese"
             )
 
-        return f"{dish} {desc} {ingredients} {classifier_text} {sub_items}".strip()
+        return f"{dish} {desc} {ingredients} {classifier_text} {sub_items} {visual_rag}".strip()
 
     def _to_float(self, value):
         if value is None:
@@ -483,7 +526,8 @@ class FoodAnalysisPipeline:
                 "recommendations": vision.get("recommendations", {}),
                 "table_rows": vision.get("table_rows", []),
                 "uncertainty": vision.get("uncertainty", {}),
-                "vit_cnn_analysis": vision.get("vit_cnn_analysis", {})
+                "vit_cnn_analysis": vision.get("vit_cnn_analysis", {}),
+                "visual_rag_matches": vision.get("visual_rag_matches", [])
             },
             "estimated_nutrition": estimated,
             "retrieved_nutrition": best,

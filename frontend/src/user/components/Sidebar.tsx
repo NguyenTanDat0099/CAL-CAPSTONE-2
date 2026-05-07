@@ -1,11 +1,10 @@
 import React from 'react';
-import { 
-  Home, 
-  LayoutDashboard, 
-  UtensilsCrossed, 
-  Target, 
-  Scan, 
-  MessageSquare, 
+import {
+  Home,
+  LayoutDashboard,
+  UtensilsCrossed,
+  Target,
+  MessageSquare,
   Settings,
   LogOut
 } from 'lucide-react';
@@ -23,7 +22,6 @@ export function Sidebar({ activeTab, onTabChange, onLogout }: SidebarProps) {
     { icon: LayoutDashboard, label: 'Dashboard', id: 'dashboard' },
     { icon: UtensilsCrossed, label: 'Meal plans', id: 'meals' },
     { icon: Target, label: 'Diet goals', id: 'goals' },
-    { icon: Scan, label: 'Food Scan', id: 'scan' },
     { icon: MessageSquare, label: 'AI Chatbox', id: 'chat' },
   ];
 

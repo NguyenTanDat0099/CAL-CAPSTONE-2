@@ -150,10 +150,26 @@ class AgentRouter:
         if self._has_phrase(q, [
             "tang bao nhieu kg", "giam bao nhieu kg", "tang can bao nhieu",
             "giam can bao nhieu", "se tang bao nhieu", "se giam bao nhieu",
+            "tang bao nhieu can", "giam bao nhieu can",
+            "len bao nhieu can", "xuong bao nhieu can",
+            "len bao nhieu kg", "xuong bao nhieu kg",
+            "tang bao nhieu", "giam bao nhieu",
             "can nang hien tai", "tdee", "bmr", "surplus", "deficit",
             "thang du calo", "thieu hut calo", "calorie surplus",
-            "calorie deficit", "energy balance", "kg fat", "kg mo"
+            "calorie deficit", "energy balance", "kg fat", "kg mo",
+            "gain weight", "lose weight", "how much weight",
+            "weight gain", "weight loss"
         ]):
+            return "weight_projection"
+
+        if (
+            self._has_phrase(q, ["trong", "sau", "voi", "neu", "if", "in", "after", "with"])
+            and self._has_phrase(q, [
+                "ngay", "tuan", "thang", "tuần", "tháng",
+                "day", "days", "week", "weeks", "month", "months"
+            ])
+            and self._has_phrase(q, ["can", "kg", "weight", "ta", "mo", "fat"])
+        ):
             return "weight_projection"
 
         if self._has_phrase(q, [
@@ -416,6 +432,7 @@ class GenericRAGAgent:
             "food_fruit_vectors_768",
             "food_common_vectors_768",
             "food_nutrition_vectors_768",
+            "nutrition5k_vectors_768",
             "food_nutrition_dev_vectors_768",
             "food_global_10k_vectors_768",
             "food_text_vectors_768",
@@ -444,6 +461,7 @@ class GenericRAGAgent:
             if not any_exclusive:
                 preferred += [
                     "food_nutrition_vectors_768",
+                    "nutrition5k_vectors_768",
                     "food_common_vectors_768",
                 ]
             selected = [c for c in preferred if c in existing]
@@ -468,10 +486,13 @@ class GenericRAGAgent:
             preferred = [
                 "food_common_vectors_768",
                 "food_nutrition_vectors_768",
+                "nutrition5k_vectors_768",
                 "food_nutrition_dev_vectors_768",
                 "food_global_10k_vectors_768",
                 "food_vectors_768",
                 "food_text_vectors_768",
+                "recipes_64k_vectors_768",
+                "food_recipe_images_text_768",
             ]
         else:
             return self._nutrition_collections()
@@ -825,7 +846,12 @@ class RecipeAgent:
                 terms.append(term[:80])
         return terms[:4]
 
-    RECIPE_TEXT_COLLECTIONS = ("recipes_vectors_768", "food_recipes_vectors_768")
+    RECIPE_TEXT_COLLECTIONS = (
+        "recipes_vectors_768",
+        "food_recipes_vectors_768",
+        "recipes_64k_vectors_768",
+        "food_recipe_images_text_768",
+    )
 
     def _parse_ingredient_list(self, value):
         if isinstance(value, list):
@@ -873,12 +899,14 @@ class RecipeAgent:
             results.append({
                 "score": hit.score,
                 "title": payload.get("recipe_name") or payload.get("title"),
-                "ingredients": self._parse_ingredient_list(payload.get("ingredients")),
+                "ingredients": self._parse_ingredient_list(
+                    payload.get("cleaned_ingredients_list") or payload.get("ingredients")
+                ),
                 "instructions": payload.get("directions") or payload.get("instructions"),
-                "image_name": None,
-                "image_file": None,
-                "image_path": None,
-                "image_caption": None,
+                "image_name": payload.get("image_name"),
+                "image_file": payload.get("image_file"),
+                "image_path": payload.get("image_path"),
+                "image_caption": payload.get("image_caption"),
                 "citation": CitationBuilder.from_payload(payload),
                 "payload": payload
             })
@@ -1576,10 +1604,10 @@ class AgenticRAG:
                 aggregated.append(new_item)
 
             if multi_day:
-                per_subseed_top_k = 6
+                per_subseed_top_k = 4
                 per_collection_for_subseed = 2
                 for slot in slots:
-                    sub_seeds = self.SLOT_SUBSEEDS.get(slot, [])
+                    sub_seeds = self.SLOT_SUBSEEDS.get(slot, [])[:3]
                     if not sub_seeds:
                         sub_seeds = [
                             self.BEVERAGE_SLOT_SEED if slot == "beverage"

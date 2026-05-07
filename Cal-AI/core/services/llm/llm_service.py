@@ -121,11 +121,11 @@ class LLMService:
             return {
                 str(k): self._safe_value(v)
                 for k, v in value.items()
-                if k not in {"vector", "embedding", "image", "image_path"}
+                if not self._is_noise_key(k) and not self._is_noise_value(v)
             }
 
         if isinstance(value, (list, tuple)):
-            return [self._safe_value(v) for v in value[:8]]
+            return [self._safe_value(v) for v in value[:12] if not self._is_noise_value(v)]
 
         return str(value)[:240]
 
@@ -149,34 +149,57 @@ class LLMService:
                 return key, self._safe_value(value)
         return None, None
 
-    def _compact_agentic_context(self, context, limit=6):
+    PAYLOAD_DENY_KEYS = {
+        "vector", "vectors", "embedding", "embeddings",
+        "image", "image_bytes", "image_b64", "image_data", "image_path",
+        "image_vector", "text_vector", "clip_vector", "openai_vector",
+    }
+
+    PAYLOAD_NAME_KEYS = (
+        "title", "Name", "Shrt_Desc", "recipe_name", "name", "dish_name",
+        "food", "food_name", "product_name",
+        "Activity, Exercise or Sport (1 hour)", "Activity", "Subtype",
+        "Drink", "Drink_Name", "beverage_name", "Beverage",
+        "Fruit", "Vegetable", "Disease", "Habit",
+    )
+
+    def _is_noise_key(self, key):
+        if not key:
+            return True
+        key_lower = str(key).lower()
+        if key_lower in self.PAYLOAD_DENY_KEYS:
+            return True
+        if "embedding" in key_lower or key_lower.endswith("_vector") or key_lower.endswith("_emb"):
+            return True
+        return False
+
+    def _is_noise_value(self, value):
+        if value in (None, "", [], {}):
+            return True
+        if isinstance(value, (list, tuple)) and len(value) > 0:
+            head = value[0]
+            if isinstance(head, (int, float)) and len(value) >= 32:
+                return True  # numeric vector dump
+        return False
+
+    def _shrink_list(self, value, item_cap=12, str_cap=200):
+        result = []
+        for item in value[:item_cap]:
+            if isinstance(item, dict):
+                result.append({
+                    str(k): self._safe_value(v)
+                    for k, v in item.items()
+                    if not self._is_noise_key(k) and not self._is_noise_value(v)
+                })
+            elif isinstance(item, str):
+                result.append(item[:str_cap])
+            else:
+                result.append(self._safe_value(item))
+        return result
+
+    def _compact_agentic_context(self, context, limit=6, max_fields=24):
         if not context:
             return []
-
-        name_keys = [
-            "title", "Name", "Shrt_Desc", "recipe_name", "name", "dish_name",
-            "food", "food_name", "product_name", "Activity, Exercise or Sport (1 hour)",
-            "Activity", "Subtype"
-        ]
-        nutrient_keys = [
-            "serving_size", "GmWt_Desc1", "GmWt_1",
-            "calories", "Energ_Kcal", "energy-kcal_100g", "Caloric Value",
-            "protein", "Protein", "Protein_(g)", "proteins_100g",
-            "carbohydrate", "carbs", "Carbohydrates", "Carbohydrt_(g)", "carbohydrates_100g",
-            "fat", "Fat", "total_fat", "Lipid_Tot_(g)", "fat_100g",
-            "fiber", "Fiber_TD_(g)", "fiber_100g",
-            "sodium", "Sodium_(mg)", "sodium_mg"
-        ]
-        exercise_keys = [
-            "Duration (min)", "Distance (km)", "METs", "Calories per kg",
-            "130 lb", "155 lb", "180 lb", "205 lb",
-            "50 kg (110 lb)", "60 kg (132 lb)", "70 kg (154 lb)",
-            "80 kg (176 lb)", "90 kg (198 lb)", "100 kg (220 lb)"
-        ]
-        text_keys = [
-            "ingredients", "Ingredients", "cleaned_ingredients_list",
-            "instructions", "Directions", "directions", "description"
-        ]
 
         compacted = []
         for raw_item in context[:limit]:
@@ -186,28 +209,29 @@ class LLMService:
                 continue
 
             item = {}
-            name_key, name_value = self._first_present(payload, name_keys)
+            name_key, name_value = self._first_present(payload, self.PAYLOAD_NAME_KEYS)
             if name_key:
                 item["name"] = name_value
 
-            for key in ["domain", "source_collection", "source_dataset", "source_row", "meal_slot"]:
-                if payload.get(key) not in (None, ""):
-                    item[key] = self._safe_value(payload.get(key))
+            for key, value in payload.items():
+                if key in item or key == name_key:
+                    continue
+                if self._is_noise_key(key) or self._is_noise_value(value):
+                    continue
 
-            for key in nutrient_keys + exercise_keys + text_keys:
-                value = payload.get(key)
-                if value not in (None, ""):
+                if isinstance(value, (list, tuple)):
+                    item[key] = self._shrink_list(value)
+                elif isinstance(value, dict):
+                    item[key] = {
+                        str(k): self._safe_value(v)
+                        for k, v in value.items()
+                        if not self._is_noise_key(k) and not self._is_noise_value(v)
+                    }
+                else:
                     item[key] = self._safe_value(value)
 
-            if len(item) <= 3:
-                for key, value in payload.items():
-                    if key in item or key in {"vector", "embedding", "image", "image_path"}:
-                        continue
-                    if value in (None, "") or isinstance(value, (dict, list, tuple)):
-                        continue
-                    item[key] = self._safe_value(value)
-                    if len(item) >= 10:
-                        break
+                if len(item) >= max_fields:
+                    break
 
             compacted.append(item)
 
@@ -401,7 +425,7 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
         conversation_context=None,
         user_profile_text=None
     ):
-        context_limit = 32 if intent == "meal_planning" else 4
+        context_limit = 12 if intent == "meal_planning" else 4
         compact_context = self._compact_agentic_context(context, limit=context_limit)
         prompt = build_agentic_answer_prompt(
             query=query,
@@ -412,9 +436,11 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
             user_profile_text=user_profile_text
         )
         if intent == "meal_planning":
-            num_predict = max(settings.LLM_NUM_PREDICT, 1800)
+            num_predict = max(settings.LLM_NUM_PREDICT, 700)
+        elif intent == "weight_projection":
+            num_predict = max(settings.LLM_NUM_PREDICT, 500)
         else:
-            num_predict = settings.LLM_NUM_PREDICT
+            num_predict = max(settings.LLM_NUM_PREDICT, 400)
         text = await self._call_llm(
             prompt,
             temperature=0.25,

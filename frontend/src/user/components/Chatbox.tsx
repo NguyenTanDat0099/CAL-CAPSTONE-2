@@ -18,6 +18,7 @@ import {
   Table2,
   RotateCcw,
   CalendarPlus,
+  Pencil,
 } from 'lucide-react';
 import type { ScheduleItem, MealSchedule, MealType } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
@@ -154,56 +155,162 @@ interface ParsedPlan {
   rawTable: string;
 }
 
+// LLM sometimes returns the entire markdown table on a single line.
+// Detect "Header|...|colN -|---|...|--- row1cells row2cells..." and reinsert newlines.
+const splitInlineTables = (raw: string): string => {
+  if (!raw || raw.indexOf('|') < 0) return raw;
+
+  const lines = raw.split(/\r?\n/);
+  const out: string[] = [];
+
+  for (const line of lines) {
+    const dividerRe = /(?:^|\s)(-?\|(?:\s*-{3,}\s*\|)+\s*-{3,}\s*\|?)/;
+    const m = line.match(dividerRe);
+    if (!m) {
+      out.push(line);
+      continue;
+    }
+    const dividerStart = line.indexOf(m[1]);
+    const headerSegment = line.slice(0, dividerStart).trim();
+    const bodySegment = line.slice(dividerStart + m[1].length).trim();
+
+    if (!headerSegment.includes('|') || !bodySegment) {
+      out.push(line);
+      continue;
+    }
+
+    const cellCount = (m[1].match(/-{3,}/g) || []).length;
+    if (cellCount < 2) {
+      out.push(line);
+      continue;
+    }
+
+    // Tokenise body cells, splitting "0 Beverages" into ["0", "Beverages"] when at row boundary.
+    const rawCells = bodySegment.split('|').map(c => c.trim());
+    const flat: string[] = [];
+    for (const cell of rawCells) {
+      const positionInRow = flat.length % cellCount;
+      if (positionInRow === cellCount - 1) {
+        const split = cell.match(/^(.*?)\s+([A-ZĐÀ-Ỹa-z][^\s].*)$/);
+        if (split) {
+          flat.push(split[1].trim());
+          flat.push(split[2].trim());
+          continue;
+        }
+      }
+      flat.push(cell);
+    }
+
+    const rows: string[] = [];
+    for (let i = 0; i < flat.length; i += cellCount) {
+      const slice = flat.slice(i, i + cellCount);
+      if (slice.length === cellCount && slice.some(s => s)) {
+        rows.push(slice.join(' | '));
+      }
+    }
+    if (rows.length === 0) {
+      out.push(line);
+      continue;
+    }
+    out.push(headerSegment);
+    out.push(m[1].trim());
+    out.push(...rows);
+  }
+  return out.join('\n');
+};
+
+const detectDayOffset = (heading: string): number | null => {
+  const norm = stripAccents(heading);
+  const m = norm.match(/(?:day|ngay)\s*(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n - 1 : null;
+  }
+  return null;
+};
+
+const detectMealTypeFromHeading = (heading: string): MealType | null => {
+  const norm = stripAccents(heading);
+  if (/(bua\s*sang|breakfast|morning)/.test(norm)) return 'breakfast';
+  if (/(bua\s*trua|lunch)/.test(norm)) return 'lunch';
+  if (/(bua\s*toi|dinner|supper|evening)/.test(norm)) return 'dinner';
+  if (/(snack|do\s*uong|drink|beverage|nhe)/.test(norm)) return 'snack';
+  return null;
+};
+
 const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
   if (!text) return null;
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length - 1; i++) {
-    const line = lines[i].trim();
+  const lines = splitInlineTables(text).split('\n');
+
+  const allItems: ScheduleItem[] = [];
+  let totalKcal = 0;
+  const rawTables: string[] = [];
+
+  let currentDayOffset = 0;
+  let currentMealType: MealType | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineRaw = lines[i];
+    const line = lineRaw.trim();
+    if (!line) continue;
+
+    // Track headings to assign day/meal context
+    const headingMatch = line.match(/^(?:#{1,4}\s+|\*\*\s*)?(.+?)(?:\s*\*\*)?[:：]?\s*$/);
+    if (headingMatch && !line.includes('|')) {
+      const dayOff = detectDayOffset(line);
+      if (dayOff != null) currentDayOffset = dayOff;
+      const mt = detectMealTypeFromHeading(line);
+      if (mt) currentMealType = mt;
+      continue;
+    }
+
+    if (i + 1 >= lines.length) continue;
     if (!line.includes('|')) continue;
     if (!isTableDivider(lines[i + 1])) continue;
 
     const headers = splitTableRow(line).map(h => stripAccents(h));
     const findCol = (...needles: string[]) =>
       headers.findIndex(h => needles.some(n => h.includes(n)));
-    const monIdx = findCol('mon');
+    const monIdx = findCol('mon', 'meal', 'food', 'dish');
     const kcalIdx = findCol('kcal', 'calo');
     if (monIdx < 0 || kcalIdx < 0) continue;
-    const servingIdx = findCol('khau phan', 'phan', 'serving');
-    const proteinIdx = findCol('p(g)', 'protein');
-    const carbsIdx = findCol('c(g)', 'carb');
-    const fatIdx = findCol('f(g)', 'fat', 'beo');
+    const servingIdx = findCol('khau phan', 'phan', 'serving', 'portion');
+    const proteinIdx = findCol('p(g)', 'protein', 'p ');
+    const carbsIdx = findCol('c(g)', 'carb', 'c ');
+    const fatIdx = findCol('f(g)', 'fat', 'beo', 'f ');
 
     const matchedSignals = [proteinIdx, carbsIdx, fatIdx].filter(idx => idx >= 0).length;
-    if (matchedSignals < 2) continue;
+    if (matchedSignals < 1) continue;
 
-    const items: ScheduleItem[] = [];
-    let totalKcal = 0;
-    const rawLines: string[] = [line, lines[i + 1]];
+    const tableLines: string[] = [lineRaw, lines[i + 1]];
     let cursor = i + 2;
     while (cursor < lines.length && lines[cursor].trim().includes('|')) {
-      rawLines.push(lines[cursor]);
+      tableLines.push(lines[cursor]);
       const cells = splitTableRow(lines[cursor]);
       const name = cells[monIdx]?.replace(/\*\*/g, '').trim();
       if (name && !/^total|^tong|^tổng/i.test(stripAccents(name))) {
         const kcal = numFromCell(cells[kcalIdx]);
-        items.push({
-          mealType: detectMealType(cells[monIdx]),
+        const inferredFromCell = detectMealTypeFromHeading(cells[monIdx] ?? '');
+        allItems.push({
+          mealType: currentMealType ?? inferredFromCell ?? detectMealType(cells[monIdx]),
           name,
           serving: servingIdx >= 0 ? cells[servingIdx] || null : null,
           calories: kcal,
           protein: proteinIdx >= 0 ? numFromCell(cells[proteinIdx]) : null,
           carbs: carbsIdx >= 0 ? numFromCell(cells[carbsIdx]) : null,
           fat: fatIdx >= 0 ? numFromCell(cells[fatIdx]) : null,
-          dayOffset: 0,
+          dayOffset: currentDayOffset,
         });
         if (kcal != null) totalKcal += kcal;
       }
       cursor += 1;
     }
-    if (items.length === 0) continue;
-    return { items, totalKcal, rawTable: rawLines.join('\n') };
+    rawTables.push(tableLines.join('\n'));
+    i = cursor - 1;
   }
-  return null;
+
+  if (allItems.length === 0) return null;
+  return { items: allItems, totalKcal, rawTable: rawTables.join('\n\n') };
 };
 
 const todayISO = () => {
@@ -311,7 +418,7 @@ const sanitizeLatex = (text: string) => {
 };
 
 const renderRichText = (rawText: string) => {
-  const text = sanitizeLatex(rawText);
+  const text = splitInlineTables(sanitizeLatex(rawText));
   const lines = text.split(/\r?\n/);
   const blocks: React.ReactNode[] = [];
   let index = 0;
@@ -485,7 +592,6 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
   const [activeChatId, setActiveChatId] = useState<string | null>(storedActiveChatId);
   const [inputText, setInputText] = useState('');
   const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
-  const [activeTab, setActiveTab] = useState<'nutrition' | 'assistant'>('nutrition');
   const [error, setError] = useState('');
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [savingPlan, setSavingPlan] = useState(false);
@@ -496,6 +602,11 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
   const [isTypingMap, setIsTypingMap] = useState<Record<string, boolean>>({});
   // Tracks which message IDs have expanded thinking steps
   const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [thinkingStartMap, setThinkingStartMap] = useState<Record<string, number>>({});
+  const [thinkingElapsed, setThinkingElapsed] = useState(0);
+  const [showLiveThinking, setShowLiveThinking] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -544,6 +655,44 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [displayMessages, isTyping]);
+
+  // Live thinking timer — ticks while assistant is generating
+  useEffect(() => {
+    if (!isTyping || !activeChatId) {
+      setThinkingElapsed(0);
+      return;
+    }
+    const start = thinkingStartMap[activeChatId] ?? Date.now();
+    if (!thinkingStartMap[activeChatId]) {
+      setThinkingStartMap(prev => ({ ...prev, [activeChatId]: start }));
+    }
+    setThinkingElapsed(Math.floor((Date.now() - start) / 1000));
+    const interval = setInterval(() => {
+      setThinkingElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isTyping, activeChatId, thinkingStartMap]);
+
+  // Reset start time once typing ends so next prompt starts at 0
+  useEffect(() => {
+    if (!isTyping && activeChatId && thinkingStartMap[activeChatId]) {
+      setThinkingStartMap(prev => {
+        const next = { ...prev };
+        delete next[activeChatId];
+        return next;
+      });
+    }
+  }, [isTyping, activeChatId]);
+
+  const liveThinkingPhases = [
+    { from: 0, label: 'Phân tích câu hỏi và xác định intent…' },
+    { from: 4, label: 'Truy xuất dữ liệu từ vector database…' },
+    { from: 12, label: 'Lọc context phù hợp và xếp hạng…' },
+    { from: 25, label: 'Sinh câu trả lời tự nhiên dựa trên context…' },
+    { from: 60, label: 'Đang tổng hợp lượng dữ liệu lớn, vui lòng chờ…' },
+  ];
+
+  const currentPhases = liveThinkingPhases.filter(p => thinkingElapsed >= p.from);
 
   // Attach scroll listener once on mount
   useEffect(() => {
@@ -598,12 +747,13 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
 
       // Build server sessions, then merge with stored conversations to preserve messages
       const storedMap = new Map(storedConversations.map(c => [c.id, c.messages]));
-      const mappedSessions: Conversation[] = sessions.map((session: { sessionId?: number; lastMessage?: string; startedAt?: string }) => {
+      const mappedSessions: Conversation[] = sessions.map((session: { sessionId?: number; lastMessage?: string; firstUserMessage?: string | null; startedAt?: string }) => {
         const sid = String(session.sessionId ?? '');
         const storedMsgs = storedMap.get(sid) ?? [];
+        const titleSource = session.firstUserMessage ?? session.lastMessage ?? 'New Conversation';
         return {
           id: sid,
-          title: (session.lastMessage ?? 'New Conversation').slice(0, 30),
+          title: titleSource.slice(0, 40),
           lastMessage: session.lastMessage ?? 'No messages yet',
           timestamp: formatConversationTime(session.startedAt ?? new Date().toISOString()),
           messages: storedMsgs,
@@ -633,15 +783,16 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
       const mapped = mapMessages(result?.data ?? []);
 
       setConversations(prev =>
-        prev.map(conversation =>
-          conversation.id === sessionId
-            ? {
-                ...conversation,
-                messages: mapped,
-                lastMessage: mapped.length > 0 ? (mapped[mapped.length - 1]?.text ?? conversation.lastMessage) : conversation.lastMessage,
-              }
-            : conversation
-        )
+        prev.map(conversation => {
+          if (conversation.id !== sessionId) return conversation;
+          const firstUser = mapped.find(m => m.sender === 'user');
+          return {
+            ...conversation,
+            messages: mapped,
+            title: firstUser ? firstUser.text.slice(0, 40) : conversation.title,
+            lastMessage: mapped.length > 0 ? (mapped[mapped.length - 1]?.text ?? conversation.lastMessage) : conversation.lastMessage,
+          };
+        })
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
@@ -844,11 +995,16 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
         : [userMessage, ...mapped];
 
       setConversations(prev => {
+        const existing = prev.find(c => c.id === tempId || c.id === sessionId);
         const withoutOld = prev.filter(c => c.id !== tempId && c.id !== sessionId);
+        const firstUser = finalMessages.find(m => m.sender === 'user');
+        const titleSource = existing?.title && existing.title !== 'New Conversation'
+          ? existing.title
+          : (firstUser?.text || trimmed || imageToSend?.name || 'Image upload');
         return [
           {
             id: sessionId,
-            title: mapped[0]?.text?.slice(0, 30) || (trimmed || imageToSend?.name || 'Image upload').slice(0, 30),
+            title: titleSource.slice(0, 40),
             lastMessage: mapped.length > 0 ? (mapped[mapped.length - 1]?.text ?? displayText) : displayText,
             timestamp: 'Just now',
             messages: finalMessages,
@@ -1053,6 +1209,61 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     handleSendMessage({ text: overrideText, image: overrideImage });
   };
 
+  const startEditMessage = (msg: Message) => {
+    if (isTyping) return;
+    setEditingMessage(msg);
+    setInputText(msg.text.startsWith('Uploaded ') && msg.imageUrl ? '' : msg.text);
+    if (msg.imageUrl) {
+      setSelectedImage({
+        dataUrl: msg.imageUrl,
+        name: msg.imageName ?? 'Uploaded image',
+        size: 0,
+        type: msg.imageUrl.startsWith('data:image/')
+          ? msg.imageUrl.slice(5, msg.imageUrl.indexOf(';'))
+          : 'image/jpeg',
+      });
+    }
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const cancelEdit = () => {
+    setEditingMessage(null);
+    setInputText('');
+    setSelectedImage(null);
+  };
+
+  const submitEdit = async () => {
+    if (!editingMessage || isTyping) return;
+    const newText = inputText.trim();
+    if (!newText && !selectedImage) return;
+
+    // Re-resolve the message from active chat in case the id transitioned from temp-* to real DB id
+    const messages = activeChat?.messages ?? [];
+    const liveMsg = messages.find(m => m.id === editingMessage.id)
+      ?? messages.find(m => m.sender === 'user' && m.text === editingMessage.text)
+      ?? editingMessage;
+
+    const sessionIdNum = Number(activeChatId);
+    const userMsgIdNum = parseMessageDbId(liveMsg.id);
+    if (Number.isFinite(sessionIdNum) && sessionIdNum > 0 && userMsgIdNum != null) {
+      await truncateMessagesAfter(sessionIdNum, userMsgIdNum, true);
+      setConversations(prev =>
+        prev.map(c =>
+          c.id === String(sessionIdNum)
+            ? { ...c, messages: c.messages.filter(m => {
+                const dbId = parseMessageDbId(m.id);
+                return dbId == null || dbId < userMsgIdNum;
+              }) }
+            : c
+        )
+      );
+    }
+
+    const overrideImage = selectedImage;
+    setEditingMessage(null);
+    handleSendMessage({ text: newText, image: overrideImage });
+  };
+
   const retryLastUserMessage = () => {
     if (isTyping) return;
     const messages = activeChat?.messages ?? [];
@@ -1136,24 +1347,11 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col relative">
-        {/* Header Tabs */}
-        <div className="p-6 border-b border-white/5 flex items-center gap-8">
-          <button
-            onClick={() => setActiveTab('nutrition')}
-            className={`text-sm font-black uppercase tracking-widest transition-colors ${
-              activeTab === 'nutrition' ? 'text-brand-orange' : 'text-text-muted hover:text-white'
-            }`}
-          >
+        {/* Header */}
+        <div className="p-6 border-b border-white/5 flex items-center gap-3">
+          <span className="text-sm font-black uppercase tracking-widest text-brand-orange">
             Nutrition AI
-          </button>
-          <button
-            onClick={() => setActiveTab('assistant')}
-            className={`text-sm font-black uppercase tracking-widest transition-colors ${
-              activeTab === 'assistant' ? 'text-brand-orange' : 'text-text-muted hover:text-white'
-            }`}
-          >
-            Assistant
-          </button>
+          </span>
         </div>
 
         {/* Messages */}
@@ -1358,7 +1556,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <div className="rounded-3xl rounded-tr-none bg-brand-orange p-5 text-left text-sm font-medium leading-relaxed text-bg-dark">
+                          <div className="rounded-3xl rounded-tr-none bg-brand-orange p-5 text-left text-sm font-medium leading-relaxed text-bg-dark break-words [overflow-wrap:anywhere]">
                             {msg.imageUrl && (
                               <img
                                 src={msg.imageUrl}
@@ -1366,9 +1564,24 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                                 className={`max-h-64 w-full max-w-sm rounded-2xl object-cover ${msg.text ? 'mb-4' : ''}`}
                               />
                             )}
-                            {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+                            {msg.text && <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.text}</p>}
                           </div>
-                          <div className="flex justify-end">
+                          <div className="flex justify-end gap-2">
+                            <motion.button
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              onClick={() => startEditMessage(msg)}
+                              disabled={isTyping}
+                              title="Edit this message"
+                              className={`inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                isTyping
+                                  ? 'text-text-muted/40 cursor-not-allowed'
+                                  : 'text-text-muted hover:text-brand-orange hover:border-brand-orange/30'
+                              }`}
+                            >
+                              <Pencil size={11} />
+                              Edit
+                            </motion.button>
                             <motion.button
                               whileHover={{ scale: 1.05 }}
                               whileTap={{ scale: 0.95 }}
@@ -1396,20 +1609,65 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                   <div className="w-10 h-10 rounded-xl bg-brand-orange/20 text-brand-orange flex items-center justify-center">
                     <Bot size={20} />
                   </div>
-                  <div className="w-full max-w-[520px] rounded-2xl border border-white/10 bg-[#151515] p-4">
-                    <div className="mb-3 flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-white/75">
-                      <Brain size={14} className="text-brand-orange" />
-                      Analyzing
-                    </div>
-                    <div className="space-y-2">
-                      <motion.div animate={{ opacity: [0.35, 0.8, 0.35] }} transition={{ repeat: Infinity, duration: 1.4 }} className="h-2 w-4/5 rounded-full bg-white/10" />
-                      <motion.div animate={{ opacity: [0.25, 0.7, 0.25] }} transition={{ repeat: Infinity, duration: 1.4, delay: 0.15 }} className="h-2 w-2/3 rounded-full bg-white/10" />
-                      <div className="flex gap-1 pt-1">
-                        <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1 }} className="h-1.5 w-1.5 rounded-full bg-brand-orange" />
-                        <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="h-1.5 w-1.5 rounded-full bg-brand-orange" />
-                        <motion.div animate={{ opacity: [0.4, 1, 0.4] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="h-1.5 w-1.5 rounded-full bg-brand-orange" />
-                      </div>
-                    </div>
+                  <div className="w-full max-w-[640px] space-y-3">
+                    <button
+                      onClick={() => setShowLiveThinking(prev => !prev)}
+                      className="inline-flex items-center gap-2 rounded-full border border-brand-orange/30 bg-brand-orange/10 px-3 py-2 text-[11px] font-black uppercase tracking-widest text-brand-orange transition-colors hover:border-brand-orange/50"
+                    >
+                      <Brain size={13} className="animate-pulse" />
+                      <span>Thinking for {thinkingElapsed}s</span>
+                      {showLiveThinking ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                    </button>
+                    <AnimatePresence>
+                      {showLiveThinking && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.25, ease: 'easeInOut' }}
+                          className="overflow-hidden"
+                        >
+                          <div className="rounded-2xl border border-white/10 bg-[#141414] p-5">
+                            <div className="space-y-3">
+                              {currentPhases.map((phase, idx) => {
+                                const isLast = idx === currentPhases.length - 1;
+                                return (
+                                  <div key={phase.from} className="relative flex gap-3">
+                                    {!isLast && (
+                                      <span className="absolute left-[13px] top-7 h-[calc(100%-0.25rem)] w-px bg-white/10" />
+                                    )}
+                                    <span className={`z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${
+                                      isLast
+                                        ? 'border-brand-orange/40 bg-brand-orange/10 text-brand-orange'
+                                        : 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
+                                    }`}>
+                                      {isLast ? (
+                                        <CircleDashed size={14} className="animate-spin" />
+                                      ) : (
+                                        <CheckCircle2 size={14} />
+                                      )}
+                                    </span>
+                                    <p className={`pt-1 text-xs leading-relaxed ${
+                                      isLast ? 'text-white/90' : 'text-white/55'
+                                    }`}>
+                                      {phase.label}
+                                    </p>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div className="mt-4 flex items-center gap-2 border-t border-white/5 pt-3 text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                              <motion.span
+                                animate={{ opacity: [0.4, 1, 0.4] }}
+                                transition={{ repeat: Infinity, duration: 1.2 }}
+                                className="h-1.5 w-1.5 rounded-full bg-brand-orange"
+                              />
+                              Streaming reasoning trace…
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               )}
@@ -1449,6 +1707,23 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
               className="hidden"
               onChange={handleImageChange}
             />
+            {editingMessage && (
+              <div className="flex items-center gap-3 rounded-2xl border border-brand-orange/40 bg-brand-orange/5 px-4 py-3">
+                <Pencil size={14} className="shrink-0 text-brand-orange" />
+                <div className="min-w-0 flex-1 text-xs">
+                  <div className="font-bold uppercase tracking-widest text-brand-orange">Editing message</div>
+                  <p className="mt-1 truncate text-text-muted">Press Enter to resend, Esc to cancel.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/5 text-text-muted transition-colors hover:text-white"
+                  aria-label="Cancel edit"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             {selectedImage && (
               <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-surface-dark p-3">
                 <img
@@ -1491,20 +1766,28 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
               </div>
               <input
                 type="text"
+                ref={inputRef}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder={selectedImage ? 'Add a note for this image...' : 'Ask CalAI anything...'}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (editingMessage) submitEdit();
+                    else handleSendMessage();
+                  } else if (e.key === 'Escape' && editingMessage) {
+                    cancelEdit();
+                  }
+                }}
+                placeholder={editingMessage ? 'Edit your message and press Enter to resend...' : (selectedImage ? 'Add a note for this image...' : 'Ask CalAI anything...')}
                 disabled={isTyping}
-                className={`w-full bg-surface-dark border border-white/10 rounded-2xl py-6 pl-16 pr-16 text-sm transition-colors ${
-                  isTyping ? 'opacity-50 cursor-not-allowed' : 'focus:outline-none focus:border-brand-orange/50'
-                }`}
+                className={`w-full bg-surface-dark border rounded-2xl py-6 pl-16 pr-16 text-sm transition-colors ${
+                  editingMessage ? 'border-brand-orange/60 focus:border-brand-orange' : 'border-white/10 focus:outline-none focus:border-brand-orange/50'
+                } ${isTyping ? 'opacity-50 cursor-not-allowed' : ''}`}
               />
               <div className="absolute right-4 top-1/2 -translate-y-1/2">
                 <motion.button
                   whileHover={{ scale: 1.1 }}
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => handleSendMessage()}
+                  onClick={() => editingMessage ? submitEdit() : handleSendMessage()}
                   disabled={(!inputText.trim() && !selectedImage) || isTyping}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
                     (inputText.trim() || selectedImage) && !isTyping ? 'bg-brand-orange text-bg-dark' : 'bg-white/5 text-text-muted'

@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   CalendarDays, Trophy, Trash2, Share2, X, ChevronLeft, ChevronRight,
   ListTree, GanttChart, Sparkles, Flame, Zap, Droplets, Heart, MessageSquareText,
+  ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { MealSchedule } from '../types';
 
@@ -339,24 +340,70 @@ interface TimelineViewProps {
   onSelect: (schedule: MealSchedule) => void;
 }
 
+const ZOOM_PRESETS = [
+  { label: 'Compact', dayWidth: 14, monthSpan: 3 },
+  { label: 'Default', dayWidth: 26, monthSpan: 2 },
+  { label: 'Wide', dayWidth: 40, monthSpan: 1 },
+  { label: 'Detailed', dayWidth: 60, monthSpan: 1 },
+];
+
 function TimelineView({ schedules, today, monthAnchor, setMonthAnchor, onSelect }: TimelineViewProps) {
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const preset = ZOOM_PRESETS[zoomLevel];
+  const baseDayWidth = preset.dayWidth;
+  const monthSpan = preset.monthSpan;
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => {
+      setContainerWidth(entries[0].contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const months = useMemo(() => {
-    return [0, 1].map(offset => {
+    return Array.from({ length: monthSpan }, (_, offset) => {
       const m = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + offset, 1);
       return {
         start: m,
         end: endOfMonth(m),
       };
     });
-  }, [monthAnchor]);
+  }, [monthAnchor, monthSpan]);
 
   const rangeStart = months[0].start;
   const rangeEnd = months[months.length - 1].end;
   const totalDays = dayDelta(rangeEnd, rangeStart) + 1;
-  const dayWidth = 26;
   const laneHeight = 44;
   const lanePadTop = 18;
+  const naturalWidth = totalDays * baseDayWidth;
+  // Stretch day cells to fill container when zoomed-out content is narrower than viewport
+  const dayWidth = containerWidth > naturalWidth && containerWidth > 0
+    ? containerWidth / totalDays
+    : baseDayWidth;
   const totalWidth = totalDays * dayWidth;
+
+  // Mouse-wheel zoom (Ctrl/Cmd + wheel changes zoom; plain wheel scrolls normally)
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      if (e.deltaY < 0) {
+        setZoomLevel(prev => Math.min(ZOOM_PRESETS.length - 1, prev + 1));
+      } else if (e.deltaY > 0) {
+        setZoomLevel(prev => Math.max(0, prev - 1));
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []);
 
   const dayMarkers = useMemo(() => {
     const markers: Array<{ date: Date; label: string; weekday: string }> = [];
@@ -380,28 +427,53 @@ function TimelineView({ schedules, today, monthAnchor, setMonthAnchor, onSelect 
 
   return (
     <div className="bg-surface-dark/60 rounded-[2.5rem] border border-white/5 overflow-hidden">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
-        <button
-          onClick={() => setMonthAnchor(new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() - 1, 1))}
-          className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
-        >
-          <ChevronLeft size={16} />
-        </button>
+      <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-white/5">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setMonthAnchor(new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() - 1, 1))}
+            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+            title="Previous month"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <button
+            onClick={() => setMonthAnchor(new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + 1, 1))}
+            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+            title="Next month"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
         <button
           onClick={() => setMonthAnchor(startOfMonth(today))}
           className="text-xs font-bold text-text-muted hover:text-white transition-colors uppercase tracking-widest"
         >
           Jump to today
         </button>
-        <button
-          onClick={() => setMonthAnchor(new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + 1, 1))}
-          className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
-        >
-          <ChevronRight size={16} />
-        </button>
+        <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] p-1">
+          <button
+            onClick={() => setZoomLevel(prev => Math.max(0, prev - 1))}
+            disabled={zoomLevel === 0}
+            className={`p-1.5 rounded-full transition-colors ${zoomLevel === 0 ? 'text-text-muted/30 cursor-not-allowed' : 'text-text-muted hover:text-brand-orange hover:bg-white/5'}`}
+            title="Zoom out"
+          >
+            <ZoomOut size={14} />
+          </button>
+          <span className="px-2 text-[10px] font-black uppercase tracking-widest text-text-muted">
+            {preset.label}
+          </span>
+          <button
+            onClick={() => setZoomLevel(prev => Math.min(ZOOM_PRESETS.length - 1, prev + 1))}
+            disabled={zoomLevel === ZOOM_PRESETS.length - 1}
+            className={`p-1.5 rounded-full transition-colors ${zoomLevel === ZOOM_PRESETS.length - 1 ? 'text-text-muted/30 cursor-not-allowed' : 'text-text-muted hover:text-brand-orange hover:bg-white/5'}`}
+            title="Zoom in"
+          >
+            <ZoomIn size={14} />
+          </button>
+        </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div ref={scrollRef} className="overflow-x-auto overflow-y-auto max-h-[65vh]">
         <div style={{ width: totalWidth, minWidth: '100%' }} className="relative">
           {/* Month headers */}
           <div className="flex border-b border-white/10 bg-bg-dark/60 sticky top-0 z-10">
