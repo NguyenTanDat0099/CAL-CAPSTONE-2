@@ -177,16 +177,32 @@ _NUTRITION_KEYS = (
 def _summarize_analysis(analysis: dict) -> dict:
     if not isinstance(analysis, dict):
         return {}
+
+    # Most analysis fields live under `vision_detail` in the pipeline result,
+    # but `dish_name`/`confidence` live at top level. Read both.
+    vd = analysis.get("vision_detail") if isinstance(analysis.get("vision_detail"), dict) else {}
+
+    def _get(key):
+        if analysis.get(key) not in (None, "", []):
+            return analysis[key]
+        if vd.get(key) not in (None, "", []):
+            return vd.get(key)
+        return None
+
     summary = {}
     for key in ("dish_name", "description", "category", "visual_form",
                 "portion_description", "confidence"):
-        value = analysis.get(key)
-        if value not in (None, "", []):
+        value = _get(key)
+        if value is not None:
             summary[key] = value
 
-    ingredients = analysis.get("ingredients") or []
+    ingredients = _get("ingredients") or []
     if isinstance(ingredients, list) and ingredients:
-        summary["ingredients"] = ingredients[:8]
+        summary["ingredients"] = ingredients[:12]
+
+    instructions = _get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        summary["instructions"] = instructions[:1500]
 
     nutrition = analysis.get("nutrition_estimate") or analysis.get("estimated_nutrition") or {}
     if isinstance(nutrition, dict):
@@ -200,11 +216,11 @@ def _summarize_analysis(analysis: dict) -> dict:
         if compact:
             summary["nutrition"] = compact
 
-    uncertainty = analysis.get("uncertainty") or {}
+    uncertainty = _get("uncertainty") or {}
     if isinstance(uncertainty, dict) and uncertainty.get("level"):
         summary["uncertainty"] = uncertainty.get("level")
 
-    possible = analysis.get("possible_dishes") or []
+    possible = _get("possible_dishes") or []
     if isinstance(possible, list) and possible:
         summary["possible_dishes"] = [
             {"name": p.get("name"), "probability": p.get("probability")}
@@ -219,10 +235,19 @@ def build_food_image_answer_prompt(question: str, analysis: dict) -> str:
     summary_json = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
     user_q = question or "Đây là món gì? Hãy phân tích dinh dưỡng và tư vấn."
     return (
-        "Trả lời tự nhiên (tiếng Việt) dựa CHỈ trên dữ liệu phân tích ảnh dưới đây. "
-        "Nếu nutrition null/thiếu: nói rõ chưa đủ dữ liệu và hỏi user mô tả khẩu phần. "
-        "Không bịa số/thành phần ngoài dữ liệu.\n"
+        "QUY TẮC NGÔN NGỮ (BẮT BUỘC):\n"
+        "1. Toàn bộ câu trả lời PHẢI bằng tiếng Việt.\n"
+        "2. KHÔNG được dùng bất kỳ ký tự CJK nào (Trung 中文, Nhật ひらがな/カタカナ/漢字, Hàn 한글). "
+        "Nếu trong câu trả lời xuất hiện ký tự CJK, đó là LỖI.\n"
+        "3. Tên món gốc nếu có (Anh/Pháp/Nhật/Italy) → giữ nguyên chữ Latin, "
+        "phần giải thích/mô tả/đo lường viết bằng tiếng Việt.\n"
+        "4. KHÔNG dùng pinyin (zhānɡ, cài, v.v.) hoặc romaji.\n\n"
+        "QUY TẮC DỮ LIỆU:\n"
+        "- Trả lời CHỈ dựa trên `Phân tích` bên dưới. Không bịa số/bước nấu/thành phần ngoài dữ liệu.\n"
+        "- Khi user hỏi cách nấu/recipe/instructions → dùng trường `instructions` (đã có nguyên bản tiếng Anh, dịch ý sang tiếng Việt khi giải thích).\n"
+        "- Khi user hỏi nguyên liệu → dùng trường `ingredients`.\n"
+        "- Khi nutrition thiếu → nói rõ \"chưa đủ dữ liệu khẩu phần\" và hỏi lại.\n\n"
         f"User hỏi: {user_q}\n"
         f"Phân tích: {summary_json}\n"
-        "Trả lời:"
+        "Trả lời (tiếng Việt thuần, không CJK):"
     )

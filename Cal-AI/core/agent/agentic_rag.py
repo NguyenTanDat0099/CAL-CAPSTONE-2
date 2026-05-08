@@ -625,39 +625,72 @@ class GenericRAGAgent:
             or ""
         )
 
-    def _rerank_score(self, hit, keywords):
+    def _rerank_score(self, hit, keywords, normalized_query=""):
         score = float(getattr(hit, "score", 0) or 0)
         payload = hit.payload or {}
-        if not keywords:
-            return score
 
         name = unicodedata.normalize("NFKD", self._display_name(payload))
         name = "".join(ch for ch in name if not unicodedata.combining(ch))
-        name = name.replace("đ", "d").lower()
-        collection = str(payload.get("source_collection") or "")
+        name = name.replace("đ", "d").lower().strip()
 
         bonus = 0
-        for keyword in keywords:
-            keyword = keyword.lower()
-            if name == keyword:
-                bonus += 0.35
-            elif re.search(r"(?<![a-z0-9])" + re.escape(keyword) + r"(?![a-z0-9])", name):
-                bonus += 0.12
-        if collection == "food_fruit_vectors_768":
-            bonus += 0.08
+        # Title appearing literally inside the user query (e.g. user typed
+        # "thông tin về Broiled Salmon Steaks") — strong signal that this
+        # specific dish is what they want, not just a salmon recipe.
+        if name and len(name) >= 5 and normalized_query and name in normalized_query:
+            bonus += 0.30
+
+        if keywords:
+            collection = str(payload.get("source_collection") or "")
+            for keyword in keywords:
+                keyword = keyword.lower()
+                if name == keyword:
+                    bonus += 0.35
+                elif re.search(r"(?<![a-z0-9])" + re.escape(keyword) + r"(?![a-z0-9])", name):
+                    bonus += 0.12
+            if collection == "food_fruit_vectors_768":
+                bonus += 0.08
 
         return score + bonus
+
+    def _normalize_query(self, query):
+        text = unicodedata.normalize("NFKD", str(query or ""))
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        return text.replace("đ", "d").lower()
+
+    def _proper_noun_phrase(self, query):
+        # Sequences of ≥2 Title-Cased ASCII words look like English dish/recipe
+        # names (e.g. "Broiled Salmon Steaks"). When the user wraps such a name
+        # in Vietnamese filler ("Cho mình thông tin về Broiled Salmon Steaks"),
+        # embedding the full sentence drifts the vector off-target; pulling the
+        # proper-noun phrase gives a precise retrieval anchor.
+        matches = re.findall(
+            r"\b([A-Z][a-zA-Z]+(?:\s+(?:[A-Z][a-zA-Z]+|and|with|of|in|the|a))+)\b",
+            str(query or "")
+        )
+        if not matches:
+            return None
+        return max(matches, key=lambda m: (m.count(" "), len(m)))
 
     def _search_hits(self, query, top_k, collections=None, per_collection=None):
         expanded_query = self._expand_query(query)
         keywords = self._query_keywords(query)
+        normalized_query = self._normalize_query(query)
+        proper_noun = self._proper_noun_phrase(query)
 
-        vector = self.text_embed.embed(expanded_query)
+        # When the user names a specific dish (Title-Cased English phrase),
+        # embed THAT instead of the full sentence — Vietnamese instruction
+        # prefixes otherwise pull the embedding away from the exact recipe.
+        embed_target = proper_noun if proper_noun else expanded_query
+        vector = self.text_embed.embed(embed_target)
         if vector is None:
             return []
 
         collections = collections or self._text_collections()
-        per_collection = per_collection or max(1, min(4, top_k))
+        # Floor of 6 so a specific-dish query has enough candidates per
+        # collection for the title-match rerank to surface the exact match,
+        # rather than competing with same-keyword neighbors at top_k=3.
+        per_collection = per_collection or max(2, min(8, max(top_k, 6)))
 
         def _search_one(collection):
             results = []
@@ -683,7 +716,10 @@ class GenericRAGAgent:
             except Exception as exc:
                 print("❌ Parallel collection search error:", exc)
 
-        hits.sort(key=lambda hit: self._rerank_score(hit, keywords), reverse=True)
+        hits.sort(
+            key=lambda hit: self._rerank_score(hit, keywords, normalized_query),
+            reverse=True
+        )
         return hits[:top_k]
 
     def run(self, query, top_k, trace, collections=None, per_collection=None):

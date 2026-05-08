@@ -10,6 +10,7 @@ __pycache__/
 # VIRTUAL ENV
 # =========================
 venv/
+venv-train/
 .venv/
 env/
 ENV/

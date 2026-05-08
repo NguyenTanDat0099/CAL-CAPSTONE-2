@@ -28,6 +28,7 @@ from data.kaggle.utils import find_all_csv_files, load_csv_safe
 DATASET = settings.RECIPE_IMAGE_DATASET
 COLLECTION = settings.RECIPE_IMAGE_DATASET_COLLECTION
 DOMAIN = settings.RECIPE_IMAGE_META_DOMAIN
+IMAGE_ROOT = ROOT_DIR / "data" / "storage" / "images"
 
 REQUIRED_COLUMNS = {
     "Title",
@@ -387,7 +388,7 @@ def run(
 
     dataset_path = kagglehub.dataset_download(DATASET)
     csv_file = find_recipe_csv(dataset_path)
-    image_index = build_image_index(dataset_path)
+    image_index = build_image_index(IMAGE_ROOT)
     df = load_csv_safe(csv_file)
     if df is None:
         raise ValueError("Could not load recipe CSV.")

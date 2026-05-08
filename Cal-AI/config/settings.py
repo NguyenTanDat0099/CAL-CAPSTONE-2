@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     IMAGE_CLASSIFIER_ENABLED: bool = True
     IMAGE_CLASSIFIER_BACKBONE: str = "yolov8s+unet+resnet50+clip-vit"
     IMAGE_CLASSIFIER_MODEL: str = "openai/clip-vit-base-patch32"
+    # LoRA fine-tune for CLIP vision tower. Empty path disables and falls
+    # back to the base model. Adapter directory must contain the PEFT
+    # adapter_config.json + adapter weights produced by
+    # training/train_clip_lora.py.
+    CLIP_LORA_PATH: str = "models/clip-food-lora"
+    CLIP_LORA_ENABLED: bool = True
     IMAGE_CLASSIFIER_CNN_ENABLED: bool = True
     IMAGE_CLASSIFIER_CNN_MODEL: str = "torchvision/resnet50-imagenet1k"
     IMAGE_CLASSIFIER_TOP_K: int = 5

@@ -484,10 +484,13 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
 
     async def answer_food_image(self, question, analysis):
         prompt = build_food_image_answer_prompt(question=question, analysis=analysis)
+        # Recipe questions need to fit dish + ingredients (12) + instructions
+        # (~1500 chars) + Vietnamese reasoning. 384 tokens (the global default)
+        # was returning empty bodies once the prompt included instructions.
         text = await self._call_llm(
             prompt,
             temperature=0.2,
-            num_predict=settings.LLM_NUM_PREDICT
+            num_predict=max(settings.LLM_NUM_PREDICT, 800)
         )
         if isinstance(text, dict):
             return None

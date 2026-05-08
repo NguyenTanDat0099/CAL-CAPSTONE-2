@@ -1,8 +1,10 @@
+import os
 import torch
 import hashlib
 import numpy as np
 import json
 from transformers import CLIPProcessor, CLIPModel
+from config.settings import settings
 from core.services.cache.redis_cache import RedisCache
 
 
@@ -11,13 +13,36 @@ class CLIPService:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        self.processor = CLIPProcessor.from_pretrained(
-            "openai/clip-vit-base-patch32"
-        )
-        self.model = CLIPModel.from_pretrained(
-            "openai/clip-vit-base-patch32"
-        ).to(self.device)
-        self.model.eval()
+        base_model = settings.IMAGE_CLASSIFIER_MODEL or "openai/clip-vit-base-patch32"
+        self.processor = CLIPProcessor.from_pretrained(base_model)
+        self.model = CLIPModel.from_pretrained(base_model)
+
+        lora_path = settings.CLIP_LORA_PATH
+        if (
+            settings.CLIP_LORA_ENABLED
+            and lora_path
+            and os.path.isdir(lora_path)
+            and os.path.isfile(os.path.join(lora_path, "adapter_config.json"))
+        ):
+            try:
+                from peft import PeftModel
+                self.model.vision_model = PeftModel.from_pretrained(
+                    self.model.vision_model, lora_path
+                )
+                # Merge adapter into base weights so inference path is the
+                # plain CLIPModel forward (no peft overhead, no extra deps
+                # on the API server). Requires peft>=0.11.
+                if hasattr(self.model.vision_model, "merge_and_unload"):
+                    self.model.vision_model = self.model.vision_model.merge_and_unload()
+                self._lora_loaded = lora_path
+                print(f"[CLIPService] loaded LoRA adapter: {lora_path}")
+            except Exception as exc:
+                print(f"[CLIPService] LoRA load failed ({lora_path}): {exc!r} — using base model")
+                self._lora_loaded = None
+        else:
+            self._lora_loaded = None
+
+        self.model.to(self.device).eval()
 
         self.cache = RedisCache()
 
