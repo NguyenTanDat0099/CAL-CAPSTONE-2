@@ -94,7 +94,12 @@ class Settings(BaseSettings):
     REDIS_CACHE_COMPRESS_MIN_BYTES: int = 2048
     REDIS_CACHE_MAX_VALUE_BYTES: int = 250000
     AGENTIC_CACHE_TTL: int = 1800
-    AGENTIC_CACHE_ENABLED: bool = False
+    AGENTIC_CACHE_ENABLED: bool = True
+    EMBED_CACHE_TTL: int = 86400
+    EMBED_CACHE_ENABLED: bool = True
+    # L1 (in-process) embedding cache — hit cost ≈ μs, much faster than the
+    # cloud Redis RTT (~270ms from VN). 256 entries × ~6 KB ≈ 1.5 MB / worker.
+    EMBED_L1_CACHE_SIZE: int = 256
 
     VISION_MODEL: str = "llava:7b"
     VISION_API_URL: str = "http://localhost:11434/api/generate"

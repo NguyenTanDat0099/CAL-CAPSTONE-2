@@ -158,9 +158,41 @@ class LLMService:
     PAYLOAD_NAME_KEYS = (
         "title", "Name", "Shrt_Desc", "recipe_name", "name", "dish_name",
         "food", "food_name", "product_name",
+        "ingredient_name",  # nutrition5k
         "Activity, Exercise or Sport (1 hour)", "Activity", "Subtype",
         "Drink", "Drink_Name", "beverage_name", "Beverage",
         "Fruit", "Vegetable", "Disease", "Habit",
+    )
+
+    PAYLOAD_PRIORITY_KEYS = (
+        # ingredients / composition (multiple shapes across collections)
+        "ingredients", "ingredients_list", "cleaned_ingredients", "cleaned_ingredients_list",
+        "ingredients_search", "Ingredients", "ingredient_list",
+        "ingredient_name",  # nutrition5k row-level
+        "description", "Long_Desc", "recipe_steps", "directions", "instructions",
+        "instructions_preview",  # recipes_64k / food_recipe_images_text
+        "image_caption",
+        # macros (numeric) — top-level + nutrition5k _g aliases
+        "calories", "Calories", "Caloric Value", "Energ_Kcal", "energy", "energy_kcal",
+        "energy-kcal_100g", "energy_100g",
+        "protein", "Protein", "Protein_(g)", "proteins_100g", "protein_g",
+        "carbohydrate", "carbs", "Carbohydrates", "Carbohydrt_(g)", "carbohydrates_100g", "carbs_g",
+        "fat", "Fat", "total_fat", "Lipid_Tot_(g)", "fat_100g", "fat_g",
+        "fiber", "Fiber_TD_(g)", "fiber_100g", "Sugar_Tot_(g)", "sugar_100g",
+        "Sodium_(mg)", "sodium_100g", "salt_100g",
+        # nested nutrition dict (Nutrition5k) — preserved as-is so LLM sees full block
+        "nutrition",
+        # micros / vitamins
+        "Vit_C_(mg)", "Vit_A_RAE", "Vit_A_IU", "Vit_D_IU", "Vit_E_(mg)",
+        "Calcium_(mg)", "Iron_(mg)", "Magnesium_(mg)", "Potassium_(mg)",
+        "Zinc_(mg)", "Cholestrl_(mg)",
+        # serving
+        "serving_size", "GmWt_Desc1", "GmWt_1", "portion",
+        "mass_g", "mass", "weight_g",
+        # taxonomy / recipe meta
+        "category", "cuisine", "cook_time", "meal_slot", "comparison_term",
+        "cooking_method", "record_type", "dish_id",
+        "source_collection", "source_dataset", "source_table",
     )
 
     def _is_noise_key(self, key):
@@ -197,7 +229,7 @@ class LLMService:
                 result.append(self._safe_value(item))
         return result
 
-    def _compact_agentic_context(self, context, limit=6, max_fields=24):
+    def _compact_agentic_context(self, context, limit=6, max_fields=32):
         if not context:
             return []
 
@@ -213,12 +245,11 @@ class LLMService:
             if name_key:
                 item["name"] = name_value
 
-            for key, value in payload.items():
-                if key in item or key == name_key:
-                    continue
+            def _add(key, value):
+                if key in item:
+                    return
                 if self._is_noise_key(key) or self._is_noise_value(value):
-                    continue
-
+                    return
                 if isinstance(value, (list, tuple)):
                     item[key] = self._shrink_list(value)
                 elif isinstance(value, dict):
@@ -230,12 +261,66 @@ class LLMService:
                 else:
                     item[key] = self._safe_value(value)
 
+            # Priority pass: load high-value fields first so they survive max_fields cap.
+            for key in self.PAYLOAD_PRIORITY_KEYS:
+                if key == name_key:
+                    continue
+                if key in payload:
+                    _add(key, payload[key])
                 if len(item) >= max_fields:
                     break
+
+            # Fallback pass: any remaining payload field within budget.
+            if len(item) < max_fields:
+                for key, value in payload.items():
+                    if key == name_key or key in item:
+                        continue
+                    _add(key, value)
+                    if len(item) >= max_fields:
+                        break
 
             compacted.append(item)
 
         return compacted
+
+    # Aliases used to extract macros from heterogeneous payload shapes.
+    # Mirror agentic_rag.MACRO_*_KEYS so the LLM serializer agrees with the agent.
+    METRIC_KEY_GROUPS = (
+        ("kcal", (
+            "calories", "Calories", "Caloric Value", "kcal",
+            "Energ_Kcal", "energy", "energy_kcal",
+            "energy-kcal_100g", "energy_100g",
+        )),
+        ("protein", (
+            "protein", "Protein", "Protein_(g)", "proteins_100g",
+            "protein_g", "protein_grams",
+        )),
+        ("carb", (
+            "carbohydrate", "carbs", "Carbohydrates", "Carbohydrt_(g)",
+            "carbohydrates_100g", "carbs_g", "carb", "carbs_grams",
+        )),
+        ("fat", (
+            "fat", "Fat", "total_fat", "Lipid_Tot_(g)", "fat_100g",
+            "fat_g", "fat_grams",
+        )),
+        ("serving", (
+            "serving_size", "GmWt_Desc1", "GmWt_1", "portion",
+            "mass_g", "mass", "weight_g", "weight",
+        )),
+    )
+
+    def _lookup_payload_value(self, item, keys):
+        """Pull first present value among `keys`, with fallback to nested
+        `nutrition` dict (Nutrition5k stores macros under `payload['nutrition']`).
+        """
+        nested = item.get("nutrition") if isinstance(item.get("nutrition"), dict) else None
+        for key in keys:
+            value = item.get(key)
+            if value in (None, "") and nested is not None:
+                value = nested.get(key)
+            if value not in (None, ""):
+                return value
+        return None
 
     def _context_lines(self, context):
         lines = []
@@ -248,35 +333,26 @@ class LLMService:
                 item.get("name")
                 or item.get("food")
                 or item.get("title")
+                or item.get("ingredient_name")
                 or item.get("Activity")
                 or item.get("Activity, Exercise or Sport (1 hour)")
                 or "item"
             )
             metrics = []
-            for label, keys in [
-                ("kcal", ["calories", "Caloric Value", "Energ_Kcal", "energy-kcal_100g"]),
-                ("protein", ["protein", "Protein", "Protein_(g)", "proteins_100g"]),
-                ("carb", ["carbohydrate", "carbs", "Carbohydrates", "Carbohydrt_(g)", "carbohydrates_100g"]),
-                ("fat", ["fat", "Fat", "total_fat", "Lipid_Tot_(g)", "fat_100g"]),
-                ("serving", ["serving_size", "GmWt_Desc1"]),
-            ]:
-                for key in keys:
-                    value = item.get(key)
-                    if value not in (None, ""):
-                        metrics.append(f"{label}={value}")
-                        break
+            for label, keys in self.METRIC_KEY_GROUPS:
+                value = self._lookup_payload_value(item, keys)
+                if value is not None:
+                    metrics.append(f"{label}={value}")
             lines.append(f"{index}. {name}: {', '.join(metrics) if metrics else 'no numeric metrics'}")
         return "\n".join(lines)
 
     def _first_metric(self, item, keys):
-        for key in keys:
-            value = item.get(key)
-            if value not in (None, ""):
-                return value
-        return "—"
+        value = self._lookup_payload_value(item, keys)
+        return value if value is not None else "—"
 
     def _context_metric_table(self, context):
         rows = ["name | serving | kcal | protein | carb | fat"]
+        metric_lookup = dict(self.METRIC_KEY_GROUPS)
         for item in context or []:
             if not isinstance(item, dict):
                 continue
@@ -284,6 +360,7 @@ class LLMService:
                 item.get("name")
                 or item.get("food")
                 or item.get("title")
+                or item.get("ingredient_name")
                 or item.get("Activity")
                 or item.get("Activity, Exercise or Sport (1 hour)")
                 or "item"
@@ -291,11 +368,11 @@ class LLMService:
             rows.append(
                 " | ".join(str(value) for value in [
                     name,
-                    self._first_metric(item, ["serving_size", "GmWt_Desc1"]),
-                    self._first_metric(item, ["calories", "Caloric Value", "Energ_Kcal", "energy-kcal_100g"]),
-                    self._first_metric(item, ["protein", "Protein", "Protein_(g)", "proteins_100g"]),
-                    self._first_metric(item, ["carbohydrate", "carbs", "Carbohydrates", "Carbohydrt_(g)", "carbohydrates_100g"]),
-                    self._first_metric(item, ["fat", "Fat", "total_fat", "Lipid_Tot_(g)", "fat_100g"]),
+                    self._first_metric(item, metric_lookup["serving"]),
+                    self._first_metric(item, metric_lookup["kcal"]),
+                    self._first_metric(item, metric_lookup["protein"]),
+                    self._first_metric(item, metric_lookup["carb"]),
+                    self._first_metric(item, metric_lookup["fat"]),
                 ])
             )
         return "\n".join(rows)
@@ -436,9 +513,11 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
             user_profile_text=user_profile_text
         )
         if intent == "meal_planning":
-            num_predict = max(settings.LLM_NUM_PREDICT, 700)
+            num_predict = max(settings.LLM_NUM_PREDICT, 1100)
         elif intent == "weight_projection":
             num_predict = max(settings.LLM_NUM_PREDICT, 500)
+        elif intent == "nutrition_qa":
+            num_predict = max(settings.LLM_NUM_PREDICT, 600)
         else:
             num_predict = max(settings.LLM_NUM_PREDICT, 400)
         text = await self._call_llm(

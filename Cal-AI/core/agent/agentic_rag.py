@@ -1,8 +1,10 @@
 import hashlib
 import json
 import re
+import threading
 import unicodedata
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 from config.settings import settings
 from core.embedding.text_embedding_service import TextEmbeddingService
@@ -12,19 +14,33 @@ from core.services.rag.recipe_image_rag_service import RecipeImageRAGService
 from core.services.retrieval.qdrant_service import QdrantService
 
 
+# Shared executor: per-collection Qdrant searches are I/O bound HTTP calls and
+# fan out across ~20 collections per query, so running them sequentially is the
+# dominant latency cost. A separate, smaller pool drives meal-planning sub-seeds
+# so they can't starve the search pool when both layers fan out at once.
+_QDRANT_SEARCH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=32, thread_name_prefix="qdrant-search"
+)
+_AGENT_FANOUT_EXECUTOR = ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="agent-fanout"
+)
+
+
 class AgenticTrace:
     def __init__(self):
         self.steps = []
+        self._lock = threading.Lock()
 
     def add(self, title, text, status="done", evidence=None, detail=None):
-        self.steps.append({
-            "step": len(self.steps) + 1,
-            "title": title,
-            "text": text,
-            "status": status,
-            "evidence": evidence or [],
-            "detail": detail
-        })
+        with self._lock:
+            self.steps.append({
+                "step": len(self.steps) + 1,
+                "title": title,
+                "text": text,
+                "status": status,
+                "evidence": evidence or [],
+                "detail": detail
+            })
 
 
 TOPIC_REGISTRY = {
@@ -103,6 +119,32 @@ TOPIC_REGISTRY = {
 }
 
 BEVERAGE_PHRASES = TOPIC_REGISTRY["beverage"]["phrases"]
+
+
+# Macro field aliases shared across collections. _numeric_metric also falls back
+# to a nested `nutrition` dict so Nutrition5k payloads (e.g. nutrition.protein_g)
+# resolve through the same key list.
+MACRO_CALORIE_KEYS = (
+    "Caloric Value", "calories", "Calories", "kcal",
+    "Energ_Kcal", "energy", "energy_kcal",
+    "energy-kcal_100g", "energy_100g",
+)
+MACRO_PROTEIN_KEYS = (
+    "protein", "Protein", "Protein_(g)", "proteins_100g",
+    "protein_g", "protein_grams",
+)
+MACRO_CARBS_KEYS = (
+    "carbohydrate", "carbs", "Carbohydrates", "Carbohydrt_(g)",
+    "carbohydrates_100g", "carbs_g", "carb", "carbs_grams",
+)
+MACRO_FAT_KEYS = (
+    "fat", "Fat", "total_fat", "Lipid_Tot_(g)", "fat_100g",
+    "fat_g", "fat_grams",
+)
+MACRO_SERVING_KEYS = (
+    "serving_size", "GmWt_Desc1", "GmWt_1", "portion",
+    "mass_g", "mass", "weight_g", "weight",
+)
 
 
 def _normalize_for_topic(text):
@@ -255,6 +297,7 @@ class CitationBuilder:
         "dish_name", "Dish_Name", "dish",
         "food_name", "Food_Name", "Food", "Food_Item", "food",
         "product_name", "Product_Name", "product",
+        "ingredient_name",  # nutrition5k row-level
         "drink", "Drink", "Drink_Name", "beverage_name", "Beverage",
         "exercise_name", "Exercise", "Activity", "activity_name",
         "Disease", "disease_name", "Habit", "habit_name",
@@ -576,6 +619,7 @@ class GenericRAGAgent:
             or payload.get("food_name")
             or payload.get("product_name")
             or payload.get("food")
+            or payload.get("ingredient_name")
             or payload.get("Fruit")
             or payload.get("Shrt_Desc")
             or ""
@@ -613,9 +657,10 @@ class GenericRAGAgent:
             return []
 
         collections = collections or self._text_collections()
-        hits = []
         per_collection = per_collection or max(1, min(4, top_k))
-        for collection in collections:
+
+        def _search_one(collection):
+            results = []
             for hit in self.qdrant.search(
                 collection_name=collection,
                 vector=vector,
@@ -624,7 +669,19 @@ class GenericRAGAgent:
                 payload = dict(hit.payload or {})
                 payload.setdefault("source_collection", collection)
                 hit.payload = payload
-                hits.append(hit)
+                results.append(hit)
+            return results
+
+        futures = [
+            _QDRANT_SEARCH_EXECUTOR.submit(_search_one, collection)
+            for collection in collections
+        ]
+        hits = []
+        for future in futures:
+            try:
+                hits.extend(future.result())
+            except Exception as exc:
+                print("❌ Parallel collection search error:", exc)
 
         hits.sort(key=lambda hit: self._rerank_score(hit, keywords), reverse=True)
         return hits[:top_k]
@@ -873,10 +930,10 @@ class RecipeAgent:
         if vector is None:
             return []
 
-        hits = []
-        for collection in self.RECIPE_TEXT_COLLECTIONS:
+        def _search_one(collection):
+            results = []
             try:
-                results = self.rag.client.search(
+                response = self.rag.client.search(
                     collection_name=collection,
                     query_vector=vector,
                     limit=top_k,
@@ -884,12 +941,21 @@ class RecipeAgent:
                 )
             except Exception as exc:
                 print(f"❌ Recipe text search error ({collection}):", exc)
-                continue
-            for hit in results:
+                return results
+            for hit in response:
                 payload = dict(hit.payload or {})
                 payload.setdefault("source_collection", collection)
                 hit.payload = payload
-                hits.append(hit)
+                results.append(hit)
+            return results
+
+        futures = [
+            _QDRANT_SEARCH_EXECUTOR.submit(_search_one, collection)
+            for collection in self.RECIPE_TEXT_COLLECTIONS
+        ]
+        hits = []
+        for future in futures:
+            hits.extend(future.result())
         return hits
 
     def _format_text_recipe_hits(self, hits):
@@ -1188,18 +1254,33 @@ class AgenticRAG:
             f"Câu hỏi hiện tại: {query}"
         )
 
-    def _cache_key(self, query, top_k, intent, session_id=None, conversation_context=None):
+    def _cache_key(
+        self,
+        query,
+        top_k,
+        intent,
+        session_id=None,
+        conversation_context=None,
+        user_profile_text=None,
+    ):
         context_digest = hashlib.sha1(
             str(conversation_context or "")[-1600:].encode("utf-8")
+        ).hexdigest()[:12]
+        # Profile drives personalization (allergies, goals, kcal target). Two
+        # users asking the same query must NOT share an answer if their
+        # profiles differ — fold the profile into the key.
+        profile_digest = hashlib.sha1(
+            str(user_profile_text or "").encode("utf-8")
         ).hexdigest()[:12]
         raw = "|".join([
             str(session_id or "global"),
             self.router._normalize(query),
             str(top_k),
             str(intent or ""),
-            context_digest
+            context_digest,
+            profile_digest,
         ])
-        return "agentic_rag:v8:" + hashlib.sha1(raw.encode("utf-8")).hexdigest()
+        return "agentic_rag:v9:" + hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
     def _cache_get(self, key):
         cached = self.cache.get(key)
@@ -1342,8 +1423,23 @@ class AgenticRAG:
         return min(max_days, 90)
 
     def _numeric_metric(self, payload, keys):
+        """Look up first numeric value among `keys` in payload.
+
+        Tries top-level fields first, then falls back to nested `nutrition` dict
+        (used by Nutrition5k payloads where macros live under `nutrition.protein_g`).
+        Accepts both numeric values and embedded numbers in strings (e.g. "12.4g").
+        """
+        if not payload:
+            return None
+        nested = payload.get("nutrition") if isinstance(payload, dict) else None
+        if not isinstance(nested, dict):
+            nested = None
+
         for key in keys:
-            value = (payload or {}).get(key)
+            value = payload.get(key)
+            if value in (None, ""):
+                if nested is not None:
+                    value = nested.get(key)
             if value in (None, ""):
                 continue
             if isinstance(value, (int, float)):
@@ -1366,16 +1462,18 @@ class AgenticRAG:
                 or payload.get("name")
                 or payload.get("Shrt_Desc")
                 or payload.get("title")
+                or payload.get("recipe_name")
+                or payload.get("ingredient_name")
                 or ""
             )
             normalized_name = self.router._normalize(name)
             if any(term in normalized_name for term in blocked_terms):
                 continue
 
-            protein = self._numeric_metric(payload, ["Protein", "protein", "Protein_(g)", "proteins_100g"])
-            carbs = self._numeric_metric(payload, ["Carbohydrates", "carbohydrate", "carbs", "Carbohydrt_(g)", "carbohydrates_100g"])
-            fat = self._numeric_metric(payload, ["Fat", "fat", "total_fat", "Lipid_Tot_(g)", "fat_100g"])
-            calories = self._numeric_metric(payload, ["Caloric Value", "calories", "Energ_Kcal", "energy-kcal_100g"])
+            protein = self._numeric_metric(payload, MACRO_PROTEIN_KEYS)
+            carbs = self._numeric_metric(payload, MACRO_CARBS_KEYS)
+            fat = self._numeric_metric(payload, MACRO_FAT_KEYS)
+            calories = self._numeric_metric(payload, MACRO_CALORIE_KEYS)
             if strict:
                 if protein is None or carbs is None or calories is None:
                     continue
@@ -1408,6 +1506,85 @@ class AgenticRAG:
         )
         return results[:top_k]
 
+    def _build_food_confidence(self, results):
+        """Compute per-item confidence (high/medium/low) for the front-end badge.
+        Score = macro completeness (kcal + P + C + F) + retrieval score + dataset reputation."""
+        if not results:
+            return []
+
+        macro_keys = {
+            "calories": MACRO_CALORIE_KEYS,
+            "protein": MACRO_PROTEIN_KEYS,
+            "carbs": MACRO_CARBS_KEYS,
+            "fat": MACRO_FAT_KEYS,
+        }
+        trusted_collections = {
+            "food_nutrition_vectors_768",
+            "food_common_vectors_768",
+            "food_fruit_vectors_768",
+            "nutrition5k_vectors_768",
+            "food_nutrition_dev_vectors_768",
+            "food_global_10k_vectors_768",
+        }
+
+        confidences = []
+        for result in results:
+            payload = result.get("payload") or {}
+            name = (
+                payload.get("name")
+                or payload.get("food")
+                or payload.get("Shrt_Desc")
+                or payload.get("title")
+                or payload.get("recipe_name")
+                or payload.get("food_name")
+                or payload.get("ingredient_name")  # nutrition5k
+                or payload.get("dish_name")
+            )
+            if not name:
+                continue
+
+            macro_present = sum(
+                1
+                for keys in macro_keys.values()
+                if self._numeric_metric(payload, keys) is not None
+            )
+            retrieval_score = float(result.get("score") or 0)
+            collection = str(payload.get("source_collection") or "")
+            trusted = collection in trusted_collections
+
+            score = macro_present  # 0..4
+            if retrieval_score >= 0.55:
+                score += 1
+            if trusted:
+                score += 1
+
+            if score >= 5:
+                level = "high"
+            elif score >= 3:
+                level = "medium"
+            else:
+                level = "low"
+
+            reasons = []
+            reasons.append(f"{macro_present}/4 macros có dữ liệu")
+            if retrieval_score:
+                reasons.append(f"retrieval score {retrieval_score:.2f}")
+            if trusted:
+                reasons.append("nguồn được xếp hạng cao")
+            elif collection:
+                reasons.append(f"nguồn {collection}")
+
+            confidences.append({
+                "name": str(name).strip(),
+                "level": level,
+                "macros_present": macro_present,
+                "retrieval_score": round(retrieval_score, 3),
+                "source_collection": collection or None,
+                "reasons": reasons,
+            })
+
+        return confidences
+
     def _format_user_profile(self, user_profile):
         if not user_profile or not isinstance(user_profile, dict):
             return None
@@ -1426,6 +1603,28 @@ class AgenticRAG:
             value = user_profile.get(key)
             if value is not None and value != "":
                 parts.append(f"{label}: {value}")
+
+        prefs = user_profile.get("foodPreferences") or []
+        if isinstance(prefs, list) and prefs:
+            buckets = {"favorite": [], "avoided": [], "disliked": [], "allergy": []}
+            for pref in prefs:
+                if not isinstance(pref, dict):
+                    continue
+                ptype = pref.get("type")
+                name = (pref.get("foodName") or "").strip()
+                if not name or ptype not in buckets:
+                    continue
+                if len(buckets[ptype]) < 8:
+                    buckets[ptype].append(name)
+            label_map = [
+                ("favorite", "Món hay ăn"),
+                ("avoided", "Né"),
+                ("disliked", "Không thích"),
+                ("allergy", "Dị ứng (TUYỆT ĐỐI không gợi ý)"),
+            ]
+            for key, label in label_map:
+                if buckets[key]:
+                    parts.append(f"{label}: {', '.join(buckets[key])}")
         return "\n".join(parts) if parts else None
 
     async def run(
@@ -1454,18 +1653,18 @@ class AgenticRAG:
                 evidence=profile_text.split("\n")[:6]
             )
 
-        use_cache = (
-            bool(settings.AGENTIC_CACHE_ENABLED)
-            and not session_id
-            and not conversation_context
-            and not is_follow_up
-        )
+        # Cache key digests session_id + normalized query + intent + a hash of
+        # the last 1.6 KB of conversation context (see _cache_key), so it is
+        # safe to cache per-session and per-follow-up. We only opt out when the
+        # user is clearly mid-conversation about a freshly mutating profile.
+        use_cache = bool(settings.AGENTIC_CACHE_ENABLED)
         cache_key = self._cache_key(
             query=query,
             top_k=top_k,
             intent=routed_intent,
             session_id=session_id,
-            conversation_context=conversation_context
+            conversation_context=conversation_context,
+            user_profile_text=profile_text,
         )
         cached = self._cache_get(cache_key) if use_cache else None
         if cached:
@@ -1563,8 +1762,9 @@ class AgenticRAG:
             elif multi_day:
                 slots = ["breakfast", "lunch", "dinner", "beverage"]
             else:
-                slots = [None]
+                slots = ["breakfast", "lunch", "dinner", "beverage"]
 
+            full_day_plan = not meal_type
             trace.add(
                 "Meal planning intent",
                 f"Lập kế hoạch bữa ăn (horizon ≈ {horizon_days} ngày, slots = {slots}). Agent truy xuất dữ liệu dinh dưỡng cho từng bữa trước khi sinh câu trả lời.",
@@ -1572,7 +1772,8 @@ class AgenticRAG:
                 detail=(
                     "Đa-bữa: với mỗi slot chạy nhiều sub-seed (oats/eggs/yogurt/...) để lấy món đa dạng thay vì cluster theo 1 vector."
                     if multi_day else
-                    "Đơn-bữa: 1 sub-query với seed của bữa được hỏi."
+                    ("Đơn-ngày full combo: chạy retrieval riêng cho 4 slot (sáng/trưa/tối/đồ uống) để LLM có ≥3 món/bữa thay vì 1."
+                     if full_day_plan else "Đơn-bữa: 1 sub-query với seed của bữa được hỏi.")
                 )
             )
 
@@ -1589,6 +1790,8 @@ class AgenticRAG:
                     or payload.get("food")
                     or payload.get("Shrt_Desc")
                     or payload.get("title")
+                    or payload.get("recipe_name")
+                    or payload.get("ingredient_name")
                 )
                 key = (
                     payload.get("source_collection"),
@@ -1603,36 +1806,57 @@ class AgenticRAG:
                 new_item["payload"] = payload
                 aggregated.append(new_item)
 
-            if multi_day:
+            if multi_day or full_day_plan:
                 per_subseed_top_k = 4
                 per_collection_for_subseed = 2
+                sub_seeds_per_slot = 3 if multi_day else 2
+                sub_seed_jobs = []
                 for slot in slots:
-                    sub_seeds = self.SLOT_SUBSEEDS.get(slot, [])[:3]
+                    sub_seeds = self.SLOT_SUBSEEDS.get(slot, [])[:sub_seeds_per_slot]
                     if not sub_seeds:
                         sub_seeds = [
                             self.BEVERAGE_SLOT_SEED if slot == "beverage"
                             else self.MEAL_TYPE_SEEDS.get(slot, self.GENERIC_MEAL_SEED)
                         ]
                     for sub_seed in sub_seeds:
-                        sub_query = f"{retrieval_query}\n{sub_seed}"
-                        sub_results = generic_agent.run(
-                            sub_query,
-                            per_subseed_top_k,
-                            trace,
-                            collections=collections,
-                            per_collection=per_collection_for_subseed,
+                        sub_seed_jobs.append(
+                            (slot, f"{retrieval_query}\n{sub_seed}")
                         )
-                        for item in sub_results:
-                            _record(item, slot)
+
+                # Fan out sub-seeds via the agent pool; each job further fans
+                # collection searches out via the search pool, so the two
+                # layers don't deadlock on a single executor.
+                sub_futures = [
+                    _AGENT_FANOUT_EXECUTOR.submit(
+                        generic_agent.run,
+                        sub_query,
+                        per_subseed_top_k,
+                        trace,
+                        collections=collections,
+                        per_collection=per_collection_for_subseed,
+                    )
+                    for _, sub_query in sub_seed_jobs
+                ]
+                for (slot, _), future in zip(sub_seed_jobs, sub_futures):
+                    try:
+                        sub_results = future.result()
+                    except Exception as exc:
+                        print(f"❌ Meal planning sub-seed error ({slot}):", exc)
+                        continue
+                    for item in sub_results:
+                        _record(item, slot)
                 trace.add(
                     "Meal planning aggregation",
-                    f"Đã gom {len(aggregated)} món duy nhất từ {sum(len(self.SLOT_SUBSEEDS.get(s, [s])) for s in slots)} sub-seed × {len(slots)} slot.",
+                    f"Đã gom {len(aggregated)} món duy nhất từ {sum(min(sub_seeds_per_slot, len(self.SLOT_SUBSEEDS.get(s, [s]))) for s in slots)} sub-seed × {len(slots)} slot.",
                     evidence=[
                         str((item.get('payload') or {}).get('name') or (item.get('payload') or {}).get('food') or (item.get('payload') or {}).get('Shrt_Desc'))
                         for item in aggregated[:8]
                     ]
                 )
-                target_count = max(top_k, min(60, horizon_days * 2))
+                if multi_day:
+                    target_count = max(top_k, min(60, horizon_days * 4))
+                else:
+                    target_count = max(top_k, 16)  # full-day combo: ≥3 món × 4 bữa + dự phòng
                 results = self._meal_planning_results(
                     aggregated, target_count, trace, strict=False
                 )
@@ -1641,13 +1865,13 @@ class AgenticRAG:
                 slot_query = f"{retrieval_query}\n{seed}"
                 slot_results = generic_agent.run(
                     slot_query,
-                    top_k,
+                    max(top_k, 8),
                     trace,
                     collections=collections,
                 )
                 for item in slot_results:
                     _record(item, slots[0])
-                results = self._meal_planning_results(aggregated, top_k, trace)
+                results = self._meal_planning_results(aggregated, max(top_k, 8), trace, strict=False)
         elif routed_intent == "weight_projection":
             trace.add(
                 "Weight projection intent",
@@ -1697,6 +1921,8 @@ class AgenticRAG:
             user_profile_text=profile_text
         )
 
+        food_confidence = self._build_food_confidence(results)
+
         response = {
             "type": "agentic_rag",
             "intent": routed_intent,
@@ -1704,6 +1930,7 @@ class AgenticRAG:
             "results": results,
             "citations": citations,
             "context_used": context[:5],
+            "food_confidence": food_confidence,
             "trace": trace.steps,
             "session_id": session_id,
             "cache_hit": False

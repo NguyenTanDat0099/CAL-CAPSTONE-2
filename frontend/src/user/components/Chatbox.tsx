@@ -33,6 +33,15 @@ interface ThinkingStep {
   evidence?: string[];
 }
 
+interface FoodConfidenceItem {
+  name: string;
+  level: 'high' | 'medium' | 'low';
+  macros_present?: number;
+  retrieval_score?: number;
+  source_collection?: string | null;
+  reasons?: string[];
+}
+
 interface Message {
   id: string;
   text: string;
@@ -41,6 +50,7 @@ interface Message {
   imageUrl?: string | null;
   imageName?: string | null;
   thinkingSteps?: ThinkingStep[];
+  mealConfidence?: FoodConfidenceItem[];
 }
 
 interface Conversation {
@@ -417,7 +427,48 @@ const sanitizeLatex = (text: string) => {
     .replace(/\\\\/g, '\n');
 };
 
-const renderRichText = (rawText: string) => {
+const CONFIDENCE_BADGE_STYLES: Record<'high' | 'medium' | 'low', string> = {
+  high: 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/30',
+  medium: 'bg-amber-500/15 text-amber-200 border border-amber-400/30',
+  low: 'bg-rose-500/15 text-rose-200 border border-rose-400/30',
+};
+const CONFIDENCE_BADGE_LABEL: Record<'high' | 'medium' | 'low', string> = {
+  high: 'Cao',
+  medium: 'Vừa',
+  low: 'Thấp',
+};
+
+const findConfidenceMatch = (
+  cellText: string,
+  confidenceMap: FoodConfidenceItem[] | undefined
+): FoodConfidenceItem | null => {
+  if (!confidenceMap?.length || !cellText) return null;
+  const normalized = stripAccents(cellText).trim();
+  if (!normalized) return null;
+  let best: { item: FoodConfidenceItem; score: number } | null = null;
+  for (const item of confidenceMap) {
+    const candidate = stripAccents(item.name).trim();
+    if (!candidate) continue;
+    let score = 0;
+    if (normalized === candidate) score = 100;
+    else if (normalized.includes(candidate) || candidate.includes(normalized)) score = candidate.length;
+    if (score > 0 && (best === null || score > best.score)) {
+      best = { item, score };
+    }
+  }
+  return best?.item ?? null;
+};
+
+const detectDishColumnIndex = (headers: string[]): number => {
+  const lc = headers.map(h => stripAccents(h).trim());
+  const dishHeaders = ['mon', 'mon an', 'dish', 'food', 'item', 'name'];
+  for (let i = 0; i < lc.length; i += 1) {
+    if (dishHeaders.some(d => lc[i].includes(d))) return i;
+  }
+  return 1; // default: assume column index 1 (after Bữa)
+};
+
+const renderRichText = (rawText: string, mealConfidence?: FoodConfidenceItem[]) => {
   const text = splitInlineTables(sanitizeLatex(rawText));
   const lines = text.split(/\r?\n/);
   const blocks: React.ReactNode[] = [];
@@ -442,6 +493,8 @@ const renderRichText = (rawText: string) => {
         index += 1;
       }
 
+      const dishCol = detectDishColumnIndex(headers);
+
       blocks.push(
         <div key={`table-${blocks.length}`} className="overflow-x-auto rounded-xl border border-white/10 bg-black/15">
           <table className="w-full min-w-[560px] border-collapse text-left text-[13px]">
@@ -455,15 +508,29 @@ const renderRichText = (rawText: string) => {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={rowIndex} className="border-b border-white/5 last:border-0">
-                  {headers.map((_, cellIndex) => (
-                    <td key={cellIndex} className="px-4 py-3 align-top text-white/88">
-                      {renderInlineMarkdown(row[cellIndex] ?? '', `td-${blocks.length}-${rowIndex}-${cellIndex}`)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {rows.map((row, rowIndex) => {
+                const dishCell = row[dishCol] ?? '';
+                const match = findConfidenceMatch(dishCell, mealConfidence);
+                return (
+                  <tr key={rowIndex} className="border-b border-white/5 last:border-0">
+                    {headers.map((_, cellIndex) => (
+                      <td key={cellIndex} className="px-4 py-3 align-top text-white/88">
+                        <span className="inline-flex items-center gap-2 flex-wrap">
+                          {renderInlineMarkdown(row[cellIndex] ?? '', `td-${blocks.length}-${rowIndex}-${cellIndex}`)}
+                          {cellIndex === dishCol && match && (
+                            <span
+                              className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider ${CONFIDENCE_BADGE_STYLES[match.level]}`}
+                              title={match.reasons?.join(' • ') || ''}
+                            >
+                              {CONFIDENCE_BADGE_LABEL[match.level]}
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -615,8 +682,10 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
 
   // Ref to track pending request separately from render cycle
   const pendingRequestIdRef = useRef<string | null>(storedPendingRequestId);
-  // AbortController to cancel in-flight requests when switching conversations
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // Per-conversation AbortControllers so requests in different chats don't cross-cancel.
+  // Switching chats no longer aborts in-flight work — the response will return to the
+  // originating conversation. Sending a NEW message in the same chat aborts only that chat.
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   const isTyping = isTypingMap[activeChatId ?? ''] ?? false;
 
@@ -638,6 +707,18 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
       }
     } catch { /* ignore */ }
   }, [activeChatId]);
+
+  // Persist isTypingMap so a tab reload preserves the "is generating" indicator on the chat
+  useEffect(() => {
+    try {
+      const pendingIds = Object.keys(isTypingMap).filter(id => isTypingMap[id]);
+      if (pendingIds.length > 0) {
+        sessionStorage.setItem('calai_typing_chats', JSON.stringify(pendingIds));
+      } else {
+        sessionStorage.removeItem('calai_typing_chats');
+      }
+    } catch { /* ignore */ }
+  }, [isTypingMap]);
 
   useEffect(() => {
     try {
@@ -718,7 +799,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     return null;
   };
 
-  const mapMessages = (rows: Array<{ messageId?: number; message?: string; sender?: string; createdAt?: string; imageUrl?: string | null; imageName?: string | null; thinkingSteps?: ThinkingStep[] }>): Message[] => {
+  const mapMessages = (rows: Array<{ messageId?: number; message?: string; sender?: string; createdAt?: string; imageUrl?: string | null; imageName?: string | null; thinkingSteps?: ThinkingStep[]; foodInsight?: { mealConfidence?: FoodConfidenceItem[] } | null }>): Message[] => {
     if (!Array.isArray(rows)) return [];
     return rows
       .filter(row => row != null)
@@ -730,6 +811,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
         imageUrl: row.imageUrl ?? null,
         imageName: row.imageName ?? null,
         thinkingSteps: row.thinkingSteps,
+        mealConfidence: row.foodInsight?.mealConfidence,
       }));
   };
 
@@ -916,12 +998,14 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     const isNewChat = !activeChatId;
     const tempId = isNewChat ? `new-${Date.now()}` : activeChatId!;
 
-    // Abort any in-flight request for a DIFFERENT conversation
-    // so switching chats cancels old responses cleanly
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    // Abort previous in-flight request for THIS chat only (new prompt supersedes).
+    // Other chats' requests keep running so their answers come back when ready.
+    const existingController = abortControllersRef.current.get(tempId);
+    if (existingController) {
+      existingController.abort();
     }
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllersRef.current.set(tempId, controller);
 
     // Mark this conversation as typing
     setIsTypingMap(prev => ({ ...prev, [tempId]: true }));
@@ -956,7 +1040,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
       const response = await fetch(buildApiUrl('/chat/message'), {
         method: 'POST',
         headers: getAuthHeaders(true),
-        signal: abortControllerRef.current.signal,
+        signal: controller.signal,
         body: JSON.stringify({
           message: trimmed,
           imageUrl: imageToSend?.dataUrl,
@@ -1047,6 +1131,8 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
         delete next[tempId];
         return next;
       });
+      // Drop the per-chat abort controller for this completed/cancelled request
+      abortControllersRef.current.delete(tempId);
       try { sessionStorage.removeItem('calai_pending_request'); } catch { /* ignore */ }
     }
   };
@@ -1303,6 +1389,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
         <div className="flex-1 overflow-y-auto px-4 space-y-2">
           {conversations.map((chat) => {
             const isCurrent = activeChatId === chat.id;
+            const isGenerating = !!isTypingMap[chat.id];
 
             return (
               <motion.div
@@ -1318,13 +1405,26 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                   {isCurrent && (
                     <span className="text-[10px] font-black text-brand-orange uppercase tracking-widest">Current</span>
                   )}
+                  {isGenerating && !isCurrent && (
+                    <span className="text-[10px] font-black text-brand-orange uppercase tracking-widest flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-brand-orange animate-pulse" />
+                      Generating
+                    </span>
+                  )}
                   <span className="text-[10px] text-text-muted font-medium ml-auto">{chat.timestamp}</span>
                 </div>
                 <h3 className={`font-bold text-sm mb-1 truncate pr-6 ${isCurrent ? 'text-white' : 'text-text-muted'}`}>
                   {chat.title || 'New Conversation'}
                 </h3>
-                <p className="text-xs text-text-muted truncate opacity-60">
-                  {chat.lastMessage || 'No messages yet'}
+                <p className="text-xs text-text-muted truncate opacity-60 flex items-center gap-2">
+                  {isGenerating && (
+                    <span className="inline-flex shrink-0 gap-0.5">
+                      <span className="w-1 h-1 rounded-full bg-brand-orange animate-bounce [animation-delay:0ms]" />
+                      <span className="w-1 h-1 rounded-full bg-brand-orange animate-bounce [animation-delay:120ms]" />
+                      <span className="w-1 h-1 rounded-full bg-brand-orange animate-bounce [animation-delay:240ms]" />
+                    </span>
+                  )}
+                  <span className="truncate">{chat.lastMessage || 'No messages yet'}</span>
                 </p>
 
                 <button
@@ -1522,7 +1622,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                             </div>
                           </div>
                           <div className="space-y-4 p-5 text-sm">
-                            {msg.text ? renderRichText(msg.text) : null}
+                            {msg.text ? renderRichText(msg.text, msg.mealConfidence) : null}
                             <div className="flex flex-wrap gap-2">
                               {isAiFallback(msg.text) && (
                                 <motion.button

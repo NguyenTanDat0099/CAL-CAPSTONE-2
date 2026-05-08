@@ -55,11 +55,21 @@ interface SendMessagePayload {
   contextImageName?: string | null;
 }
 
+interface FoodConfidenceItem {
+  name: string;
+  level: 'high' | 'medium' | 'low';
+  macros_present?: number;
+  retrieval_score?: number;
+  source_collection?: string | null;
+  reasons?: string[];
+}
+
 interface CalAiQueryResult {
   answer: string;
   intent?: string;
   trace?: ThinkingStep[];
   citations?: Array<Record<string, unknown>>;
+  foodConfidence?: FoodConfidenceItem[];
 }
 
 type CalAiFailureReason = 'unreachable' | 'timeout' | 'http' | 'empty' | 'fetch_error';
@@ -104,7 +114,9 @@ interface FoodImageInsight {
   followUpQuestions?: string[];
   tableRows?: Array<Record<string, unknown>>;
   imageQuality?: Record<string, unknown>;
-  source: 'cal-ai';
+  /** Per-dish confidence rows for the meal-plan / nutrition table. */
+  mealConfidence?: FoodConfidenceItem[];
+  source: 'cal-ai' | 'cal-ai-text';
 }
 
 const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
@@ -420,11 +432,34 @@ const formatCalAiResult = (data: unknown): CalAiQueryResult | null => {
     ? record.citations.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
     : undefined;
 
+  const foodConfidenceRaw = Array.isArray(record.food_confidence) ? record.food_confidence : [];
+  const foodConfidence: FoodConfidenceItem[] = foodConfidenceRaw
+    .map((entry): FoodConfidenceItem | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const item = entry as Record<string, unknown>;
+      const name = typeof item.name === 'string' ? item.name.trim() : '';
+      const levelRaw = typeof item.level === 'string' ? item.level.toLowerCase() : '';
+      if (!name || (levelRaw !== 'high' && levelRaw !== 'medium' && levelRaw !== 'low')) return null;
+      const reasons = Array.isArray(item.reasons)
+        ? item.reasons.filter((r): r is string => typeof r === 'string').slice(0, 4)
+        : [];
+      return {
+        name,
+        level: levelRaw as 'high' | 'medium' | 'low',
+        macros_present: typeof item.macros_present === 'number' ? item.macros_present : undefined,
+        retrieval_score: typeof item.retrieval_score === 'number' ? item.retrieval_score : undefined,
+        source_collection: typeof item.source_collection === 'string' ? item.source_collection : null,
+        reasons,
+      };
+    })
+    .filter((entry): entry is FoodConfidenceItem => Boolean(entry));
+
   return {
     answer,
     intent: typeof record.intent === 'string' ? record.intent : undefined,
     trace: normalizeCalAiTrace(record.trace),
     citations,
+    foodConfidence: foodConfidence.length ? foodConfidence : undefined,
   };
 };
 
@@ -542,6 +577,13 @@ const addThinkingStep = (
   });
 };
 
+interface FoodPreferenceSummary {
+  foodName: string;
+  type: 'favorite' | 'avoided' | 'disliked' | 'allergy';
+  mealSlot?: string | null;
+  note?: string | null;
+}
+
 interface UserProfile {
   gender?: string | null;
   age?: number | null;
@@ -551,6 +593,7 @@ interface UserProfile {
   targetWeight?: number | null;
   goal?: string | null;
   activityLevel?: string | null;
+  foodPreferences?: FoodPreferenceSummary[];
 }
 
 const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile | null> => {
@@ -571,6 +614,26 @@ const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile 
     );
     const goal = (goalRows as Array<Record<string, unknown>>)[0];
 
+    let foodPreferences: FoodPreferenceSummary[] = [];
+    try {
+      const [prefRows] = await pool.query(
+        `SELECT food_name, preference_type, meal_slot, note
+           FROM userfoodpreferences
+          WHERE user_id = (SELECT user_id FROM users WHERE account_id = ? LIMIT 1)
+          ORDER BY weight DESC, updated_at DESC
+          LIMIT 30`,
+        [accountId]
+      );
+      foodPreferences = (prefRows as Array<Record<string, unknown>>).map(row => ({
+        foodName: String(row.food_name ?? ''),
+        type: row.preference_type as FoodPreferenceSummary['type'],
+        mealSlot: (row.meal_slot as string | null) ?? null,
+        note: (row.note as string | null) ?? null,
+      }));
+    } catch {
+      // Preferences table may not exist yet for fresh DBs; ignore.
+    }
+
     return {
       gender: user.gender as string | null,
       age: user.age as number | null,
@@ -580,6 +643,7 @@ const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile 
       targetWeight: goal?.target_weight as number | null ?? null,
       goal: goal?.goal_type as string | null ?? null,
       activityLevel: goal?.activity_level as string | null ?? null,
+      foodPreferences,
     };
   } catch {
     return null;
@@ -1114,10 +1178,26 @@ const generateAssistantReply = async (
       ? 'Cal-AI chịu trách nhiệm tạo bảng Markdown khi cần.'
       : 'UI sẽ render nội dung tư vấn dạng rich text.');
 
+    const insightForText: FoodImageInsight | null = calAiResult.foodConfidence?.length
+      ? {
+          dishName: null,
+          confidence: null,
+          description: null,
+          ingredients: [],
+          portion: null,
+          calories: null,
+          protein: null,
+          carbs: null,
+          fat: null,
+          mealConfidence: calAiResult.foodConfidence,
+          source: 'cal-ai-text',
+        }
+      : null;
+
     return {
       text: calAiResult.answer,
       thinkingSteps: trace,
-      foodInsight: null,
+      foodInsight: insightForText,
     };
   }
 

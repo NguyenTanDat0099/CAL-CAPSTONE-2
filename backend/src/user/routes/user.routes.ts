@@ -27,6 +27,11 @@ import {
   publishSchedule,
   updateSchedule,
 } from '../controllers/schedule.controller';
+import {
+  listFoodPreferences,
+  upsertFoodPreference,
+  deleteFoodPreference,
+} from '../controllers/foodPreferences.controller';
 
 const userRouter = Router();
 
@@ -54,5 +59,8 @@ userRouter.patch('/schedules/:scheduleId', updateSchedule);
 userRouter.delete('/schedules/:scheduleId', deleteSchedule);
 userRouter.post('/schedules/:scheduleId/publish', publishSchedule);
 userRouter.get('/discover/meals', listDiscoverMeals);
+userRouter.get('/food-preferences', listFoodPreferences);
+userRouter.post('/food-preferences', upsertFoodPreference);
+userRouter.delete('/food-preferences/:preferenceId', deleteFoodPreference);
 
 export default userRouter;

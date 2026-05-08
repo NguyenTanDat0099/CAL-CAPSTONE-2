@@ -17,6 +17,12 @@ app.include_router(qa_router)
 app.include_router(recipe_dataset_router)
 app.include_router(agentic_rag_router)
 
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 _clip = None
 _qdrant = None
 
