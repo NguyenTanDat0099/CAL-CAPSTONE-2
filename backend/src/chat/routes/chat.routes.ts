@@ -1,16 +1,18 @@
 import { Router } from 'express';
 import {
-  deleteChatSessionController,
-  getChatMessagesController,
-  getChatSessionsController,
-  sendChatMessageController,
+  deleteChatSession,
+  getChatMessages,
+  getChatSessions,
+  sendChatMessage,
+  truncateMessagesAfter,
 } from '../controllers/chat.controller';
 
-const router = Router();
+const chatRouter = Router();
 
-router.post('/messages', sendChatMessageController);
-router.get('/sessions', getChatSessionsController);
-router.get('/sessions/:sessionId/messages', getChatMessagesController);
-router.delete('/sessions/:sessionId', deleteChatSessionController);
+chatRouter.get('/sessions', getChatSessions);
+chatRouter.get('/sessions/:sessionId/messages', getChatMessages);
+chatRouter.delete('/sessions/:sessionId', deleteChatSession);
+chatRouter.delete('/sessions/:sessionId/messages/after/:messageId', truncateMessagesAfter);
+chatRouter.post('/message', sendChatMessage);
 
-export default router;
+export default chatRouter;

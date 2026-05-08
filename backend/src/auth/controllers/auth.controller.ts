@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import {
   forgotPasswordService,
   getEmailConfigStatusService,
@@ -9,6 +10,16 @@ import {
   verifyResetCodeService,
 } from '../services/auth.service';
 
+const jwtSecret = process.env.JWT_SECRET || 'calai-dev-secret';
+
+interface AuthTokenPayload {
+  accountId: number;
+  email: string;
+  role: string;
+  iat?: number;
+  exp?: number;
+}
+
 const errorStatusMap: Record<string, number> = {
   EMAIL_ALREADY_EXISTS: 409,
   INVALID_CREDENTIALS: 401,
@@ -16,6 +27,7 @@ const errorStatusMap: Record<string, number> = {
   ACCOUNT_NOT_FOUND: 404,
   INVALID_RESET_CODE: 400,
   INVALID_REGISTER_OTP: 400,
+  INVALID_USERNAME: 400,
 };
 
 const handleAuthError = (error: unknown, res: Response) => {
@@ -27,13 +39,17 @@ const handleAuthError = (error: unknown, res: Response) => {
 
 export const requestRegisterOtp = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, username } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'email and password are required' });
+    if (!email || !password || !username) {
+      return res.status(400).json({ message: 'email, username and password are required' });
     }
 
-    const data = await requestRegisterOtpService({ email, password });
+    if (username.trim().length < 2) {
+      return res.status(400).json({ message: 'Username must be at least 2 characters' });
+    }
+
+    const data = await requestRegisterOtpService({ email, password, username: username.trim() });
     return res.status(200).json({
       message: 'Register OTP sent successfully',
       data,
@@ -138,4 +154,33 @@ export const getEmailConfigStatus = async (req: Request, res: Response) => {
     message: 'Email configuration status fetched successfully',
     data: getEmailConfigStatusService(),
   });
+};
+
+export const getValidateToken = async (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({
+      valid: false,
+      message: 'NO_TOKEN',
+    });
+  }
+
+  try {
+    const payload = jwt.verify(token, jwtSecret) as AuthTokenPayload;
+    return res.status(200).json({
+      valid: true,
+      data: {
+        accountId: payload.accountId,
+        email: payload.email,
+        role: payload.role,
+      },
+    });
+  } catch {
+    return res.status(401).json({
+      valid: false,
+      message: 'INVALID_TOKEN',
+    });
+  }
 };

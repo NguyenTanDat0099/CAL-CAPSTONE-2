@@ -23,7 +23,7 @@ import {
 const getAnalysisId = (value: string | string[]) => (Array.isArray(value) ? value[0] : value);
 
 export const getUserProfile = async (req: Request, res: Response) => {
-  const userProfile = await getUserProfileService();
+  const userProfile = await getUserProfileService(req.auth?.accountId);
 
   res.status(200).json({
     message: 'User profile fetched successfully',
@@ -32,7 +32,7 @@ export const getUserProfile = async (req: Request, res: Response) => {
 };
 
 export const getUserGoals = async (req: Request, res: Response) => {
-  const userGoals = await getUserGoalsService();
+  const userGoals = await getUserGoalsService(req.auth?.accountId);
 
   res.status(200).json({
     message: 'User goals fetched successfully',
@@ -41,7 +41,7 @@ export const getUserGoals = async (req: Request, res: Response) => {
 };
 
 export const updateUserProfile = async (req: Request, res: Response) => {
-  const updatedProfile = await updateUserProfileService(req.body);
+  const updatedProfile = await updateUserProfileService(req.auth?.accountId, req.body);
 
   return res.status(200).json({
     message: 'User profile updated successfully',
@@ -50,7 +50,7 @@ export const updateUserProfile = async (req: Request, res: Response) => {
 };
 
 export const updateUserGoals = async (req: Request, res: Response) => {
-  const updatedGoals = await updateUserGoalsService(req.body);
+  const updatedGoals = await updateUserGoalsService(req.auth?.accountId, req.body);
 
   return res.status(200).json({
     message: 'User goals updated successfully',
@@ -59,7 +59,7 @@ export const updateUserGoals = async (req: Request, res: Response) => {
 };
 
 export const getUserMeals = async (req: Request, res: Response) => {
-  const userMeals = await getUserMealsService();
+  const userMeals = await getUserMealsService(req.auth?.accountId);
 
   res.status(200).json({
     message: 'User meals fetched successfully',
@@ -68,7 +68,18 @@ export const getUserMeals = async (req: Request, res: Response) => {
 };
 
 export const getUserMealHistory = async (req: Request, res: Response) => {
-  const history = await getUserMealHistoryService();
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+  const dateFrom = typeof req.query.dateFrom === 'string'
+    ? req.query.dateFrom
+    : typeof req.query.from === 'string'
+      ? req.query.from
+      : undefined;
+  const dateTo = typeof req.query.dateTo === 'string'
+    ? req.query.dateTo
+    : typeof req.query.to === 'string'
+      ? req.query.to
+      : undefined;
+  const history = await getUserMealHistoryService(req.auth?.accountId, { limit, dateFrom, dateTo });
 
   return res.status(200).json({
     message: 'User meal history fetched successfully',
@@ -77,7 +88,7 @@ export const getUserMealHistory = async (req: Request, res: Response) => {
 };
 
 export const getUserDashboard = async (req: Request, res: Response) => {
-  const dashboard = await getUserDashboardService();
+  const dashboard = await getUserDashboardService(req.auth?.accountId);
 
   return res.status(200).json({
     message: 'User dashboard fetched successfully',
@@ -87,7 +98,9 @@ export const getUserDashboard = async (req: Request, res: Response) => {
 
 export const searchFoods = async (req: Request, res: Response) => {
   const query = typeof req.query.q === 'string' ? req.query.q : '';
-  const foods = await searchFoodsService(query);
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+  const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+  const foods = await searchFoodsService(query, { limit, category });
 
   return res.status(200).json({
     message: 'Foods fetched successfully',
@@ -96,15 +109,16 @@ export const searchFoods = async (req: Request, res: Response) => {
 };
 
 export const createMeal = async (req: Request, res: Response) => {
-  const { foodName, calories, mealType } = req.body;
+  const { foodId, foodName, calories, mealType } = req.body;
+  const parsedFoodId = Number(foodId) || 0;
 
-  if (!foodName || typeof calories !== 'number' || !mealType) {
+  if (!mealType || (parsedFoodId <= 0 && (!foodName || typeof calories !== 'number'))) {
     return res.status(400).json({
-      message: 'foodName, calories and mealType are required',
+      message: 'foodId or foodName/calories plus mealType are required',
     });
   }
 
-  const meal = await createMealService(req.body);
+  const meal = await createMealService(req.auth?.accountId, req.body);
 
   return res.status(201).json({
     message: 'Meal created successfully',
@@ -114,7 +128,7 @@ export const createMeal = async (req: Request, res: Response) => {
 
 export const updateMeal = async (req: Request, res: Response) => {
   const mealId = Number(req.params.mealId);
-  const meal = await updateMealService(mealId, req.body);
+  const meal = await updateMealService(req.auth?.accountId, mealId, req.body);
 
   if (!meal) {
     return res.status(404).json({
@@ -130,7 +144,7 @@ export const updateMeal = async (req: Request, res: Response) => {
 
 export const deleteMeal = async (req: Request, res: Response) => {
   const mealId = Number(req.params.mealId);
-  const deleted = await deleteMealService(mealId);
+  const deleted = await deleteMealService(req.auth?.accountId, mealId);
 
   if (!deleted) {
     return res.status(404).json({
@@ -146,13 +160,13 @@ export const deleteMeal = async (req: Request, res: Response) => {
 export const analyzeFoodImage = async (req: Request, res: Response) => {
   const { imageUrl, source } = req.body;
 
-  if (!imageUrl || !source) {
+  if (!imageUrl || (source !== 'upload' && source !== 'camera')) {
     return res.status(400).json({
-      message: 'imageUrl and source are required',
+      message: 'imageUrl and a valid source are required',
     });
   }
 
-  const analysis = await analyzeFoodImageService({ imageUrl, source });
+  const analysis = await analyzeFoodImageService(req.auth?.accountId, { imageUrl, source });
 
   return res.status(201).json({
     message: 'Food image analyzed successfully',
@@ -161,7 +175,7 @@ export const analyzeFoodImage = async (req: Request, res: Response) => {
 };
 
 export const getFoodAnalysisHistory = async (req: Request, res: Response) => {
-  const history = await getFoodAnalysisHistoryService();
+  const history = await getFoodAnalysisHistoryService(req.auth?.accountId);
 
   return res.status(200).json({
     message: 'Food analysis history fetched successfully',
@@ -170,7 +184,7 @@ export const getFoodAnalysisHistory = async (req: Request, res: Response) => {
 };
 
 export const getFoodAnalysisById = async (req: Request, res: Response) => {
-  const analysis = await getFoodAnalysisByIdService(getAnalysisId(req.params.analysisId));
+  const analysis = await getFoodAnalysisByIdService(req.auth?.accountId, getAnalysisId(req.params.analysisId));
 
   if (!analysis) {
     return res.status(404).json({
@@ -185,7 +199,7 @@ export const getFoodAnalysisById = async (req: Request, res: Response) => {
 };
 
 export const confirmFoodAnalysis = async (req: Request, res: Response) => {
-  const analysis = await confirmFoodAnalysisService(getAnalysisId(req.params.analysisId), req.body);
+  const analysis = await confirmFoodAnalysisService(req.auth?.accountId, getAnalysisId(req.params.analysisId), req.body);
 
   if (!analysis) {
     return res.status(404).json({
@@ -200,7 +214,7 @@ export const confirmFoodAnalysis = async (req: Request, res: Response) => {
 };
 
 export const saveFoodAnalysisToMealLog = async (req: Request, res: Response) => {
-  const analysis = await saveFoodAnalysisToMealLogService(getAnalysisId(req.params.analysisId));
+  const analysis = await saveFoodAnalysisToMealLogService(req.auth?.accountId, getAnalysisId(req.params.analysisId));
 
   if (!analysis) {
     return res.status(404).json({
@@ -215,7 +229,7 @@ export const saveFoodAnalysisToMealLog = async (req: Request, res: Response) => 
 };
 
 export const reanalyzeFoodImage = async (req: Request, res: Response) => {
-  const analysis = await reanalyzeFoodImageService(getAnalysisId(req.params.analysisId));
+  const analysis = await reanalyzeFoodImageService(req.auth?.accountId, getAnalysisId(req.params.analysisId));
 
   if (!analysis) {
     return res.status(404).json({
@@ -230,7 +244,7 @@ export const reanalyzeFoodImage = async (req: Request, res: Response) => {
 };
 
 export const deleteFoodAnalysis = async (req: Request, res: Response) => {
-  const deleted = await deleteFoodAnalysisService(getAnalysisId(req.params.analysisId));
+  const deleted = await deleteFoodAnalysisService(req.auth?.accountId, getAnalysisId(req.params.analysisId));
 
   if (!deleted) {
     return res.status(404).json({

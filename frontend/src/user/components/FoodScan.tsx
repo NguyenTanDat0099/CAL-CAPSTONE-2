@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Camera, CheckCircle2, Image as ImageIcon, Loader2, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { DietItem } from '../types';
+import { buildApiUrl } from '../../config/api';
 
-const API_BASE_URL = 'http://localhost:3000/api/users';
+const AUTH_TOKEN_KEY = 'calai_token';
 
 type AnalysisSource = 'upload' | 'camera';
 
@@ -28,7 +29,10 @@ interface FoodAnalysisResult {
 }
 
 interface FoodScanProps {
-  onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void;
+  onAddToMyDiet: (
+    item: Omit<DietItem, 'id' | 'date'>,
+    options?: { alreadyPersisted?: boolean; mealType?: string }
+  ) => void | Promise<void>;
 }
 
 const fileToDataUrl = (file: File) =>
@@ -47,7 +51,7 @@ const toTimeAgo = (isoDate: string) => {
 };
 
 const getAuthHeaders = (includeJson = false) => {
-  const token = localStorage.getItem('calai_token');
+  const token = sessionStorage.getItem(AUTH_TOKEN_KEY);
   return {
     ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -69,7 +73,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
   const [error, setError] = useState('');
 
   const refreshHistory = async () => {
-    const response = await fetch(`${API_BASE_URL}/food-analysis/history`, {
+    const response = await fetch(buildApiUrl('/users/food-analysis/history'), {
       headers: getAuthHeaders(),
     });
     const result = await response.json();
@@ -107,7 +111,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     setMessage('Analyzing food image...');
     setError('');
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/analyze`, {
+      const response = await fetch(buildApiUrl('/users/food-analysis/analyze'), {
         method: 'POST',
         headers: getAuthHeaders(true),
         body: JSON.stringify({ imageUrl, source }),
@@ -169,7 +173,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/confirm`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}/confirm`), {
         method: 'PATCH',
         headers: getAuthHeaders(true),
         body: JSON.stringify(form),
@@ -189,7 +193,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/save`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}/save`), {
         method: 'POST',
         headers: getAuthHeaders(),
       });
@@ -205,7 +209,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
         image: result.data.image,
         description: `${result.data.detectedDish} • ${result.data.estimatedPortion}`,
         about: `Detected items: ${result.data.detectedItems.join(', ')}`,
-      });
+      }, { alreadyPersisted: true });
       setMessage('Saved to meal log');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed');
@@ -218,7 +222,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}/reanalyze`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}/reanalyze`), {
         method: 'POST',
         headers: getAuthHeaders(),
       });
@@ -237,7 +241,7 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
     if (!activeResult) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/food-analysis/${activeResult.id}`, {
+      const response = await fetch(buildApiUrl(`/users/food-analysis/${activeResult.id}`), {
         method: 'DELETE',
         headers: getAuthHeaders(),
       });
@@ -254,10 +258,10 @@ export function FoodScan({ onAddToMyDiet }: FoodScanProps) {
   };
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white">
+    <div className="flex-1 p-4 lg:p-10 min-h-screen bg-bg-dark text-white">
       <canvas ref={canvasRef} className="hidden" />
       <input ref={fileInputRef} type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
-      <header className="mb-8">
+      <header className="mt-16 lg:mt-0 mb-8">
         <h1 className="text-4xl font-black mb-2">Food Scan</h1>
         <p className="text-text-muted">Sprint 2 flow: upload/capture, analyze, review, save, reanalyze, delete, and history.</p>
       </header>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
+import { buildApiUrl } from '../config/api';
 
 type AuthView = 'login' | 'signup' | 'signup-code' | 'forgot-email' | 'forgot-code' | 'reset-password';
 type AppView = 'admin' | 'user';
@@ -29,11 +30,13 @@ const authErrorMessages: Record<string, string> = {
   INVALID_RESET_CODE: 'Mã xác nhận không đúng hoặc đã hết hạn.',
   INVALID_REGISTER_OTP: 'Mã OTP đăng ký không đúng hoặc đã hết hạn.',
   PASSWORD_MISMATCH: 'Mật khẩu xác nhận không khớp.',
+  INVALID_USERNAME: 'Username phải có ít nhất 2 ký tự.',
 };
 
 export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
   const [view, setView] = useState<AuthView>('login');
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
@@ -43,8 +46,6 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
-
-  const apiBaseUrl = 'http://localhost:3000/api/auth';
 
   const resetSensitiveFields = () => {
     setPassword('');
@@ -57,13 +58,24 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
     setInfo('');
   };
 
+  const resetSignupFields = () => {
+    setEmail('');
+    setUsername('');
+    setPassword('');
+    setConfirmPassword('');
+  };
+
   const goTo = (nextView: AuthView) => {
     resetSensitiveFields();
+    if (nextView === 'login') {
+      setUsername('');
+      setEmail('');
+    }
     setView(nextView);
   };
 
   const submitJson = async <T,>(path: string, payload: Record<string, unknown>): Promise<T> => {
-    const response = await fetch(`${apiBaseUrl}${path}`, {
+    const response = await fetch(buildApiUrl(`/auth${path}`), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -71,7 +83,10 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
       body: JSON.stringify(payload),
     });
 
-    const result = await response.json();
+    const contentType = response.headers.get('content-type') || '';
+    const result = contentType.includes('application/json')
+      ? await response.json()
+      : { message: (await response.text()) || 'REQUEST_FAILED' };
     if (!response.ok) {
       throw new Error(result.message || 'Request failed');
     }
@@ -195,13 +210,17 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
                 setError('PASSWORD_MISMATCH');
                 return;
               }
+              if (!username.trim() || username.trim().length < 2) {
+                setError('Username phải có ít nhất 2 ký tự.');
+                return;
+              }
 
               setError('');
               setInfo('');
               setIsSubmitting(true);
 
               try {
-                const result = await submitJson<{ data: { previewCode?: string; emailSent?: boolean } }>('/register/request-otp', { email, password });
+                const result = await submitJson<{ data: { previewCode?: string; emailSent?: boolean } }>('/register/request-otp', { email, password, username: username.trim() });
                 setInfo(
                   result.data.emailSent
                     ? 'OTP đăng ký đã được gửi tới Gmail của bạn.'
@@ -222,6 +241,17 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
                 value={email}
                 onChange={event => setEmail(event.target.value)}
                 placeholder="Enter email"
+                className={inputClasses}
+              />
+            </div>
+
+            <div>
+              <label className={labelClasses}>Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={event => setUsername(event.target.value)}
+                placeholder="Enter your display name"
                 className={inputClasses}
               />
             </div>
@@ -306,7 +336,7 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
                 setIsSubmitting(true);
 
                 try {
-                  const result = await submitJson<{ data: { previewCode?: string; emailSent?: boolean } }>('/register/request-otp', { email, password });
+                  const result = await submitJson<{ data: { previewCode?: string; emailSent?: boolean } }>('/register/request-otp', { email, password, username });
                   setInfo(
                     result.data.emailSent
                       ? 'OTP đăng ký đã được gửi lại tới Gmail của bạn.'

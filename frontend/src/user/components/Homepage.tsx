@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Bell, ChevronRight, Flame, Zap, Droplets, Utensils } from 'lucide-react';
+import { ChevronRight, Flame, Utensils } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DietItem } from '../types';
 import { UserProfile } from '../App';
@@ -13,14 +13,14 @@ interface HomepageProps {
   profile: UserProfile;
 }
 
-export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryOver, profile }: HomepageProps) {
+export function Homepage({ myDiets, onTabChange, dailyTarget, carryOver, profile }: HomepageProps) {
   const today = new Date();
-  
-  // Weekly Calendar Data
+  const safeDailyTarget = Math.max(0, dailyTarget);
+
   const weekDays = useMemo(() => {
     const days = [];
     const startOfWeek = new Date(today);
-    startOfWeek.setDate(today.getDate() - today.getDay() + 1); // Start from Monday
+    startOfWeek.setDate(today.getDate() - today.getDay() + 1);
 
     for (let i = 0; i < 7; i++) {
       const day = new Date(startOfWeek);
@@ -29,66 +29,67 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
         name: day.toLocaleDateString('en-US', { weekday: 'short' }),
         date: day.getDate().toString().padStart(2, '0'),
         isToday: day.toDateString() === today.toDateString(),
-        fullDate: day.toDateString()
       });
     }
     return days;
   }, []);
 
-  // Daily Stats Calculation
   const stats = useMemo(() => {
     const todayStr = today.toDateString();
     const todayDiets = myDiets.filter(item => new Date(item.date).toDateString() === todayStr);
-    
+
     const consumed = {
       calories: todayDiets.reduce((sum, item) => sum + item.calories, 0),
       protein: todayDiets.reduce((sum, item) => sum + (item.protein || 0), 0),
       carbs: todayDiets.reduce((sum, item) => sum + (item.carbs || 0), 0),
     };
 
-    // Calculate macro targets based on profile and dailyTarget
-    // Default ratios: Protein 30%, Carbs 40%, Fats 30%
     const targets = {
-      calories: dailyTarget,
-      protein: Math.round((dailyTarget * 0.3) / 4), // 4 kcal per gram
-      carbs: Math.round((dailyTarget * 0.4) / 4),   // 4 kcal per gram
+      calories: safeDailyTarget,
+      protein: safeDailyTarget > 0 ? Math.round((safeDailyTarget * 0.3) / 4) : 0,
+      carbs: safeDailyTarget > 0 ? Math.round((safeDailyTarget * 0.4) / 4) : 0,
     };
 
     return { consumed, targets };
-  }, [myDiets, dailyTarget]);
+  }, [myDiets, safeDailyTarget]);
 
   const calorieLeft = stats.targets.calories - stats.consumed.calories;
-  const calorieProgress = useMemo(() => {
-    if (stats.targets.calories <= 0) return 100;
-    return Math.max(0, Math.min((stats.consumed.calories / stats.targets.calories) * 100, 100));
-  }, [stats.consumed.calories, stats.targets.calories]);
+  const calorieStatusLabel = calorieLeft >= 0 ? 'Left' : 'Over target';
+  const calorieProgress = stats.targets.calories > 0
+    ? Math.max(0, Math.min((stats.consumed.calories / stats.targets.calories) * 100, 100))
+    : 0;
+  const carbProgress = stats.targets.carbs > 0
+    ? Math.min((stats.consumed.carbs / stats.targets.carbs) * 100, 100)
+    : 0;
+  const proteinProgress = stats.targets.protein > 0
+    ? Math.min((stats.consumed.protein / stats.targets.protein) * 100, 100)
+    : 0;
+  const latestMeal = myDiets[0] ?? null;
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-      {/* Header Section */}
-      <header className="mb-10 flex items-center justify-between">
+    <div className="flex-1 p-4 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+      <header className="mt-16 lg:mt-0 mb-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-2xl border border-white/10 overflow-hidden shadow-xl shadow-brand-orange/10">
-            <img 
-              src={profile.avatar} 
-              alt={profile.name} 
+            <img
+              src={profile.avatar}
+              alt={profile.name}
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
             />
           </div>
           <div>
-            <h1 className="text-3xl font-black tracking-tight">Hello, {(profile.name || 'Alex').split(' ')[0]}</h1>
-            <p className="text-text-muted font-medium">Stay on track today!</p>
+            <h1 className="text-3xl font-black tracking-tight">Hello, {(profile.name || 'there').split(' ')[0]}</h1>
+            <p className="text-text-muted font-medium">Review today's logged nutrition.</p>
           </div>
         </div>
       </header>
 
-      {/* Weekly Calendar */}
       <section className="bg-surface-dark/50 rounded-[2.5rem] p-8 border border-white/5 mb-10">
         <div className="flex justify-between items-center">
           {weekDays.map((day, idx) => (
-            <div 
-              key={idx} 
+            <div
+              key={idx}
               className={`flex flex-col items-center gap-4 p-4 rounded-3xl transition-all min-w-[80px] ${
                 day.isToday ? 'bg-white text-bg-dark shadow-xl scale-110' : 'text-text-muted hover:bg-white/5'
               }`}
@@ -102,37 +103,31 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
         </div>
       </section>
 
-      {/* Daily Counters */}
       <section className="mb-12">
-        <h2 className="text-2xl font-black mb-8">Count Your Daily Calories</h2>
+        <h2 className="text-2xl font-black mb-8">Logged Nutrition Today</h2>
         <div className="grid grid-cols-12 gap-6">
-          {/* Calories Large Card */}
           <div className="col-span-12 lg:col-span-6 bg-[#D4C3F9] rounded-[3rem] p-10 text-bg-dark relative overflow-hidden h-[400px] flex flex-col">
             <h3 className="text-3xl font-black mb-8">Calories</h3>
-            
+
             <div className="flex-1 flex flex-col items-center justify-center relative">
-              {/* Semi-circle Gauge */}
               <div className="relative w-64 h-32 overflow-hidden">
-                {/* Background Gauge (Track - Light Purple tint) */}
                 <div className="absolute top-0 left-0 w-64 h-64 border-[24px] border-white/20 rounded-full" />
-                
-                {/* Progress Gauge (Black) */}
-                <motion.div 
+                <motion.div
                   initial={{ rotate: -180 }}
                   animate={{ rotate: -180 + (calorieProgress * 1.8) }}
-                  transition={{ duration: 1.5, ease: "easeOut" }}
+                  transition={{ duration: 1.5, ease: 'easeOut' }}
                   className="absolute top-0 left-0 w-64 h-64 border-[24px] border-bg-dark rounded-full border-t-transparent border-r-transparent"
                   style={{ transformOrigin: 'center center' }}
                 />
               </div>
-              
+
               <div className="text-center mt-4">
-                <div className="text-6xl font-black leading-none">{calorieLeft.toLocaleString()}</div>
-                <div className="text-sm font-bold opacity-60 uppercase tracking-widest mt-2">Left</div>
+                <div className="text-6xl font-black leading-none">{Math.abs(calorieLeft).toLocaleString()}</div>
+                <div className="text-sm font-bold opacity-60 uppercase tracking-widest mt-2">{calorieStatusLabel}</div>
                 {carryOver < 0 && (
                   <div className="mt-4 px-4 py-1 bg-bg-dark/10 rounded-full inline-block">
                     <p className="text-[10px] font-black uppercase tracking-widest opacity-40">
-                      Debt: {Math.abs(carryOver)} kcal
+                      Debt cap applied: {Math.abs(carryOver)} kcal
                     </p>
                   </div>
                 )}
@@ -140,25 +135,24 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
 
               <div className="absolute bottom-0 w-full flex justify-between px-4 text-[10px] font-black opacity-40">
                 <span>0</span>
-                <span>100</span>
+                <span>{stats.targets.calories.toLocaleString()}</span>
               </div>
             </div>
           </div>
 
-          {/* Carbs Card */}
           <div className="col-span-12 lg:col-span-3 bg-[#E9F994] rounded-[3rem] p-10 text-bg-dark flex flex-col justify-between h-[400px]">
             <h3 className="text-2xl font-black">Carbs</h3>
-            
+
             <div className="flex flex-col items-center">
               <div className="w-32 h-32 rounded-full bg-bg-dark/5 flex items-center justify-center mb-8">
                 <Utensils size={48} className="opacity-80" />
               </div>
-              
+
               <div className="w-full space-y-4">
                 <div className="h-2 w-full bg-bg-dark/10 rounded-full overflow-hidden">
-                  <motion.div 
+                  <motion.div
                     initial={{ width: 0 }}
-                    animate={{ width: `${Math.min((stats.consumed.carbs / stats.targets.carbs) * 100, 100)}%` }}
+                    animate={{ width: `${carbProgress}%` }}
                     className="h-full bg-bg-dark"
                   />
                 </div>
@@ -170,20 +164,19 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
             </div>
           </div>
 
-          {/* Protein Card */}
           <div className="col-span-12 lg:col-span-3 bg-[#82F9A1] rounded-[3rem] p-10 text-bg-dark flex flex-col justify-between h-[400px]">
             <h3 className="text-2xl font-black">Protein</h3>
-            
+
             <div className="flex flex-col items-center">
               <div className="w-32 h-32 rounded-full bg-bg-dark/5 flex items-center justify-center mb-8">
                 <Flame size={48} className="opacity-80" />
               </div>
-              
+
               <div className="w-full space-y-4">
                 <div className="h-2 w-full bg-bg-dark/10 rounded-full overflow-hidden">
-                  <motion.div 
+                  <motion.div
                     initial={{ width: 0 }}
-                    animate={{ width: `${Math.min((stats.consumed.protein / stats.targets.protein) * 100, 100)}%` }}
+                    animate={{ width: `${proteinProgress}%` }}
                     className="h-full bg-bg-dark"
                   />
                 </div>
@@ -197,11 +190,10 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
         </div>
       </section>
 
-      {/* Diet Plan Section */}
       <section className="pb-32">
         <div className="flex justify-between items-center mb-8">
           <h2 className="text-2xl font-black">Diet Plan</h2>
-          <button 
+          <button
             onClick={() => onTabChange('goals')}
             className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-orange hover:opacity-80 transition-opacity flex items-center gap-2"
           >
@@ -210,21 +202,37 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
           </button>
         </div>
 
-        <motion.div 
+        <motion.div
           whileHover={{ scale: 1.01 }}
-          className="relative h-64 rounded-[3rem] overflow-hidden group cursor-pointer"
+          className="relative h-64 rounded-[3rem] overflow-hidden group cursor-pointer bg-surface-dark border border-white/5"
           onClick={() => onTabChange('goals')}
         >
-          <img 
-            src="https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=1200&h=400&fit=crop" 
-            alt="Featured Diet" 
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-bg-dark via-bg-dark/20 to-transparent" />
-          <div className="absolute bottom-10 left-10">
-            <h3 className="text-3xl font-black mb-2">Mediterranean Salad</h3>
-            <p className="text-white/60 text-sm font-medium">450 kcal • 15g Protein • 10 min prep</p>
-          </div>
+          {latestMeal ? (
+            <>
+              <img
+                src={latestMeal.image}
+                alt={latestMeal.name}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-bg-dark via-bg-dark/20 to-transparent" />
+              <div className="absolute bottom-10 left-10 right-10">
+                <p className="text-[10px] uppercase tracking-widest text-brand-orange font-black mb-2">Latest logged meal</p>
+                <h3 className="text-3xl font-black mb-2 truncate">{latestMeal.name}</h3>
+                <p className="text-white/60 text-sm font-medium">
+                  {latestMeal.calories.toLocaleString()} kcal | {latestMeal.protein}g protein | {new Date(latestMeal.date).toLocaleDateString()}
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-center px-8">
+              <Utensils size={48} className="text-brand-orange/60 mb-4" />
+              <h3 className="text-2xl font-black mb-2">No meals logged yet</h3>
+              <p className="text-text-muted text-sm max-w-md">
+                Add meals from Meal Plans or Food Scan to populate this section with real nutrition data.
+              </p>
+            </div>
+          )}
         </motion.div>
       </section>
     </div>

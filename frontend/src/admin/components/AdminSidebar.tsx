@@ -14,9 +14,11 @@ interface SidebarProps {
   activeTab: string;
   onTabChange: (id: string) => void;
   onLogout: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
-export function AdminSidebar({ activeTab, onTabChange, onLogout }: SidebarProps) {
+export function AdminSidebar({ activeTab, onTabChange, onLogout, isOpen, onClose }: SidebarProps) {
   const navItems = [
     { icon: LayoutDashboard, label: 'Dashboard', id: 'dashboard' },
     { icon: Users, label: 'User Management', id: 'users' },
@@ -26,12 +28,33 @@ export function AdminSidebar({ activeTab, onTabChange, onLogout }: SidebarProps)
   ];
 
   return (
-    <aside className="w-64 h-screen bg-sidebar-dark border-r border-white/5 flex flex-col p-6 fixed left-0 top-0 z-50">
-      <div className="mb-10 flex items-center gap-2">
-        <div className="text-2xl font-black text-brand-orange tracking-tighter italic">
-          CalAI Admin
+    <>
+      {/* Overlay for mobile */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] lg:hidden"
+          onClick={onClose}
+        />
+      )}
+
+      <aside className={`
+        fixed left-0 top-0 h-screen bg-sidebar-dark border-r border-white/5 flex flex-col p-6 z-[70] transition-transform duration-300
+        w-64 lg:translate-x-0
+        ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+      `}>
+        <div className="mb-10 flex items-center justify-between">
+          <div className="text-2xl font-black text-brand-orange tracking-tighter italic">
+            CalAI Admin
+          </div>
+          {onClose && (
+            <button 
+              onClick={onClose}
+              className="lg:hidden p-2 text-text-muted hover:text-white"
+            >
+              <LogOut size={20} className="rotate-180" />
+            </button>
+          )}
         </div>
-      </div>
 
       <nav className="flex-1 space-y-2">
         {navItems.map((item) => (
@@ -72,5 +95,6 @@ export function AdminSidebar({ activeTab, onTabChange, onLogout }: SidebarProps)
         </button>
       </div>
     </aside>
+    </>
   );
 }

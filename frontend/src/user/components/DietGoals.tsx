@@ -1,188 +1,159 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, ArrowRight, Flag, Zap, User, AlertTriangle, RotateCcw, Info, ArrowLeft, PlusCircle, Heart, Droplets, X } from 'lucide-react';
-import { DietItem } from '../types';
-import { UserProfile, Goal, ActivityLevel, Gender } from '../App';
-
-interface DietPlan {
-  id: string;
-  name: string;
-  calories: number;
-  description: string;
-  image: string;
-  macros: {
-    protein: number;
-    fats: number;
-    carbs: number;
-  };
-  suitableFor: Goal[];
-  about: string;
-}
-
-const dietPlans: DietPlan[] = [
-  {
-    id: 'mediterranean',
-    name: 'Mediterranean Lifestyle',
-    calories: 2100,
-    description: 'Heart-healthy fats and fresh produce. High in Omega-3 and antioxidants.',
-    image: 'https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?w=1200&h=800&fit=crop',
-    macros: { protein: 79, fats: 82, carbs: 263 },
-    suitableFor: ['lose', 'maintain'],
-    about: 'The Mediterranean diet focuses on plant-based foods, such as vegetables, fruits, whole grains, legumes and nuts. It replaces butter with healthy fats, such as olive oil and canola oil, and uses herbs and spices instead of salt to flavor foods. This approach emphasizes consuming fish and poultry at least twice a week, while limiting red meat to only a few times a month.'
-  },
-  {
-    id: 'keto',
-    name: 'Keto Plan',
-    calories: 1800,
-    description: 'High fat, low carb metabolic state. Perfect for rapid fat loss and energy.',
-    image: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=1200&h=800&fit=crop',
-    macros: { protein: 113, fats: 140, carbs: 23 },
-    suitableFor: ['lose'],
-    about: 'The Ketogenic diet is a very low-carb, high-fat diet that shares many similarities with the Atkins and low-carb diets. It involves drastically reducing carbohydrate intake and replacing it with fat. This reduction in carbs puts your body into a metabolic state called ketosis. When this happens, your body becomes incredibly efficient at burning fat for energy.'
-  },
-  {
-    id: 'vegan',
-    name: 'Vegan Balance',
-    calories: 1950,
-    description: 'Plant-based nutritional excellence. Balanced nutrients for ethical fitness.',
-    image: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=1200&h=800&fit=crop',
-    macros: { protein: 98, fats: 54, carbs: 268 },
-    suitableFor: ['lose', 'maintain'],
-    about: 'A vegan diet contains only plants (such as vegetables, grains, nuts and fruits) and foods made from plants. Vegans do not eat foods that come from animals, including dairy products and eggs. This plan ensures you get all necessary nutrients through a variety of plant-based sources, focusing on high-protein legumes and nutrient-dense greens.'
-  },
-  {
-    id: 'lean-gains',
-    name: 'Lean Gains (16/8)',
-    calories: 2400,
-    description: 'Time-restricted feeding window. Focus on metabolic flexibility and growth.',
-    image: 'https://images.unsplash.com/photo-1543339308-43e59d6b73a6?w=1200&h=800&fit=crop',
-    macros: { protein: 180, fats: 80, carbs: 240 },
-    suitableFor: ['gain', 'maintain'],
-    about: 'Lean Gains is a popular form of intermittent fasting that involves an 8-hour eating window followed by a 16-hour fast. This approach is designed to maximize muscle growth while minimizing fat gain. It works by optimizing hormone levels and improving insulin sensitivity, making it an effective strategy for body recomposition.'
-  }
-];
+import { DietItem, MealSchedule } from '../types';
+import { UserProfile, Goal, ActivityLevel, Gender, WeightHistoryEntry } from '../App';
+import { MySchedule } from './MySchedule';
 
 interface DietGoalsProps {
   myDiets: DietItem[];
-  onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void;
-  onRemoveFromMyDiet: (id: string) => void;
+  onAddToMyDiet: (item: Omit<DietItem, 'id' | 'date'>) => void | Promise<void>;
+  onRemoveFromMyDiet: (id: string) => void | Promise<void>;
   profile: UserProfile;
   setProfile: React.Dispatch<React.SetStateAction<UserProfile>>;
   dailyTarget: number;
   baseTarget: number;
   carryOver: number;
+  schedules: MealSchedule[];
+  onUpdateSchedule: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>) => Promise<void>;
+  onDeleteSchedule: (scheduleId: number) => Promise<void>;
+  onPublishSchedule: (scheduleId: number, publish: boolean) => Promise<void>;
 }
 
-export function DietGoals({ 
-  myDiets, 
-  onAddToMyDiet, 
+export function DietGoals({
+  myDiets,
+  onAddToMyDiet,
   onRemoveFromMyDiet,
   profile,
   setProfile,
   dailyTarget,
   baseTarget,
-  carryOver
+  carryOver,
+  schedules,
+  onUpdateSchedule,
+  onDeleteSchedule,
+  onPublishSchedule,
 }: DietGoalsProps) {
-  const [isOnboarded, setIsOnboarded] = useState<boolean>(() => {
-    const saved = localStorage.getItem('calai_onboarded');
-    return saved === 'true';
-  });
+  const [isOnboarded, setIsOnboarded] = useState(profile.hasCompletedSetup);
+  const [isProfileLoaded, setIsProfileLoaded] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'all' | 'my'>('all');
+  useEffect(() => {
+    if (!isProfileLoaded) {
+      setIsOnboarded(profile.hasCompletedSetup);
+      setIsProfileLoaded(true);
+    }
+  }, [profile.hasCompletedSetup, isProfileLoaded]);
+
+  const [activeTab, setActiveTab] = useState<'my' | 'schedule'>('my');
   const [showResetWarning, setShowResetWarning] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<DietPlan | DietItem | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<DietItem | null>(null);
   const [errors, setErrors] = useState<{ age?: string; height?: string; weight?: string }>({});
 
   const validate = () => {
     const newErrors: { age?: string; height?: string; weight?: string } = {};
-    if (profile.age <= 0 || profile.age > 200) newErrors.age = 'Age must be between 1 and 200';
-    if (profile.height <= 0 || profile.height > 300) newErrors.height = 'Height must be between 1 and 300cm';
-    if (profile.weight <= 0 || profile.weight > 600) newErrors.weight = 'Weight must be between 1 and 600kg';
+    if (profile.age !== 0 && (profile.age <= 0 || profile.age > 200)) newErrors.age = 'Age must be between 1 and 200';
+    if (profile.height !== 0 && (profile.height <= 0 || profile.height > 300)) newErrors.height = 'Height must be between 1 and 300cm';
+    if (profile.weight !== 0 && (profile.weight <= 0 || profile.weight > 600)) newErrors.weight = 'Weight must be between 1 and 600kg';
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleCompleteOnboarding = () => {
     if (validate()) {
-      localStorage.setItem('calai_onboarded', 'true');
       setIsOnboarded(true);
+      setProfile(prev => {
+        const currentWeight = Number(prev.weight || 0);
+        const hasWeightHistory = (prev.weightHistory || []).length > 0;
+        const initialWeightEntry: WeightHistoryEntry | null = currentWeight > 0 && !hasWeightHistory
+          ? {
+              id: Date.now(),
+              weight: currentWeight,
+              recordedAt: new Date().toISOString(),
+              source: 'onboarding',
+              note: 'Initial onboarding weight',
+            }
+          : null;
+
+        return {
+          ...prev,
+          hasCompletedSetup: true,
+          startingWeight: prev.startingWeight || currentWeight,
+          weightHistory: initialWeightEntry ? [initialWeightEntry] : prev.weightHistory,
+        };
+      });
     }
   };
 
   const handleReset = () => {
-    localStorage.removeItem('calai_onboarded');
     setIsOnboarded(false);
     setShowResetWarning(false);
     setProfile({
-      name: 'Nguyen Tan Dat',
+      name: '',
       avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop',
       goal: 'lose',
-      activityLevel: 'sedentary',
+      activityLevel: 'moderate',
       gender: 'male',
-      age: 25,
-      height: 175,
-      weight: 70,
-      targetWeight: 65,
-      startingWeight: 70,
+      age: 0,
+      height: 0,
+      weight: 0,
+      targetWeight: 0,
+      startingWeight: 0,
+      weightHistory: [],
+      hasCompletedSetup: false,
     });
   };
 
   if (isOnboarded) {
     if (selectedPlan) {
-      const isMyDietItem = 'date' in selectedPlan;
-      const macros = isMyDietItem 
-        ? { protein: (selectedPlan as DietItem).protein, fats: (selectedPlan as DietItem).fats, carbs: (selectedPlan as DietItem).carbs }
-        : (selectedPlan as DietPlan).macros;
-      
-      const description = isMyDietItem 
-        ? (selectedPlan as DietItem).description || 'A personalized meal added to your diet log.'
-        : (selectedPlan as DietPlan).description;
-
-      const about = isMyDietItem
-        ? (selectedPlan as DietItem).about || 'This item was added to your diet log to help you track your nutritional intake. It contributes to your daily energy and macronutrient goals.'
-        : (selectedPlan as DietPlan).about;
+      const macros = {
+        protein: selectedPlan.protein,
+        fats: selectedPlan.fats,
+        carbs: selectedPlan.carbs,
+      };
+      const description = selectedPlan.description || 'A personalized meal added to your diet log.';
+      const about = selectedPlan.about || 'This item was added to your diet log to help you track your nutritional intake. It contributes to your daily energy and macronutrient goals.';
 
       return (
-        <div className="flex-1 ml-64 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-          <div className="h-[450px] relative">
+        <div className="flex-1 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+          <div className="h-[300px] lg:h-[450px] relative">
             <img src={selectedPlan.image} alt={selectedPlan.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             <div className="absolute inset-0 bg-gradient-to-b from-bg-dark/40 via-transparent to-bg-dark" />
             
             <button 
               onClick={() => setSelectedPlan(null)}
-              className="absolute top-8 left-8 flex items-center gap-2 px-4 py-2 rounded-full bg-bg-dark/40 backdrop-blur-md border border-white/10 hover:bg-bg-dark/60 transition-colors z-10"
+              className="absolute top-20 lg:top-8 left-4 lg:left-8 flex items-center gap-2 px-4 py-2 rounded-full bg-bg-dark/40 backdrop-blur-md border border-white/10 hover:bg-bg-dark/60 transition-colors z-10"
             >
               <ArrowLeft size={18} />
               <span className="text-sm font-bold">Back</span>
             </button>
 
-            <div className="absolute bottom-12 left-10 right-10">
+            <div className="absolute bottom-12 left-6 lg:left-10 right-6 lg:right-10">
               <span className="px-3 py-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black uppercase tracking-widest mb-4 inline-block">
-                {isMyDietItem ? 'Logged Item' : 'Healthy Choice'}
+                Logged Item
               </span>
-              <h1 className="text-6xl font-black tracking-tight mb-4">{selectedPlan.name}</h1>
-              <p className="text-white/80 text-lg max-w-2xl leading-relaxed">
+              <h1 className="text-3xl lg:text-6xl font-black tracking-tight mb-4">{selectedPlan.name}</h1>
+              <p className="text-white/80 text-sm lg:text-lg max-w-2xl leading-relaxed">
                 {description}
               </p>
             </div>
           </div>
 
-          <div className="p-10 space-y-10 pb-32">
+          <div className="p-4 lg:p-10 space-y-10 pb-32">
             {/* About Section */}
-            <section className="bg-surface-dark/50 rounded-[2.5rem] p-8 border border-white/5">
+            <section className="bg-surface-dark/50 rounded-[2rem] lg:rounded-[2.5rem] p-6 lg:p-8 border border-white/5">
               <div className="flex items-center gap-3 mb-6">
                 <div className="w-10 h-10 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
                   <Info size={20} />
                 </div>
-                <h2 className="text-xl font-bold">About this {isMyDietItem ? 'Meal' : 'Diet'}</h2>
+                <h2 className="text-xl font-bold">About this Meal</h2>
               </div>
-              <p className="text-text-muted leading-relaxed text-lg">
+              <p className="text-text-muted leading-relaxed text-sm lg:text-lg">
                 {about}
               </p>
             </section>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
               {[
                 { label: 'Energy', value: `${selectedPlan.calories.toLocaleString()} kcal`, sub: 'Daily Target', color: 'bg-brand-orange', icon: <Flame size={20} /> },
                 { label: 'Protein', value: `${macros.protein}g`, sub: 'Building Blocks', color: 'bg-green-500', icon: <Zap size={20} /> },
@@ -206,128 +177,70 @@ export function DietGoals({
             </div>
 
             {/* Action Bar */}
-            <div className="bg-surface-dark rounded-[2.5rem] p-8 border border-white/5 flex items-center justify-between">
+            <div className="bg-surface-dark rounded-[2rem] lg:rounded-[2.5rem] p-6 lg:p-8 border border-white/5 flex flex-col sm:flex-row items-center justify-between gap-6">
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
                   <Heart size={28} />
                 </div>
                 <div>
                   <p className="text-[10px] text-text-muted uppercase tracking-widest font-bold mb-1">Goal Focus</p>
-                  <p className="text-xl font-bold">Heart Health & Weight Maintenance</p>
+                  <p className="text-lg lg:text-xl font-bold">Heart Health & Weight Maintenance</p>
                 </div>
               </div>
-              {isMyDietItem ? (
-                <motion.button 
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => {
-                    onRemoveFromMyDiet((selectedPlan as DietItem).id);
-                    setSelectedPlan(null);
-                  }}
-                  className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white font-black py-4 px-10 rounded-2xl flex items-center gap-3 transition-all border border-red-500/20"
-                >
-                  <X size={20} />
-                  Remove from My Diet
-                </motion.button>
-              ) : (
-                <motion.button 
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => {
-                    onAddToMyDiet({
-                      name: selectedPlan.name,
-                      calories: selectedPlan.calories,
-                      protein: macros.protein,
-                      carbs: macros.carbs,
-                      fats: macros.fats,
-                      image: selectedPlan.image,
-                      description: (selectedPlan as DietPlan).description,
-                      about: (selectedPlan as DietPlan).about
-                    });
-                    setSelectedPlan(null);
-                    setActiveTab('my');
-                  }}
-                  className="bg-brand-orange text-bg-dark font-black py-4 px-10 rounded-2xl flex items-center gap-3 shadow-xl shadow-brand-orange/20"
-                >
-                  <PlusCircle size={20} />
-                  Add to My Diet
-                </motion.button>
-              )}
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  onRemoveFromMyDiet(selectedPlan.id);
+                  setSelectedPlan(null);
+                }}
+                className="w-full sm:w-auto bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white font-black py-4 px-10 rounded-2xl flex items-center justify-center gap-3 transition-all border border-red-500/20"
+              >
+                <X size={20} />
+                Remove from My Diet
+              </motion.button>
             </div>
           </div>
         </div>
       );
     }
 
-    const filteredPlans = dietPlans.filter(plan => plan.suitableFor.includes(profile.goal));
     const totalCalories = myDiets.reduce((sum, item) => sum + item.calories, 0);
     const progressPercentage = Math.min((totalCalories / dailyTarget) * 100, 100);
 
     return (
-      <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-        <header className="mb-8">
+      <div className="flex-1 p-4 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+        <header className="mt-16 lg:mt-0 mb-8">
           <div className="flex items-center justify-between mb-6">
-            <h1 className="text-4xl font-black tracking-tight">Diet goals</h1>
+            <h1 className="text-4xl font-black tracking-tight">My goal</h1>
           </div>
-          
-          <div className="flex gap-8 border-b border-white/10">
-            <button 
-              onClick={() => setActiveTab('all')}
-              className={`pb-4 text-sm font-bold transition-all relative ${activeTab === 'all' ? 'text-brand-orange' : 'text-text-muted hover:text-white'}`}
-            >
-              All Diets
-              {activeTab === 'all' && <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-orange" />}
-            </button>
-            <button 
+
+          <div className="flex gap-8 border-b border-white/10 overflow-x-auto whitespace-nowrap scrollbar-hide">
+            <button
               onClick={() => setActiveTab('my')}
               className={`pb-4 text-sm font-bold transition-all relative ${activeTab === 'my' ? 'text-brand-orange' : 'text-text-muted hover:text-white'}`}
             >
               My Diets
               {activeTab === 'my' && <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-orange" />}
             </button>
+            <button
+              onClick={() => setActiveTab('schedule')}
+              className={`pb-4 text-sm font-bold transition-all relative ${activeTab === 'schedule' ? 'text-brand-orange' : 'text-text-muted hover:text-white'}`}
+            >
+              My schedule
+              {activeTab === 'schedule' && <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-orange" />}
+            </button>
           </div>
         </header>
 
-        {activeTab === 'all' ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-32">
-            {filteredPlans.map((plan) => (
-              <motion.div 
-                key={plan.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                onClick={() => setSelectedPlan(plan)}
-                className="bg-surface-dark rounded-3xl overflow-hidden border border-white/5 group cursor-pointer"
-              >
-                <div className="h-48 overflow-hidden relative">
-                  <img src={plan.image} alt={plan.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" referrerPolicy="no-referrer" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-bg-dark/80 to-transparent" />
-                </div>
-                <div className="p-6">
-                  <h3 className="text-xl font-bold mb-2">{plan.name}</h3>
-                  <div className="inline-block px-3 py-1 rounded-full bg-brand-orange/10 text-brand-orange text-xs font-bold mb-4">
-                    {plan.calories} kcal
-                  </div>
-                  <p className="text-text-muted text-sm leading-relaxed mb-6 h-12 overflow-hidden">
-                    {plan.description}
-                  </p>
-                  
-                  <div className="grid grid-cols-3 gap-4 pt-6 border-t border-white/5">
-                    <div className="text-center">
-                      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Protein</p>
-                      <p className="font-bold">{plan.macros.protein}g</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Fats</p>
-                      <p className="font-bold">{plan.macros.fats}g</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-1">Carbs</p>
-                      <p className="font-bold">{plan.macros.carbs}g</p>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
+        {activeTab === 'schedule' ? (
+          <div className="pb-32">
+            <MySchedule
+              schedules={schedules}
+              onUpdate={onUpdateSchedule}
+              onDelete={onDeleteSchedule}
+              onPublish={onPublishSchedule}
+            />
           </div>
         ) : (
           <div className="pb-32">
@@ -376,21 +289,21 @@ export function DietGoals({
                 ))}
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-20 text-text-muted bg-surface-dark/30 rounded-[3rem] border border-dashed border-white/10">
+              <div className="flex flex-col items-center justify-center py-20 text-text-muted bg-surface-dark/30 rounded-[2.5rem] lg:rounded-[3rem] border border-dashed border-white/10 text-center px-6">
                 <PlusCircle size={48} className="mb-4 opacity-20" />
                 <p className="font-medium">No diets logged yet.</p>
-                <p className="text-sm opacity-60">Start scanning your meals or add from All Diets!</p>
+                <p className="text-sm opacity-60">Start scanning your meals or add food from Meal Plans.</p>
               </div>
             )}
           </div>
         )}
  
         {/* Quick View & Reset Goal */}
-        <div className="fixed bottom-10 right-10 z-40">
+        <div className="fixed bottom-6 lg:bottom-10 right-6 lg:right-10 z-40">
           <motion.div 
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-surface-lighter/80 backdrop-blur-xl p-6 rounded-[2.5rem] border border-white/10 shadow-2xl w-80"
+            className="bg-surface-lighter/80 backdrop-blur-xl p-4 lg:p-6 rounded-[2rem] lg:rounded-[2.5rem] border border-white/10 shadow-2xl w-[280px] lg:w-80"
           >
             <div className="flex items-center justify-between mb-4">
               <h4 className="font-bold text-sm">Goal Overview</h4>
@@ -405,33 +318,33 @@ export function DietGoals({
             
             <div className="space-y-4">
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
-                  <Flag size={20} />
+                <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-xl lg:rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
+                  <Flag size={18} />
                 </div>
                 <div>
-                  <p className="text-[10px] text-text-muted uppercase tracking-widest">Current Goal</p>
-                  <p className="font-bold text-sm capitalize">{profile.goal === 'lose' ? 'Lose Weight' : profile.goal === 'maintain' ? 'Maintain' : 'Gain Muscle'}</p>
+                  <p className="text-[8px] lg:text-[10px] text-text-muted uppercase tracking-widest">Current Goal</p>
+                  <p className="font-bold text-xs lg:text-sm capitalize">{profile.goal === 'lose' ? 'Lose Weight' : profile.goal === 'maintain' ? 'Maintain' : 'Gain Muscle'}</p>
                 </div>
               </div>
               
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
-                  <Zap size={20} />
+                <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-xl lg:rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
+                  <Zap size={18} />
                 </div>
                 <div>
-                  <p className="text-[10px] text-text-muted uppercase tracking-widest">Activity</p>
-                  <p className="font-bold text-sm capitalize">{profile.activityLevel}</p>
+                  <p className="text-[8px] lg:text-[10px] text-text-muted uppercase tracking-widest">Activity</p>
+                  <p className="font-bold text-xs lg:text-sm capitalize">{profile.activityLevel}</p>
                 </div>
               </div>
             </div>
  
             <div className="mt-6 pt-6 border-t border-white/5">
-              <div className="flex justify-between text-xs mb-2">
+              <div className="flex justify-between text-[10px] lg:text-xs mb-2">
                 <span className="text-text-muted">Daily Target</span>
                 <span className="font-bold">{totalCalories.toLocaleString()} / {dailyTarget.toLocaleString()} kcal</span>
               </div>
               {carryOver < 0 && (
-                <p className="text-[10px] text-brand-orange font-bold mb-3 opacity-60">
+                <p className="text-[8px] lg:text-[10px] text-brand-orange font-bold mb-3 opacity-60">
                   Includes {Math.abs(carryOver)} kcal carry-over debt
                 </p>
               )}
@@ -461,25 +374,25 @@ export function DietGoals({
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="relative bg-surface-dark p-8 rounded-[2.5rem] border border-white/10 max-w-md w-full shadow-2xl"
+                className="relative bg-surface-dark p-6 lg:p-8 rounded-[2rem] lg:rounded-[2.5rem] border border-white/10 max-w-md w-full shadow-2xl"
               >
                 <div className="w-16 h-16 rounded-3xl bg-red-500/10 flex items-center justify-center text-red-500 mb-6">
                   <AlertTriangle size={32} />
                 </div>
                 <h3 className="text-2xl font-bold mb-4">Reset your goals?</h3>
-                <p className="text-text-muted leading-relaxed mb-8">
+                <p className="text-text-muted leading-relaxed mb-8 text-sm lg:text-base">
                   This will clear your current profile and <span className="text-white font-bold">restart all progress tracking</span>. You will need to complete the onboarding process again.
                 </p>
                 <div className="flex gap-4">
                   <button 
                     onClick={() => setShowResetWarning(false)}
-                    className="flex-1 py-4 rounded-2xl font-bold bg-white/5 hover:bg-white/10 transition-colors"
+                    className="flex-1 py-4 rounded-2xl font-bold bg-white/5 hover:bg-white/10 transition-colors text-sm"
                   >
                     Cancel
                   </button>
                   <button 
                     onClick={handleReset}
-                    className="flex-1 py-4 rounded-2xl font-bold bg-red-500 hover:bg-red-600 text-white transition-colors"
+                    className="flex-1 py-4 rounded-2xl font-bold bg-red-500 hover:bg-red-600 text-white transition-colors text-sm"
                   >
                     Reset Now
                   </button>
@@ -493,11 +406,11 @@ export function DietGoals({
   }
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white overflow-y-auto">
-      <div className="max-w-4xl mx-auto pt-10 pb-20">
+    <div className="flex-1 p-4 lg:p-10 min-h-screen bg-bg-dark text-white overflow-y-auto">
+      <div className="max-w-4xl mx-auto pt-16 lg:pt-10 pb-20">
         <header className="mb-12">
           <p className="text-brand-orange text-xs font-bold uppercase tracking-[0.2em] mb-2">Onboarding</p>
-          <h1 className="text-5xl font-black tracking-tight mb-6">Profile Setup</h1>
+          <h1 className="text-3xl lg:text-5xl font-black tracking-tight mb-6">Profile Setup</h1>
           <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
             <motion.div 
               initial={{ width: 0 }}
@@ -512,11 +425,11 @@ export function DietGoals({
           <section>
             <div className="flex items-center gap-3 mb-2">
               <Flag className="text-brand-orange" size={20} />
-              <h2 className="text-2xl font-bold">What is your primary goal?</h2>
+              <h2 className="text-xl lg:text-2xl font-bold">What is your primary goal?</h2>
             </div>
-            <p className="text-text-muted mb-8">This helps us calculate your daily calorie and macro needs.</p>
+            <p className="text-text-muted text-sm lg:text-base mb-8">This helps us calculate your daily calorie and macro needs.</p>
             
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {[
                 { id: 'lose', title: 'Lose Weight', desc: 'Burn fat and get leaner' },
                 { id: 'maintain', title: 'Maintain', desc: 'Keep current physique' },
@@ -547,18 +460,29 @@ export function DietGoals({
           <section>
             <div className="flex items-center gap-3 mb-2">
               <Flag className="text-brand-orange" size={20} />
-              <h2 className="text-2xl font-bold">What is your target weight?</h2>
+              <h2 className="text-xl lg:text-2xl font-bold">What is your target weight?</h2>
             </div>
-            <p className="text-text-muted mb-8">This helps us track your progress towards your ideal weight.</p>
+            <p className="text-text-muted text-sm lg:text-base mb-8">This helps us track your progress towards your ideal weight.</p>
             
             <div className="max-w-xs">
               <label className="block text-sm font-bold mb-3">Target Weight (kg)</label>
-              <input 
-                type="number" 
-                value={profile.targetWeight}
-                onChange={(e) => setProfile({ ...profile, targetWeight: parseInt(e.target.value) || 0 })}
+              <input
+                type="text"
+                inputMode="decimal"
+                value={profile.targetWeight || ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    setProfile({ ...profile, targetWeight: 0 });
+                    return;
+                  }
+                  const parsed = parseFloat(raw);
+                  if (!isNaN(parsed)) {
+                    setProfile({ ...profile, targetWeight: parsed });
+                  }
+                }}
                 className="w-full bg-surface-dark border border-white/5 rounded-2xl p-4 text-white focus:outline-none focus:border-brand-orange transition-colors"
-                placeholder="65"
+                placeholder=""
               />
             </div>
           </section>
@@ -567,9 +491,9 @@ export function DietGoals({
           <section>
             <div className="flex items-center gap-3 mb-2">
               <Zap className="text-brand-orange" size={20} />
-              <h2 className="text-2xl font-bold">Activity Level</h2>
+              <h2 className="text-xl lg:text-2xl font-bold">Activity Level</h2>
             </div>
-            <p className="text-text-muted mb-8">How active is your daily lifestyle?</p>
+            <p className="text-text-muted text-sm lg:text-base mb-8">How active is your daily lifestyle?</p>
             
             <div className="space-y-3">
               {[
@@ -605,11 +529,11 @@ export function DietGoals({
           <section>
             <div className="flex items-center gap-3 mb-2">
               <User className="text-brand-orange" size={20} />
-              <h2 className="text-2xl font-bold">Personal Details</h2>
+              <h2 className="text-xl lg:text-2xl font-bold">Personal Details</h2>
             </div>
-            <p className="text-text-muted mb-8">We use these to calculate your Basal Metabolic Rate (BMR).</p>
+            <p className="text-text-muted text-sm lg:text-base mb-8">We use these to calculate your Basal Metabolic Rate (BMR).</p>
             
-            <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-6">
               <div className="col-span-1">
                 <label className="block text-sm font-bold mb-3">Gender</label>
                 <div className="flex gap-4">
@@ -631,39 +555,69 @@ export function DietGoals({
 
               <div className="col-span-1">
                 <label className="block text-sm font-bold mb-3">Age</label>
-                <input 
-                  type="number" 
-                  value={profile.age}
-                  onChange={(e) => setProfile({ ...profile, age: parseInt(e.target.value) || 0 })}
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={profile.age || ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setProfile({ ...profile, age: 0 });
+                      return;
+                    }
+                    const parsed = parseInt(raw);
+                    if (!isNaN(parsed)) {
+                      setProfile({ ...profile, age: parsed });
+                    }
+                  }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.age ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
-                  placeholder="25"
+                  placeholder=""
                 />
                 {errors.age && <p className="text-red-500 text-xs mt-2 flex items-center gap-1"><Info size={12} /> {errors.age}</p>}
               </div>
 
               <div className="col-span-1">
                 <label className="block text-sm font-bold mb-3">Height (cm)</label>
-                <input 
-                  type="number" 
-                  value={profile.height}
-                  onChange={(e) => setProfile({ ...profile, height: parseInt(e.target.value) || 0 })}
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={profile.height || ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setProfile({ ...profile, height: 0 });
+                      return;
+                    }
+                    const parsed = parseInt(raw);
+                    if (!isNaN(parsed)) {
+                      setProfile({ ...profile, height: parsed });
+                    }
+                  }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.height ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
-                  placeholder="175"
+                  placeholder=""
                 />
                 {errors.height && <p className="text-red-500 text-xs mt-2 flex items-center gap-1"><Info size={12} /> {errors.height}</p>}
               </div>
 
               <div className="col-span-1">
                 <label className="block text-sm font-bold mb-3">Current Weight (kg)</label>
-                <input 
-                  type="number" 
-                  value={profile.weight}
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={profile.weight || ''}
                   onChange={(e) => {
-                    const val = parseInt(e.target.value) || 0;
-                    setProfile({ ...profile, weight: val, startingWeight: val });
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      setProfile({ ...profile, weight: 0, startingWeight: 0, weightHistory: [] });
+                      return;
+                    }
+                    const parsed = parseFloat(raw);
+                    if (!isNaN(parsed)) {
+                      setProfile({ ...profile, weight: parsed, startingWeight: parsed });
+                    }
                   }}
                   className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${errors.weight ? 'border-red-500' : 'border-white/5 focus:border-brand-orange'}`}
-                  placeholder="70"
+                  placeholder=""
                 />
                 {errors.weight && <p className="text-red-500 text-xs mt-2 flex items-center gap-1"><Info size={12} /> {errors.weight}</p>}
               </div>
@@ -671,12 +625,12 @@ export function DietGoals({
           </section>
 
           <div className="pt-10 flex items-center justify-between border-t border-white/5">
-            <button className="text-text-muted font-bold hover:text-white transition-colors">Back</button>
+            <button className="text-text-muted font-bold hover:text-white transition-colors text-sm">Back</button>
             <motion.button 
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleCompleteOnboarding}
-              className="bg-brand-orange hover:bg-brand-orange-dark text-bg-dark font-black py-4 px-10 rounded-2xl flex items-center gap-3 shadow-xl shadow-brand-orange/20 transition-colors"
+              className="bg-brand-orange hover:bg-brand-orange-dark text-bg-dark font-black py-4 px-6 lg:px-10 rounded-2xl flex items-center gap-3 shadow-xl shadow-brand-orange/20 transition-colors text-sm"
             >
               Continue
               <ArrowRight size={20} />
