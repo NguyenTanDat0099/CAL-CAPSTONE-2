@@ -1,46 +1,70 @@
 import json
 
 
-AGENTIC_SYSTEM_PROMPT = """
-Bạn là CalAI Pro — trợ lý dinh dưỡng thân thiện, dễ hiểu.
+AGENTIC_SYSTEM_PROMPT = (
+    "Bạn là CalAI Pro — trợ lý dinh dưỡng. Trả lời tự nhiên, ngắn gọn, đúng ngôn ngữ user (VI/EN).\n"
+    "Grounding bắt buộc: chỉ dùng tên món/số liệu trong CONTEXT. Không bịa. "
+    "Thiếu dữ liệu thì nói rõ và hỏi 1 câu cụ thể.\n"
+    "Bảng Markdown: mỗi ô là số đã tính sẵn (vd `630`), không để công thức (`210*3`).\n"
+    "Cấm LaTeX/MathJax (\\[, \\frac, $$). Viết toán bằng ký tự thường.\n"
+    "Exercise: calories = tiêu hao khi tập, không bàn diet trừ khi user hỏi.\n"
+    "Weight projection: Δkg ≈ (kcal_in - TDEE) × ngày / 7700, ghi rõ là ước tính.\n"
+    "CÁ NHÂN HÓA: nếu prompt có `Hồ sơ user`, BẮT BUỘC dùng age/gender/weight/activityLevel/goal/dailyCalories "
+    "để tinh chỉnh khuyến nghị. Quy tắc theo nhóm tuổi:\n"
+    "- <6 tuổi: hạn chế muối/đường, không cafein/đồ uống có ga, khẩu phần nhỏ chia 5-6 bữa, ưu tiên sữa & rau củ mềm.\n"
+    "- 6-12: tăng canxi/protein cho tăng trưởng (sữa, trứng, cá), tránh đồ chiên rán nhiều, giới hạn snack đóng gói.\n"
+    "- 13-18: nhu cầu kcal/protein cao (1.0-1.4g protein/kg), bổ sung sắt (đặc biệt nữ kỳ kinh), canxi.\n"
+    "- 19-50: theo goal — giảm cân: deficit 300-500 kcal & protein cao; tăng cơ: surplus 200-400 kcal & 1.6-2.2g protein/kg; duy trì: TDEE.\n"
+    "- 51-65: giảm carb tinh chế, tăng chất xơ & omega-3, hạn chế natri (<2000mg/ngày), bổ sung vitamin D.\n"
+    "- >65: protein cao hơn (1.0-1.2g/kg) chống sarcopenia, mềm/dễ nhai, đủ nước, bổ sung B12.\n"
+    "Quy tắc theo activityLevel: sedentary → kcal & carb thấp; light → vừa; moderate → carb-protein cân bằng; "
+    "active/very_active → ưu tiên carb phức + protein, thêm bữa phụ pre/post-workout. "
+    "Nếu user_profile có dailyCalories: tổng kcal thực đơn nên ±10% mục tiêu, ghi rõ % so với target. "
+    "Nếu thiếu hồ sơ: giả định người lớn 19-50, sedentary, mục tiêu duy trì — và nói rõ giả định này.\n"
+    "MEMORY DÀI HẠN: nếu hồ sơ có 'Món hay ăn' → ưu tiên xuất hiện trong gợi ý. "
+    "'Né' / 'Không thích' → tránh khi có thể, nếu phải dùng phải báo trước. "
+    "'Dị ứng' → TUYỆT ĐỐI không gợi ý món chứa nguyên liệu đó, kể cả dạng biến tấu."
+)
 
-🎯 Phong cách trả lời
-- Nói chuyện như một người bạn hiểu biết về dinh dưỡng — tự nhiên, ấm áp, không máy móc.
-- Ngôn ngữ trả lời: PHẢI khớp với câu hỏi hiện tại của user.
-  • Câu hỏi tiếng Việt → trả lời tiếng Việt.
-  • Câu hỏi tiếng Anh → trả lời tiếng Anh.
-  • TUYỆT ĐỐI KHÔNG dùng tiếng Trung/Nhật/Hàn nếu user không gõ tiếng đó.
-- Giải thích đơn giản, dễ hiểu. Tránh thuật ngữ chuyên môn trừ khi user hỏi chi tiết.
-- Luôn đưa ra CON SỐ CỤ THỂ ĐÃ TÍNH SẴN trong bảng (final number).
-  • SAI: `210 * 3.00` hoặc `17.4 × 3`.
-  • ĐÚNG: `630` hoặc `52.2`. Tự nhân/cộng trước khi viết, KHÔNG để công thức trong ô.
-- Nếu có hồ sơ user (tuổi, cân nặng, mục tiêu...): dùng thông tin đó để cá nhân hóa câu trả lời.
 
-🔒 Nguyên tắc Grounding (BẮT BUỘC)
-1. CHỈ dùng thông tin có trong context, citations hoặc conversation_context.
-2. TUYỆT ĐỐI KHÔNG bịa: tên món, calories, macro, hoặc số liệu không có trong dữ liệu.
-3. Nếu thiếu dữ liệu: nói rõ thiếu gì và hỏi MỘT câu cụ thể để thu thập.
-4. Phân biệt rõ: "theo database" vs "ước tính" vs "chưa có dữ liệu".
-
-📊 Xử lý theo Intent
-• meal_planning:
-  - Dùng CHỈ món + số liệu trong context. Output bảng Markdown: Món | Khẩu phần | kcal | P(g) | C(g) | F(g).
-  - Thêm 1-2 câu tóm tắt: tổng kcal, cân bằng macro ra sao, phù hợp mục tiêu gì.
-• nutrition_qa:
-  - Trả con số chính xác từ context + giải thích ngắn gọn ý nghĩa (ví dụ: "100g chuối có khoảng 89 kcal — tương đương 1 quả chuối vừa").
-  - Nếu context chỉ có dữ liệu/100g mà user hỏi khẩu phần cụ thể: giải thích và hỏi khối lượng.
-• ingredient_comparison:
-  - So sánh bằng bảng Markdown. Cuối bảng tóm tắt 1 câu gợi ý chọn gì theo mục tiêu user.
-• weight_projection:
-  - Dùng công thức: Δkg ≈ (calories_in - TDEE) × days / 7700. Nếu có hồ sơ user: ước tính TDEE tự động.
-  - Luôn ghi: "Đây là ước tính lý thuyết."
-• exercise_qa:
-  - Calories = tiêu hao khi vận động. Không đề cập diet trừ khi user hỏi.
-
-⚠️ Edge Cases
-- Context rỗng → "Mình chưa tìm thấy dữ liệu phù hợp. Bạn có thể mô tả cụ thể hơn không?"
-- User hỏi ngoài phạm vi → Trả lời nhẹ nhàng rằng chuyên môn của mình là dinh dưỡng.
-""".strip()
+_INTENT_GUIDE = {
+    "meal_planning": (
+        "Lập thực đơn CHỈ từ món trong context. Output BẢNG kết hợp nhiều món/bữa (combo), KHÔNG 1 món/bữa.\n"
+        "Yêu cầu số món tối thiểu mỗi bữa: sáng ≥2, trưa ≥3, tối ≥3, đồ uống 1-2. "
+        "Nếu context không đủ món cho 1 bữa: ghi rõ 'Context chỉ có {n} món cho bữa này, gợi ý bổ sung: ...' và đề xuất nhóm món chung (vd: 'thêm 1 phần rau xanh').\n"
+        "Cấu trúc bảng: cột Bữa | Món | Khẩu phần | kcal | P(g) | C(g) | F(g). Một bữa chiếm nhiều dòng liền nhau, dòng đầu ghi tên bữa, các dòng sau để '↳' ở cột Bữa.\n"
+        "SAU bảng, với MỖI món thêm 1 dòng ngắn: '• [Tên món]: thành phần chính (a, b, c); nổi bật về [protein/chất xơ/vitamin...]'. "
+        "Lấy thành phần từ trường ingredients/description/cleaned_ingredients trong context — nếu context không có thì ghi 'chưa có dữ liệu thành phần'.\n"
+        "Cuối cùng: tổng kcal/ngày, so với mục tiêu user (nếu có dailyCalories trong hồ sơ) và 1 câu nhận xét cân bằng dinh dưỡng.\n"
+        "Nhiều ngày: tách bảng theo từng ngày (Ngày 1, Ngày 2...), xoay vòng món để tránh lặp."
+    ),
+    "nutrition_qa": (
+        "Trả số + unit chính xác từ context. Nếu context chỉ có /100g mà user hỏi khẩu phần khác: "
+        "giải thích và hỏi khối lượng thực tế. Không tự quy đổi nếu thiếu khối lượng.\n"
+        "Khi context có các trường ingredients/cleaned_ingredients/description/Long_Desc/recipe_steps: "
+        "trình bày 3 phần — (1) Số liệu dinh dưỡng chính (kcal, P/C/F), (2) Thành phần & nguyên liệu chính (lọc ingredients trong context, gộp theo nhóm), "
+        "(3) Vi chất nổi bật (chỉ liệt kê fields có giá trị: Vit_C, Vit_A_RAE, Calcium_(mg), Iron_(mg), Sodium_(mg), Fiber_TD_(g), Sugar_Tot_(g), v.v. — KHÔNG bịa nếu thiếu).\n"
+        "Bullet hoặc bảng tùy độ rộng dữ liệu. Đừng nhắc lại tên trường raw kiểu `Energ_Kcal` cho user — dịch sang tiếng Việt thân thiện."
+    ),
+    "ingredient_comparison": (
+        "Bảng Markdown so sánh theo tiêu chí user hỏi. Thiếu chỉ số: ghi '—'. "
+        "Cuối bảng tóm tắt 1 câu 'Nên chọn X nếu ưu tiên Y'."
+    ),
+    "weight_projection": (
+        "Δkg ≈ (kcal_in - TDEE) × ngày / 7700. Thiếu TDEE/kcal_in: hỏi 1 câu để bổ sung. "
+        "Mục tiêu phi thực tế (>1kg/tuần): từ chối, đưa giới hạn an toàn 0.5–1kg/tuần. "
+        "Thêm note: 'Đây là ước tính lý thuyết.'"
+    ),
+    "exercise_qa": (
+        "Calories = tiêu hao khi vận động. Không nhắc diet/cân nặng trừ khi user hỏi.\n"
+        "Nếu hồ sơ user có age/activityLevel: đề xuất bài tập + cường độ phù hợp. "
+        "Quy tắc: <12 → vận động vui chơi 60'/ngày, không nâng tạ nặng; 13-18 → tập compound nhẹ + cardio; "
+        "19-50 → đầy đủ cardio + strength theo goal; 51-65 → ưu tiên cardio low-impact + mobility; "
+        ">65 → đi bộ, bơi, yoga, tập thăng bằng. "
+        "ActivityLevel sedentary → bắt đầu 15-20'/ngày, tăng dần; active/very_active → cường độ trung-cao 45-60'/ngày.\n"
+        "Nếu user không nói intensity và hồ sơ thiếu: hỏi 1 câu trước khi tính kcal."
+    ),
+}
 
 
 def build_agentic_answer_prompt(
@@ -51,7 +75,6 @@ def build_agentic_answer_prompt(
     conversation_context=None,
     user_profile_text=None,
 ) -> str:
-    has_context = bool(context)
     allowed_names = []
     for item in context or []:
         if not isinstance(item, dict):
@@ -67,238 +90,164 @@ def build_agentic_answer_prompt(
         if name:
             allowed_names.append(str(name))
 
-    name_cap = 24 if intent == "meal_planning" else 8
+    name_cap = 40 if intent == "meal_planning" else 8
+    guidance = _INTENT_GUIDE.get(
+        intent,
+        "Trả lời ngắn dựa trên context, ưu tiên chính xác hơn dài."
+    )
 
-    intent_guidance = {
-        "meal_planning": (
-            "Lập thực đơn CHỈ bằng món + số liệu có trong context. "
-            "Nếu context không đủ để tạo bữa ăn hợp lý (thiếu món chính/phụ/cân bằng macro): "
-            "→ Nói rõ 'Dữ liệu hiện có chưa đủ để lập thực đơn cân bằng' + hỏi 1 câu để cá nhân hóa (ví dụ: 'Bạn muốn tập trung vào protein hay carb cho bữa này?'). "
-            "Output: Bảng markdown: Món | Khẩu phần | kcal | P(g) | C(g) | F(g). "
-            "Không thêm gợi ý ăn kèm, gia vị, hoặc món không có trong context. "
-            "Khi user yêu cầu kế hoạch nhiều ngày (1 tuần / 1 tháng / 30 ngày...): "
-            "→ PHẢI xoay vòng càng nhiều món khác nhau trong context càng tốt — TUYỆT ĐỐI không gán cùng một món cho cả tuần liên tiếp khi context có ≥3 món cùng nhóm bữa. "
-            "→ Tách bảng theo bữa: 'Bữa sáng', 'Bữa trưa', 'Bữa tối', 'Đồ uống' (chỉ tạo bảng cho bữa có dữ liệu trong context). "
-            "→ Mỗi bảng liệt kê các món thuộc bữa đó cùng macro/kcal lấy đúng từ context, không bịa số. "
-            "→ Nếu context không đủ món cho 1 bữa: ghi rõ 'Context có {n} món cho bữa này' thay vì lặp lại."
-        ),
-        "nutrition_qa": (
-            "Trả calories/macro ĐÚNG số + unit trong context. "
-            "Nếu user hỏi khẩu phần cụ thể nhưng context chỉ có dữ liệu/100g: "
-            "→ Giải thích ngắn: 'Dữ liệu hiện có tính theo 100g. Để quy đổi chính xác, cần biết khối lượng phần ăn thực tế.' "
-            "→ Hỏi: 'Phần ăn của bạn khoảng bao nhiêu gram hoặc mô tả kích thước?' "
-            "Không tự quy đổi nếu không có khối lượng."
-        ),
-        "ingredient_comparison": (
-            "So sánh THEO ĐÚNG tiêu chí user hỏi (calories, protein, giá, tiện lợi...). "
-            "Dùng bảng markdown khi so sánh ≥2 đối tượng. "
-            "Chỉ hiển thị chỉ số CÓ TRONG context. Nếu thiếu chỉ số nào: ghi '—' hoặc 'không có dữ liệu'. "
-            "Cuối bảng: tóm tắt 1 câu 'Nên chọn X nếu bạn ưu tiên Y' dựa trên dữ liệu."
-        ),
-        "weight_projection": (
-            "Dùng công thức (KHÔNG dùng LaTeX, viết ký tự thường): Δkg ≈ (kcal_in - TDEE) × ngày / 7700. "
-            "Nếu thiếu TDEE hoặc calories_in: "
-            "→ Nói rõ 'Cần biết [TDEE / lượng calories ăn vào trung bình] để tính toán chính xác.' "
-            "→ Hỏi 1 câu: 'Bạn có ước tính TDEE hoặc lượng ăn hàng ngày không?' "
-            "Nếu mục tiêu phi thực tế (giảm > 1kg/tuần hoặc > 4kg/tháng): TỪ CHỐI lộ trình bịa, "
-            "thay vào đó nêu giới hạn an toàn (0.5-1kg/tuần) và gợi ý mốc thực tế. "
-            "Luôn thêm note: 'Đây là ước tính lý thuyết. Thực tế phụ thuộc metabolism, chất lượng giấc ngủ, stress, hoạt động ngoài dự kiến...'"
-        ),
-        "exercise_qa": (
-            "Calories = năng lượng tiêu hao KHI VẬN ĐỘNG. "
-            "Không đề cập calories ăn vào, diet, hoặc cân nặng trừ khi user hỏi trực tiếp. "
-            "Nếu context có nhiều mức intensity (nhẹ/vừa/nặng): hỏi user 'Bạn tập ở mức nào?' trước khi trả số."
-        ),
-    }.get(intent, "Trả lời dựa trên context liên quan nhất. Ưu tiên độ chính xác > độ dài. Giữ giọng tự nhiên, đồng cảm.")
+    compact = json.dumps(context or [], ensure_ascii=False, separators=(",", ":"))
+    cite_compact = json.dumps((citations or [])[:5], ensure_ascii=False, separators=(",", ":"))
+    names = json.dumps(allowed_names[:name_cap], ensure_ascii=False, separators=(",", ":"))
 
-    return f"""
-🎯 Intent: {intent}
-📦 Context available: {"✅ Có" if has_context else "❌ Không"}
-🧭 Hướng dẫn xử lý intent: {intent_guidance}
-
-🔒 Quy tắc bắt buộc (Grounding):
-✓ CHỈ dùng tên món/mục và số liệu CÓ TRONG CONTEXT bên dưới.
-✓ KHÔNG thêm món, số liệu, hoặc nguồn không nằm trong "Tên/mục được phép nhắc".
-✓ Nếu CONTEXT rỗng hoặc không đủ thông tin quan trọng: hỏi ĐÚNG MỘT câu tiếp theo để thu thập dữ liệu.
-✓ Với exercise: calories = tiêu hao khi vận động. Không nói về diet/calories ăn vào trừ khi user hỏi.
-✓ Luôn phân biệt: [Database] vs [Ước tính] vs [Không có dữ liệu].
-✓ Bảng Markdown: mỗi ô là MỘT số đã tính sẵn (vd: `630`), không bao giờ là công thức (`210 * 3`).
-✓ Ngôn ngữ trả lời PHẢI khớp với câu hỏi hiện tại của user — không trộn ngôn ngữ khác.
-✓ TUYỆT ĐỐI KHÔNG dùng LaTeX hoặc cú pháp toán học (`\\[`, `\\]`, `\\text{{}}`, `\\frac{{}}`, `\\times`, `$$`, v.v.). Viết toán bằng ký tự thường: `Δkg ≈ (kcal_in - TDEE) × ngày / 7700`.
-✓ Số người/khẩu phần: nếu user nói rõ số người (vd: "cho 4 người", "gia đình 4 người"), TẤT CẢ kcal/macro trong bảng phải là tổng cho số người đó. KHÔNG so sánh với hồ sơ user (mục tiêu kcal cá nhân) trong trường hợp này.
-✓ "Lộ trình giảm cân" phi thực tế (vd: 40kg trong 7 ngày): trả lời thẳng rằng tốc độ đó nguy hiểm, đưa giới hạn an toàn 0.5–1kg/tuần, gợi ý mốc thực tế hơn — KHÔNG bịa lộ trình.
-
-📋 Tên/mục được phép nhắc (tối đa {name_cap}):
-{json.dumps(allowed_names[:name_cap], ensure_ascii=False)}
-
-👤 Hồ sơ user (dùng để cá nhân hóa, tính TDEE, gợi ý khẩu phần):
-{user_profile_text or "Chưa thiết lập hồ sơ"}
-
-💬 Ngữ cảnh hội thoại (4 turn gần nhất):
-{conversation_context or "Không có lịch sử"}
-
-🗂️ CONTEXT (dữ liệu grounding chính):
-{json.dumps(context or [], ensure_ascii=False, indent=2)}
-
-📎 CITATION (nguồn tham khảo):
-{json.dumps(citations or [], ensure_ascii=False, indent=2)}
-
-❓ Câu hỏi của user:
-{query}
-
-🤖 Trả lời (tuân thủ quy tắc trên):
-""".strip()
+    parts = [
+        f"Intent: {intent}",
+        f"Hướng dẫn: {guidance}",
+        f"Tên được phép nhắc: {names}",
+    ]
+    if user_profile_text:
+        parts.append(f"Hồ sơ user: {user_profile_text}")
+    if conversation_context:
+        parts.append(f"Lịch sử: {conversation_context}")
+    parts.append(f"CONTEXT: {compact}")
+    parts.append(f"CITATION: {cite_compact}")
+    parts.append(f"Câu hỏi: {query}")
+    parts.append("Trả lời:")
+    return "\n".join(parts)
 
 
-FOOD_VISION_PROMPT = """
-Bạn là CalAI Vision Pro — module phân tích hình ảnh thực phẩm trong hệ Agentic RAG.
+FOOD_VISION_PROMPT = (
+    "Bạn là CalAI Vision Pro — phân tích ảnh thực phẩm.\n"
+    "Quy tắc thứ tự ưu tiên: bằng chứng trực quan > VISION_EVIDENCE (kết quả "
+    "classifier CLIP/Qdrant đã chạy trên ảnh, được cung cấp bên dưới) > tên file > suy luận. "
+    "VISION_EVIDENCE LÀ ĐẦU RA của một mô hình thị giác khác đã xem cùng ảnh — "
+    "hãy coi nó là gợi ý mạnh, không phải metadata văn bản.\n"
+    "Phân biệt visible / inferred / unknown. "
+    "Dinh dưỡng là ƯỚC TÍNH cho phần nhìn thấy. Không chẩn đoán y khoa.\n"
+    "TÊN MÓN: nếu là món Việt, BẮT BUỘC dùng tên tiếng Việt có dấu "
+    "(cơm tấm, phở, bún bò Huế, bún riêu, gỏi cuốn, bánh mì, chả giò, ...). "
+    "TUYỆT ĐỐI không dịch sang tiếng Anh kiểu 'Vietnamese Pork Chops with Fried Rice' — "
+    "nếu thấy cơm + sườn nướng + bì + chả thì gọi đúng là 'cơm tấm'. "
+    "Cơm tấm KHÔNG phải fried rice; phở KHÔNG phải 'Vietnamese noodle soup'; bún KHÔNG phải 'rice noodles'.\n"
+    "CHỈ trả về JSON hợp lệ (không markdown, không text ngoài JSON). "
+    "Number dùng null nếu không xác định. Confidence ∈ [0,1] làm tròn 2 chữ số.\n"
+    "Schema:\n"
+    "{\n"
+    '  "image_quality":{"clarity":"good|fair|poor","lighting":"good|fair|poor",'
+    '"angle":"top|side|angled|unclear","occlusion":"none|partial|heavy"},\n'
+    '  "dish_name":"...|null",\n'
+    '  "possible_dishes":[{"name":"...","probability":0.0,"visual_evidence":"..."}],\n'
+    '  "description":"mô tả ngắn",\n'
+    '  "image_observations":["..."],\n'
+    '  "visible_vs_inferred":{"visible":[],"inferred":[],"not_visible":[]},\n'
+    '  "ingredients":["..."],\n'
+    '  "category":"main|side|snack|dessert|drink|mixed|unknown",\n'
+    '  "visual_form":"bowl|plate|noodle_soup|soup|salad|sandwich|pizza|sushi|drink|dessert|mixed_meal|unknown",\n'
+    '  "portion_description":"...",\n'
+    '  "portion_estimation":{"servings":null,"estimated_grams":null,"volume_or_count":"...",'
+    '"method":"visual_reference|standard_serving|count_based|unknown","uncertainty":"low|medium|high"},\n'
+    '  "sub_items":[{"name":"...","count":0,"estimated_amount":"...","confidence":0.0}],\n'
+    '  "nutrition_estimate":{"calories":null,"protein":null,"carbs":null,"fat":null,'
+    '"fiber":null,"sugar":null,"sodium_mg":null,"basis":"...","reliability_note":"..."},\n'
+    '  "health_context":{"cooking_method":"grilled|fried|steamed|boiled|raw|unknown",'
+    '"sauce_or_condiment":"...","energy_density":"low|moderate|high|unknown",'
+    '"macro_balance":"protein_forward|carb_forward|fat_forward|balanced|unknown"},\n'
+    '  "dietary_assessment":{"health_score_0_10":null,"strengths":[],"concerns":[],'
+    '"suitable_for":[],"caution_for":[]},\n'
+    '  "risk_flags":[{"risk":"...","severity":"low|medium|high","reason":"..."}],\n'
+    '  "recommendations":{"healthier_adjustments":[]},\n'
+    '  "table_rows":[{"metric":"Calories","value":null,"unit":"kcal","reliability":"low|medium|high"}],\n'
+    '  "uncertainty":{"level":"low|medium|high","reasons":[],"needs_user_input":[]},\n'
+    '  "confidence":0.0\n'
+    "}\n"
+    "Trả về JSON ngay, không nói gì khác."
+)
 
-🎯 Nhiệm vụ cốt lõi
-Đọc ảnh món ăn → trích xuất dữ liệu có cấu trúc → hỗ trợ response generator trả lời tự nhiên, chính xác cho user.
 
-🔍 Nguyên tắc phân tích (THỨ TỰ ƯU TIÊN)
-1. Bằng chứng trực quan > Tên file > Suy luận hợp lý > Không đoán mò.
-2. Phân tách rõ 3 lớp thông tin:
-   • Visible: Nhìn thấy trực tiếp (màu, hình dạng, text trên bao bì, số lượng miếng...)
-   • Inferred: Suy luận hợp lý (món có thể là X vì có thành phần Y+Z)
-   • Unknown: Không thể xác định từ ảnh (gia vị ẩn, cách chế biến trước đó...)
-3. Ước tính khẩu phần dựa trên: kích thước đĩa/bát chuẩn, tỷ lệ so với vật tham chiếu (nếu có), số lượng piece, độ dày/thickness.
-4. Dinh dưỡng là ƯỚC TÍNH cho phần nhìn thấy. Không trình bày như số chắc chắn.
+_NUTRITION_KEYS = (
+    ("calories", "kcal"),
+    ("protein", "g"),
+    ("carbs", "g"),
+    ("fat", "g"),
+    ("fiber", "g"),
+    ("sodium_mg", "mg"),
+)
 
-🚫 Tuyệt đối tránh
-- Chẩn đoán bệnh, kê đơn, tư vấn y khoa.
-- Khẳng định 100% khi confidence < 0.8.
-- Output JSON không hợp lệ hoặc có text ngoài JSON.
 
-📤 Output Format (BẮT BUỘC)
-- CHỈ trả về JSON hợp lệ, không markdown, không comment, không text thừa.
-- Tất cả text hướng người dùng: tiếng Việt tự nhiên, chuyên nghiệp.
-- Số liệu: number thuần (không kèm unit trong value). Unit đặt riêng trong field `unit`.
-- Dùng `null` khi không thể xác định (không dùng 0, "", hoặc "unknown" cho number).
-- Confidence/probability: float [0.0, 1.0], làm tròn 2 chữ số thập phân.
+def _summarize_analysis(analysis: dict) -> dict:
+    if not isinstance(analysis, dict):
+        return {}
 
-📋 JSON Schema (Chi tiết)
-{
-  "image_quality": {
-    "clarity": "good | fair | poor",
-    "lighting": "good | fair | poor",
-    "angle": "top | side | angled | unclear",
-    "occlusion": "none | partial | heavy",
-    "confidence_impact": "mô tả ngắn ảnh hưởng đến độ tin cậy"
-  },
-  "dish_name": "tên món khả dĩ nhất hoặc null",
-  "possible_dishes": [
-    {"name": "...", "probability": 0.00, "visual_evidence": "...", "ambiguity_reason": "..."}
-  ],
-  "description": "mô tả ngắn, tự nhiên, khách quan dựa trên ảnh",
-  "image_observations": ["bằng chứng trực quan 1", "bằng chứng 2", "..."],
-  "visible_vs_inferred": {
-    "visible": ["thành phần nhìn thấy rõ"],
-    "inferred": ["thành phần suy luận hợp lý"],
-    "not_visible": ["thông tin không thể xác định từ ảnh"]
-  },
-  "identification_evidence": ["lý do nhận diện món dựa trên visual cue"],
-  "ingredients": ["nguyên liệu nhìn thấy hoặc suy luận có căn cứ"],
-  "category": "main | side | snack | dessert | drink | mixed | unknown",
-  "visual_form": "bowl | plate | rice_plate | noodle_soup | soup | salad | sandwich | pizza | sushi | packaged | drink | dessert | snack | mixed_meal | unknown",
-  "portion_description": "mô tả khẩu phần nhìn thấy (ví dụ: '1 bát cơm vừa, 3 miếng gà áp chảo')",
-  "portion_estimation": {
-    "servings": null,
-    "estimated_grams": null,
-    "volume_or_count": "mô tả định lượng",
-    "method": "visual_reference | standard_serving | count_based | unknown",
-    "uncertainty": "low | medium | high"
-  },
-  "sub_items": [
-    {"name": "...", "count": 0, "estimated_amount": "...", "visible_ingredients": ["..."], "confidence": 0.00}
-  ],
-  "nutrition_estimate": {
-    "calories": null,
-    "protein": null,
-    "carbs": null,
-    "fat": null,
-    "fiber": null,
-    "sugar": null,
-    "sodium_mg": null,
-    "basis": "ước tính dựa trên [phương pháp]",
-    "main_calorie_drivers": ["thành phần đóng góp calories chính"],
-    "reliability_note": "ghi chú về độ tin cậy của ước tính"
-  },
-  "health_context": {
-    "cooking_method": "grilled | fried | steamed | boiled | raw | unknown",
-    "sauce_or_condiment": "mô tả nước chấm/sốt nhìn thấy",
-    "estimated_servings": "1 person | 2 persons | family | unknown",
-    "energy_density": "low | moderate | high | unknown",
-    "processing_level": "minimally_processed | mixed | processed | ultra_processed | unknown",
-    "macro_balance": "protein_forward | carb_forward | fat_forward | balanced | unknown"
-  },
-  "dietary_assessment": {
-    "health_score_0_10": null,
-    "strengths": ["điểm tích cực về dinh dưỡng"],
-    "concerns": ["điểm cần lưu ý"],
-    "suitable_for": ["mục tiêu phù hợp: weight_loss, muscle_gain, ..."],
-    "caution_for": ["đối tượng cần thận trọng"]
-  },
-  "risk_flags": [
-    {"risk": "...", "severity": "low | medium | high", "reason": "...", "mitigation": "..."}
-  ],
-  "recommendations": {
-    "for_weight_loss": ["gợi ý điều chỉnh"],
-    "for_muscle_gain": ["gợi ý bổ sung"],
-    "for_blood_sugar": ["lưu ý carb"],
-    "for_heart_health": ["lưu ý chất béo/natri"],
-    "healthier_adjustments": ["gợi ý cải thiện món ăn"]
-  },
-  "table_rows": [
-    {"metric": "Calories", "value": null, "unit": "kcal", "note": "ước tính cho phần nhìn thấy", "reliability": "low | medium | high"}
-  ],
-  "uncertainty": {
-    "level": "low | medium | high",
-    "reasons": ["lý do gây không chắc chắn"],
-    "needs_user_input": ["thông tin user có thể cung cấp để cải thiện độ chính xác"]
-  },
-  "confidence": 0.00,
-  "processing_metadata": {
-    "model_version": "calai-vision-v1",
-    "timestamp_note": "ước tính dựa trên ảnh tại thời điểm chụp"
-  }
-}
+    # Most analysis fields live under `vision_detail` in the pipeline result,
+    # but `dish_name`/`confidence` live at top level. Read both.
+    vd = analysis.get("vision_detail") if isinstance(analysis.get("vision_detail"), dict) else {}
 
-✅ Kiểm tra cuối cùng trước khi output:
-1. JSON có parse được không?
-2. Tất cả number field có phải là number/null không?
-3. Confidence có nằm trong [0,1] không?
-4. Có text nào ngoài JSON không? → XÓA NGAY.
+    def _get(key):
+        if analysis.get(key) not in (None, "", []):
+            return analysis[key]
+        if vd.get(key) not in (None, "", []):
+            return vd.get(key)
+        return None
 
-Bắt đầu phân tích ảnh và trả về JSON.
-""".strip()
+    summary = {}
+    for key in ("dish_name", "description", "category", "visual_form",
+                "portion_description", "confidence"):
+        value = _get(key)
+        if value is not None:
+            summary[key] = value
+
+    ingredients = _get("ingredients") or []
+    if isinstance(ingredients, list) and ingredients:
+        summary["ingredients"] = ingredients[:12]
+
+    instructions = _get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        summary["instructions"] = instructions[:1500]
+
+    nutrition = analysis.get("nutrition_estimate") or analysis.get("estimated_nutrition") or {}
+    if isinstance(nutrition, dict):
+        compact = {}
+        for key, _ in _NUTRITION_KEYS:
+            value = nutrition.get(key)
+            if value not in (None, ""):
+                compact[key] = value
+        if nutrition.get("basis"):
+            compact["basis"] = nutrition["basis"]
+        if compact:
+            summary["nutrition"] = compact
+
+    uncertainty = _get("uncertainty") or {}
+    if isinstance(uncertainty, dict) and uncertainty.get("level"):
+        summary["uncertainty"] = uncertainty.get("level")
+
+    possible = _get("possible_dishes") or []
+    if isinstance(possible, list) and possible:
+        summary["possible_dishes"] = [
+            {"name": p.get("name"), "probability": p.get("probability")}
+            for p in possible[:3]
+            if isinstance(p, dict) and p.get("name")
+        ]
+    return summary
 
 
 def build_food_image_answer_prompt(question: str, analysis: dict) -> str:
-    return f"""
-🎯 NHIỆM VỤ
-Trả lời tự nhiên, hữu ích cho user dựa TRÊN DỮ LIỆU PHÂN TÍCH ẢNH đã cung cấp.
-
-🔒 QUY TẮC BẮT BUỘC (Grounding)
-✓ CHỈ dùng thông tin có trong `dữ liệu phân tích ảnh` bên dưới.
-✓ Nếu calories/macro là `null` hoặc thiếu:
-  → Nói rõ "Chưa đủ dữ liệu từ ảnh để ước tính chính xác [chỉ số]"
-  → Gợi ý: "Bạn có thể mô tả thêm khẩu phần hoặc nguyên liệu để tôi hỗ trợ tốt hơn?"
-✓ KHÔNG tự bịa số, tên món, hoặc thành phần không có trong analysis.
-✓ Nếu user chỉ hỏi "Đây là món gì?":
-  → Trả lời ngắn + nhắc độ chắc chắn: "Khả năng cao là [X] (độ tin cậy: [confidence])"
-  → Chỉ thêm dinh dưỡng nếu analysis có đủ dữ liệu.
-
-🗣️ Phong cách trả lời
-- Tiếng Việt tự nhiên, thân thiện, chuyên nghiệp.
-- Với số liệu: dùng định dạng dễ đọc (1,234 kcal thay vì 1234).
-- Với khuyến nghị: cụ thể, khả thi, không giáo điều.
-
-❓ USER HỎI VỀ ẢNH:
-{question or "Đây là món gì? Hãy phân tích dinh dưỡng và tư vấn."}
-
-📊 DỮ LIỆU PHÂN TÍCH ẢNH (JSON đã parse):
-{json.dumps(analysis or {}, ensure_ascii=False, indent=2)}
-
-✅ TRẢ LỜI (tuân thủ quy tắc grounding):
-""".strip()
+    summary = _summarize_analysis(analysis or {})
+    summary_json = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+    user_q = question or "Đây là món gì? Hãy phân tích dinh dưỡng và tư vấn."
+    return (
+        "QUY TẮC NGÔN NGỮ (BẮT BUỘC):\n"
+        "1. Toàn bộ câu trả lời PHẢI bằng tiếng Việt.\n"
+        "2. KHÔNG được dùng bất kỳ ký tự CJK nào (Trung 中文, Nhật ひらがな/カタカナ/漢字, Hàn 한글). "
+        "Nếu trong câu trả lời xuất hiện ký tự CJK, đó là LỖI.\n"
+        "3. Tên món gốc nếu có (Anh/Pháp/Nhật/Italy) → giữ nguyên chữ Latin, "
+        "phần giải thích/mô tả/đo lường viết bằng tiếng Việt.\n"
+        "4. KHÔNG dùng pinyin (zhānɡ, cài, v.v.) hoặc romaji.\n\n"
+        "QUY TẮC DỮ LIỆU:\n"
+        "- Trả lời CHỈ dựa trên `Phân tích` bên dưới. Không bịa số/bước nấu/thành phần ngoài dữ liệu.\n"
+        "- Khi user hỏi cách nấu/recipe/instructions → dùng trường `instructions` (đã có nguyên bản tiếng Anh, dịch ý sang tiếng Việt khi giải thích).\n"
+        "- Khi user hỏi nguyên liệu → dùng trường `ingredients`.\n"
+        "- Khi nutrition thiếu → nói rõ \"chưa đủ dữ liệu khẩu phần\" và hỏi lại.\n\n"
+        f"User hỏi: {user_q}\n"
+        f"Phân tích: {summary_json}\n"
+        "Trả lời (tiếng Việt thuần, không CJK):"
+    )

@@ -359,8 +359,8 @@ export const getAdminStatsService = async () => {
   const [mealRows] = await pool.query(
     `SELECT COUNT(*) AS mealsLoggedToday FROM meals WHERE DATE(created_at) = CURDATE()`
   );
-  const [analysisRows] = await pool.query(
-    `SELECT COUNT(*) AS totalAnalyses FROM foodrecognitionresults`
+  const [totalMealRows] = await pool.query(
+    `SELECT COUNT(*) AS totalMealsLogged FROM meals`
   );
   const [todayRegRows] = await pool.query(
     `SELECT COUNT(*) AS newUsersToday FROM users WHERE DATE(created_at) = CURDATE()`
@@ -374,8 +374,8 @@ export const getAdminStatsService = async () => {
     activeUsers: Number((activeRows as Array<{ activeUsers: number }>)[0]?.activeUsers ?? 0),
     inactiveUsers: Number((inactiveRows as Array<{ inactiveUsers: number }>)[0]?.inactiveUsers ?? 0),
     newUsersToday: Number((todayRegRows as Array<{ newUsersToday: number }>)[0]?.newUsersToday ?? 0),
+    totalMealsLogged: Number((totalMealRows as Array<{ totalMealsLogged: number }>)[0]?.totalMealsLogged ?? 0),
     mealsLoggedToday: Number((mealRows as Array<{ mealsLoggedToday: number }>)[0]?.mealsLoggedToday ?? 0),
-    totalAnalyses: Number((analysisRows as Array<{ totalAnalyses: number }>)[0]?.totalAnalyses ?? 0),
     totalChats: Number((chatRows as Array<{ totalChats: number }>)[0]?.totalChats ?? 0),
     systemStatus: 'running',
   };
@@ -388,7 +388,6 @@ export const getAdminAnalyticsService = async () => {
       (SELECT COUNT(*) FROM foods) AS totalFoods,
       (SELECT COUNT(*) FROM users) AS totalUsers,
       (SELECT COUNT(*) FROM users WHERE has_completed_setup = 1) AS completedSetupUsers,
-      (SELECT COUNT(*) FROM foodrecognitionresults) AS totalScans,
       (
         SELECT COALESCE(AVG(daily.total_calories), 0)
         FROM (
@@ -406,7 +405,6 @@ export const getAdminAnalyticsService = async () => {
     totalFoods: number;
     totalUsers: number;
     completedSetupUsers: number;
-    totalScans: number;
     averageCalories: number;
   }>)[0];
 
@@ -485,7 +483,6 @@ export const getAdminAnalyticsService = async () => {
       totalMeals: Number(overview?.totalMeals ?? 0),
       totalFoods: Number(overview?.totalFoods ?? 0),
       totalUsers,
-      totalScans: Number(overview?.totalScans ?? 0),
       averageCalories: Math.round(Number(overview?.averageCalories ?? 0)),
       setupCompletionRate: totalUsers > 0 ? Math.round((completedSetupUsers / totalUsers) * 100) : 0,
     },
@@ -956,13 +953,6 @@ export const getUserStatisticsService = async (userId: number) => {
      WHERE m.user_id = ? AND m.meal_date = CURDATE()`,
     [userId]
   );
-  const [analysisCountRows] = await pool.query(
-    `SELECT COUNT(*) AS totalAnalyses
-     FROM foodrecognitionresults fr
-     INNER JOIN foodimages fi ON fi.image_id = fr.image_id
-     WHERE fi.user_id = ?`,
-    [userId]
-  );
   const [chatCountRows] = await pool.query(
     `SELECT COUNT(*) AS totalChats FROM chatsessions WHERE user_id = ?`,
     [userId]
@@ -971,7 +961,6 @@ export const getUserStatisticsService = async (userId: number) => {
   return {
     totalMeals: Number((mealCountRows as Array<{ totalMeals: number }>)[0]?.totalMeals ?? 0),
     todayCalories: Number((caloriesRows as Array<{ totalCalories: number }>)[0]?.totalCalories ?? 0),
-    totalAnalyses: Number((analysisCountRows as Array<{ totalAnalyses: number }>)[0]?.totalAnalyses ?? 0),
     totalChats: Number((chatCountRows as Array<{ totalChats: number }>)[0]?.totalChats ?? 0),
   };
 };

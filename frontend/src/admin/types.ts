@@ -30,8 +30,8 @@ export interface AdminStats {
   activeUsers: number;
   inactiveUsers: number;
   newUsersToday: number;
+  totalMealsLogged: number;
   mealsLoggedToday: number;
-  totalAnalyses: number;
   totalChats: number;
   systemStatus: string;
 }
@@ -51,7 +51,6 @@ export interface PaginatedUsers {
 export interface UserStatistics {
   totalMeals: number;
   todayCalories: number;
-  totalAnalyses: number;
   totalChats: number;
 }
 
@@ -114,7 +113,6 @@ export interface AdminAnalytics {
     totalMeals: number;
     totalFoods: number;
     totalUsers: number;
-    totalScans: number;
     averageCalories: number;
     setupCompletionRate: number;
   };

@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Database,
   PieChart as PieChartIcon,
   ArrowUpRight, ArrowDownRight,
-  Camera, Target, ShieldCheck, CheckCircle2,
+  Target, ShieldCheck, CheckCircle2,
   AlertTriangle, ChevronRight, Eye, Edit, Trash2,
   Download, Filter, Plus, Save, RefreshCw,
   Clock, Shield, Mail, Phone,
@@ -260,7 +260,7 @@ function AdminDashboard({ showToast }: DashboardProps) {
   const [activePieIndex, setActivePieIndex] = useState(0);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
-  const [chartData, setChartData] = useState<Array<{ name: string; scans: number; target: number }>>([]);
+  const [chartData, setChartData] = useState<Array<{ name: string; meals: number; target: number }>>([]);
   const [loadingChart, setLoadingChart] = useState(true);
 
   const loadStats = useCallback(async () => {
@@ -281,10 +281,11 @@ function AdminDashboard({ showToast }: DashboardProps) {
     // Generate chart data from stats
     if (stats) {
       const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      const mock = days.map((name, i) => ({
+      const weeklyAverage = Math.round(stats.totalMealsLogged / 7);
+      const mock = days.map((name) => ({
         name,
-        scans: Math.max(0, Math.round(stats.totalAnalyses / 7 + (Math.random() - 0.3) * stats.totalAnalyses / 14)),
-        target: Math.round(stats.totalAnalyses / 7) || 100,
+        meals: Math.max(0, Math.round(weeklyAverage + (Math.random() - 0.3) * Math.max(weeklyAverage / 2, 1))),
+        target: weeklyAverage || 10,
       }));
       setChartData(mock);
       setLoadingChart(false);
@@ -332,7 +333,7 @@ function AdminDashboard({ showToast }: DashboardProps) {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
               { label: 'Total Users', value: stats.totalUsers.toLocaleString(), change: stats.newUsersToday > 0 ? `+${stats.newUsersToday} today` : '0 new today', icon: Users, trend: stats.newUsersToday > 0 ? 'up' : 'neutral' },
-              { label: 'AI Scans Today', value: stats.mealsLoggedToday.toLocaleString(), change: `${Math.round(stats.totalAnalyses / 7)} avg/day`, icon: Camera, trend: 'up' },
+              { label: 'Meals Logged Today', value: stats.mealsLoggedToday.toLocaleString(), change: `${Math.round(stats.totalMealsLogged / 7)} avg/day`, icon: Utensils, trend: 'up' },
               { label: 'Active Users', value: stats.activeUsers.toLocaleString(), change: `${stats.totalUsers > 0 ? Math.round((stats.activeUsers / stats.totalUsers) * 100) : 0}% active`, icon: ShieldCheck, trend: 'up' },
               { label: 'Chat Sessions', value: stats.totalChats.toLocaleString(), change: 'Total sessions', icon: MessageSquare, trend: 'neutral' },
             ].map((stat, i) => (
@@ -362,8 +363,8 @@ function AdminDashboard({ showToast }: DashboardProps) {
               <div className="bg-surface-dark border border-white/5 p-8 rounded-[2.5rem] shadow-xl">
                 <div className="flex justify-between items-center mb-8">
                   <div>
-                    <h3 className="text-xl font-black italic uppercase tracking-tighter">AI Recognition Volume</h3>
-                    <p className="text-text-muted text-xs font-medium">Daily scan throughput and accuracy trends</p>
+                    <h3 className="text-xl font-black italic uppercase tracking-tighter">Meal Logging Volume</h3>
+                    <p className="text-text-muted text-xs font-medium">Daily meal logging activity across users</p>
                   </div>
                 </div>
                 <div className="h-[350px] w-full">
@@ -380,7 +381,7 @@ function AdminDashboard({ showToast }: DashboardProps) {
                         <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#adaaaa', fontSize: 10, fontWeight: 700}} dy={10} />
                         <YAxis axisLine={false} tickLine={false} tick={{fill: '#adaaaa', fontSize: 10, fontWeight: 700}} />
                         <Tooltip contentStyle={{backgroundColor: '#1a1919', border: '1px solid #ffffff10', borderRadius: '1rem', color: '#fff'}} itemStyle={{color: '#ff9060', fontWeight: 900}} />
-                        <Area type="monotone" dataKey="scans" stroke="#ff9060" strokeWidth={4} fillOpacity={1} fill="url(#colorScans)" />
+                        <Area type="monotone" dataKey="meals" stroke="#ff9060" strokeWidth={4} fillOpacity={1} fill="url(#colorScans)" />
                       </AreaChart>
                     </ResponsiveContainer>
                   )}
@@ -925,7 +926,7 @@ function UserDetailModal({
           {loadingStats ? (
             <LoadingSpinner />
           ) : userStats ? (
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
                 <p className="text-2xl font-black text-white mb-1">{userStats.totalMeals}</p>
                 <p className="text-[8px] font-black uppercase tracking-widest text-text-muted">Meals Logged</p>
@@ -933,10 +934,6 @@ function UserDetailModal({
               <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
                 <p className="text-2xl font-black text-white mb-1">{userStats.todayCalories}</p>
                 <p className="text-[8px] font-black uppercase tracking-widest text-text-muted">Calories Today</p>
-              </div>
-              <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
-                <p className="text-2xl font-black text-white mb-1">{userStats.totalAnalyses}</p>
-                <p className="text-[8px] font-black uppercase tracking-widest text-text-muted">AI Scans</p>
               </div>
               <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
                 <p className="text-2xl font-black text-white mb-1">{userStats.totalChats}</p>
@@ -1169,11 +1166,7 @@ function ContentManagement({ showToast }: ViewProps) {
     imagePath: '',
   });
 
-  const aiLogs = [
-    { id: 1, user: 'SARAH CONNOR', food: 'TONBOTSU RAMEN', confidence: 94, status: 'VERIFIED' },
-    { id: 2, user: 'JOHN DOE', food: 'APPLE PIE', confidence: 62, status: 'FLAGGED' },
-    { id: 3, user: 'ALEX RIVERS', food: 'CHICKEN SALAD', confidence: 88, status: 'VERIFIED' },
-  ];
+  const aiLogs: Array<{ user: string; food: string; confidence: number; status: string }> = [];
 
   const resetFoodForm = () => {
     setFoodForm({
@@ -1280,7 +1273,7 @@ function ContentManagement({ showToast }: ViewProps) {
         <div className="flex justify-between items-start">
           <div>
             <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">CONTENT MANAGER</h1>
-            <p className="text-text-muted font-medium font-sans">Curate the food database and validate AI recognition logs.</p>
+            <p className="text-text-muted font-medium font-sans">Curate the food database used by Meal Plans and chatbot nutrition references.</p>
           </div>
           <button
             onClick={openAddFood}
@@ -1291,8 +1284,7 @@ function ContentManagement({ showToast }: ViewProps) {
         </div>
       </header>
 
-      {/* Tabs */}
-      <div className="flex gap-4 border-b border-white/5">
+      <div className="hidden">
         <button
           onClick={() => setActiveTab('food')}
           className={`px-6 py-4 font-black text-xs uppercase tracking-widest border-b-2 transition-colors ${
@@ -1311,7 +1303,7 @@ function ContentManagement({ showToast }: ViewProps) {
               : 'border-transparent text-text-muted hover:text-white'
           }`}
         >
-          🔍 AI SCAN LOGS
+          LEGACY LOGS
         </button>
       </div>
 
@@ -1405,7 +1397,7 @@ function ContentManagement({ showToast }: ViewProps) {
         </div>
       )}
 
-      {/* AI Scan Logs Tab */}
+      {/* Legacy recognition log view hidden after Scan was removed. */}
       {activeTab === 'logs' && (
         <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] overflow-hidden">
           <div className="overflow-x-auto">

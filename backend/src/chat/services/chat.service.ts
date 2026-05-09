@@ -22,6 +22,7 @@ interface ChatMessageRow {
   image_url: string | null;
   image_name: string | null;
   thinking_steps: string | ThinkingStep[] | null;
+  food_insight: string | FoodImageInsight | null;
   created_at: string;
 }
 
@@ -29,6 +30,7 @@ interface ChatSessionRow {
   session_id: number;
   started_at: string;
   last_message: string | null;
+  first_user_message: string | null;
 }
 
 interface ChatContextMessage {
@@ -53,11 +55,21 @@ interface SendMessagePayload {
   contextImageName?: string | null;
 }
 
+interface FoodConfidenceItem {
+  name: string;
+  level: 'high' | 'medium' | 'low';
+  macros_present?: number;
+  retrieval_score?: number;
+  source_collection?: string | null;
+  reasons?: string[];
+}
+
 interface CalAiQueryResult {
   answer: string;
   intent?: string;
   trace?: ThinkingStep[];
   citations?: Array<Record<string, unknown>>;
+  foodConfidence?: FoodConfidenceItem[];
 }
 
 type CalAiFailureReason = 'unreachable' | 'timeout' | 'http' | 'empty' | 'fetch_error';
@@ -102,7 +114,9 @@ interface FoodImageInsight {
   followUpQuestions?: string[];
   tableRows?: Array<Record<string, unknown>>;
   imageQuality?: Record<string, unknown>;
-  source: 'cal-ai';
+  /** Per-dish confidence rows for the meal-plan / nutrition table. */
+  mealConfidence?: FoodConfidenceItem[];
+  source: 'cal-ai' | 'cal-ai-text';
 }
 
 const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
@@ -135,6 +149,18 @@ const parseThinkingSteps = (value: ChatMessageRow['thinking_steps']) => {
   }
 };
 
+const parseFoodInsight = (value: ChatMessageRow['food_insight']): FoodImageInsight | undefined => {
+  if (!value) return undefined;
+  if (typeof value === 'object') return value as FoodImageInsight;
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed as FoodImageInsight : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const mapMessage = (row: ChatMessageRow) => ({
   messageId: row.message_id,
   sender: row.sender,
@@ -142,6 +168,7 @@ const mapMessage = (row: ChatMessageRow) => ({
   imageUrl: row.image_url ?? null,
   imageName: row.image_name ?? null,
   thinkingSteps: parseThinkingSteps(row.thinking_steps),
+  foodInsight: parseFoodInsight(row.food_insight),
   createdAt: row.created_at,
 });
 
@@ -179,6 +206,48 @@ const getLatestSessionImage = async (sessionId: number) => {
   return (rows as Array<{ image_url: string | null; image_name: string | null }>)[0] ?? null;
 };
 
+const getLatestSessionFoodInsight = async (sessionId: number): Promise<FoodImageInsight | null> => {
+  const [rows] = await pool.query(
+    `
+      SELECT food_insight
+      FROM chatmessages
+      WHERE session_id = ?
+        AND food_insight IS NOT NULL
+      ORDER BY created_at DESC, message_id DESC
+      LIMIT 1
+    `,
+    [sessionId]
+  );
+
+  const row = (rows as Array<{ food_insight: string | FoodImageInsight | null }>)[0];
+  if (!row?.food_insight) return null;
+  if (typeof row.food_insight === 'object') return row.food_insight as FoodImageInsight;
+
+  try {
+    const parsed = JSON.parse(row.food_insight);
+    return parsed && typeof parsed === 'object' ? parsed as FoodImageInsight : null;
+  } catch {
+    return null;
+  }
+};
+
+const formatFoodInsightContext = (insight: FoodImageInsight): string => {
+  const lines = [
+    `[Vision recognition (ảnh gần nhất trong session)]`,
+    insight.dishName ? `Món: ${insight.dishName}` : null,
+    insight.confidence != null ? `Độ tin cậy: ${formatConfidence(insight.confidence)}` : null,
+    insight.portion ? `Khẩu phần: ${insight.portion}` : null,
+    insight.calories != null ? `Calories: ${formatMetric(insight.calories, 'kcal')}` : null,
+    insight.protein != null ? `Protein: ${formatMetric(insight.protein, 'g')}` : null,
+    insight.carbs != null ? `Carb: ${formatMetric(insight.carbs, 'g')}` : null,
+    insight.fat != null ? `Fat: ${formatMetric(insight.fat, 'g')}` : null,
+    insight.fiber != null ? `Chất xơ: ${formatMetric(insight.fiber, 'g')}` : null,
+    insight.sodiumMg != null ? `Natri: ${formatMetric(insight.sodiumMg, 'mg')}` : null,
+    insight.ingredients?.length ? `Thành phần: ${insight.ingredients.slice(0, 6).join(', ')}` : null,
+  ].filter((line): line is string => Boolean(line));
+  return lines.join('\n');
+};
+
 const getRecentChatContext = async (sessionId: number, limit = 10): Promise<ChatContextMessage[]> => {
   const safeLimit = Math.max(2, Math.min(12, limit));
   const [rows] = await pool.query(
@@ -214,6 +283,13 @@ const isFollowUpMessage = (message: string) => {
     'no ',
     'nay ',
     'do ',
+    'trong do',
+    'trong day',
+    'trong nay',
+    'trong anh',
+    'trong hinh',
+    'nguyen lieu',
+    'thanh phan',
     'tiep',
     'tinh tiep',
     'vay con',
@@ -230,6 +306,8 @@ const isFollowUpMessage = (message: string) => {
     'doi sang',
     'nhu tren',
     'ban vua noi',
+    'ban xac dinh',
+    'ban nhan dien',
     'that meal',
     'this meal',
     'it ',
@@ -354,11 +432,34 @@ const formatCalAiResult = (data: unknown): CalAiQueryResult | null => {
     ? record.citations.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
     : undefined;
 
+  const foodConfidenceRaw = Array.isArray(record.food_confidence) ? record.food_confidence : [];
+  const foodConfidence: FoodConfidenceItem[] = foodConfidenceRaw
+    .map((entry): FoodConfidenceItem | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const item = entry as Record<string, unknown>;
+      const name = typeof item.name === 'string' ? item.name.trim() : '';
+      const levelRaw = typeof item.level === 'string' ? item.level.toLowerCase() : '';
+      if (!name || (levelRaw !== 'high' && levelRaw !== 'medium' && levelRaw !== 'low')) return null;
+      const reasons = Array.isArray(item.reasons)
+        ? item.reasons.filter((r): r is string => typeof r === 'string').slice(0, 4)
+        : [];
+      return {
+        name,
+        level: levelRaw as 'high' | 'medium' | 'low',
+        macros_present: typeof item.macros_present === 'number' ? item.macros_present : undefined,
+        retrieval_score: typeof item.retrieval_score === 'number' ? item.retrieval_score : undefined,
+        source_collection: typeof item.source_collection === 'string' ? item.source_collection : null,
+        reasons,
+      };
+    })
+    .filter((entry): entry is FoodConfidenceItem => Boolean(entry));
+
   return {
     answer,
     intent: typeof record.intent === 'string' ? record.intent : undefined,
     trace: normalizeCalAiTrace(record.trace),
     citations,
+    foodConfidence: foodConfidence.length ? foodConfidence : undefined,
   };
 };
 
@@ -476,6 +577,13 @@ const addThinkingStep = (
   });
 };
 
+interface FoodPreferenceSummary {
+  foodName: string;
+  type: 'favorite' | 'avoided' | 'disliked' | 'allergy';
+  mealSlot?: string | null;
+  note?: string | null;
+}
+
 interface UserProfile {
   gender?: string | null;
   age?: number | null;
@@ -485,6 +593,7 @@ interface UserProfile {
   targetWeight?: number | null;
   goal?: string | null;
   activityLevel?: string | null;
+  foodPreferences?: FoodPreferenceSummary[];
 }
 
 const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile | null> => {
@@ -505,6 +614,26 @@ const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile 
     );
     const goal = (goalRows as Array<Record<string, unknown>>)[0];
 
+    let foodPreferences: FoodPreferenceSummary[] = [];
+    try {
+      const [prefRows] = await pool.query(
+        `SELECT food_name, preference_type, meal_slot, note
+           FROM userfoodpreferences
+          WHERE user_id = (SELECT user_id FROM users WHERE account_id = ? LIMIT 1)
+          ORDER BY weight DESC, updated_at DESC
+          LIMIT 30`,
+        [accountId]
+      );
+      foodPreferences = (prefRows as Array<Record<string, unknown>>).map(row => ({
+        foodName: String(row.food_name ?? ''),
+        type: row.preference_type as FoodPreferenceSummary['type'],
+        mealSlot: (row.meal_slot as string | null) ?? null,
+        note: (row.note as string | null) ?? null,
+      }));
+    } catch {
+      // Preferences table may not exist yet for fresh DBs; ignore.
+    }
+
     return {
       gender: user.gender as string | null,
       age: user.age as number | null,
@@ -514,6 +643,7 @@ const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile 
       targetWeight: goal?.target_weight as number | null ?? null,
       goal: goal?.goal_type as string | null ?? null,
       activityLevel: goal?.activity_level as string | null ?? null,
+      foodPreferences,
     };
   } catch {
     return null;
@@ -920,7 +1050,8 @@ const generateAssistantReply = async (
   message: string,
   imageUrl: string | null,
   imageName?: string | null,
-  runtimeContext?: ChatRuntimeContext | null
+  runtimeContext?: ChatRuntimeContext | null,
+  priorInsight?: FoodImageInsight | null
 ) => {
   const trace: ThinkingStep[] = [];
   const tableMode = wantsStructuredTable(message);
@@ -991,6 +1122,7 @@ const generateAssistantReply = async (
     return {
       text: insight?.answer ?? formatImageQuestionReply(insight, message),
       thinkingSteps: trace,
+      foodInsight: insight ?? null,
     };
   }
 
@@ -1000,7 +1132,31 @@ const generateAssistantReply = async (
       evidence: [message],
     });
 
-  const calAiResult = await askCalAi(message, runtimeContext, userProfile);
+  let effectiveRuntimeContext = runtimeContext ?? null;
+  if (priorInsight && priorInsight.dishName) {
+    const insightContext = formatFoodInsightContext(priorInsight);
+    const mergedText = [insightContext, runtimeContext?.contextText].filter(Boolean).join('\n\n');
+    if (runtimeContext) {
+      effectiveRuntimeContext = {
+        ...runtimeContext,
+        contextText: mergedText,
+        isFollowUp: true,
+      };
+    } else {
+      effectiveRuntimeContext = {
+        sessionId: 0,
+        history: [],
+        contextText: mergedText,
+        isFollowUp: true,
+      };
+    }
+    addThinkingStep(trace, 'Gắn kết quả vision vào ngữ cảnh', 'Sử dụng insight món ăn đã nhận diện ở ảnh gần nhất trong session, không cần re-run vision.', {
+      evidence: insightContext.split('\n').slice(0, 6),
+      detail: 'Text LLM nhận dishName, khẩu phần, macro từ insight đã lưu trong DB; ép is_follow_up=true để Cal-AI nối context vào retrieval query.',
+    });
+  }
+
+  const calAiResult = await askCalAi(message, effectiveRuntimeContext, userProfile);
   if (calAiResult.ok) {
     addThinkingStep(trace, 'Truy vấn Cal-AI context', 'Cal-AI /query đã trả về câu trả lời hoặc dữ liệu liên quan.', {
       detail: 'Cal-AI là nguồn model duy nhất cho câu trả lời text.',
@@ -1022,9 +1178,26 @@ const generateAssistantReply = async (
       ? 'Cal-AI chịu trách nhiệm tạo bảng Markdown khi cần.'
       : 'UI sẽ render nội dung tư vấn dạng rich text.');
 
+    const insightForText: FoodImageInsight | null = calAiResult.foodConfidence?.length
+      ? {
+          dishName: null,
+          confidence: null,
+          description: null,
+          ingredients: [],
+          portion: null,
+          calories: null,
+          protein: null,
+          carbs: null,
+          fat: null,
+          mealConfidence: calAiResult.foodConfidence,
+          source: 'cal-ai-text',
+        }
+      : null;
+
     return {
       text: calAiResult.answer,
       thinkingSteps: trace,
+      foodInsight: insightForText,
     };
   }
 
@@ -1064,6 +1237,7 @@ const generateAssistantReply = async (
   return {
     text: failure.user,
     thinkingSteps: trace,
+    foodInsight: null,
   };
 };
 
@@ -1080,7 +1254,14 @@ export const getChatSessionsService = async (accountId?: number | null) => {
           WHERE cm.session_id = cs.session_id
           ORDER BY cm.created_at DESC, cm.message_id DESC
           LIMIT 1
-        ) AS last_message
+        ) AS last_message,
+        (
+          SELECT cm.message_text
+          FROM chatmessages cm
+          WHERE cm.session_id = cs.session_id AND cm.sender = 'user'
+          ORDER BY cm.created_at ASC, cm.message_id ASC
+          LIMIT 1
+        ) AS first_user_message
       FROM chatsessions cs
       WHERE cs.user_id = ?
       ORDER BY cs.started_at DESC, cs.session_id DESC
@@ -1091,6 +1272,7 @@ export const getChatSessionsService = async (accountId?: number | null) => {
   return (rows as ChatSessionRow[]).map(row => ({
     sessionId: row.session_id,
     lastMessage: row.last_message ?? 'No messages yet',
+    firstUserMessage: row.first_user_message ?? null,
     startedAt: row.started_at,
   }));
 };
@@ -1104,7 +1286,7 @@ export const getChatMessagesService = async (accountId: number | null | undefine
 
   const [rows] = await pool.query(
     `
-      SELECT message_id, sender, message_text, image_url, image_name, thinking_steps, created_at
+      SELECT message_id, sender, message_text, image_url, image_name, thinking_steps, food_insight, created_at
       FROM chatmessages
       WHERE session_id = ?
       ORDER BY created_at ASC, message_id ASC
@@ -1209,16 +1391,27 @@ export const sendChatMessageService = async (
     isFollowUp: isFollowUpMessage(trimmed),
   };
 
+  const priorInsight = !replyImageUrl
+    ? await getLatestSessionFoodInsight(targetSessionId)
+    : null;
+
   const assistantReply = await generateAssistantReply(
     accountId,
     trimmed,
     replyImageUrl,
     replyImageName,
-    runtimeContext
+    runtimeContext,
+    priorInsight
   );
   await pool.query(
-    'INSERT INTO chatmessages (session_id, sender, message_text, thinking_steps) VALUES (?, ?, ?, ?)',
-    [targetSessionId, 'ai', assistantReply.text, JSON.stringify(assistantReply.thinkingSteps)]
+    'INSERT INTO chatmessages (session_id, sender, message_text, thinking_steps, food_insight) VALUES (?, ?, ?, ?, ?)',
+    [
+      targetSessionId,
+      'ai',
+      assistantReply.text,
+      JSON.stringify(assistantReply.thinkingSteps),
+      assistantReply.foodInsight ? JSON.stringify(assistantReply.foodInsight) : null,
+    ]
   );
 
   const messages = await getChatMessagesService(accountId, targetSessionId);

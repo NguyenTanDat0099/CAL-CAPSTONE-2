@@ -69,9 +69,14 @@ class FoodRAGService:
 
         for col in self.collections:
             try:
+                query_vector = (
+                    ("text", vector)
+                    if col == settings.RECIPE_IMAGE_DATASET_COLLECTION
+                    else vector
+                )
                 hits = self.client.search(
                     collection_name=col,
-                    query_vector=vector,
+                    query_vector=query_vector,
                     limit=top_k,
                     query_filter=query_filter,
                     with_payload=True
@@ -112,7 +117,9 @@ class FoodRAGService:
         priority_fields = [
             "dish_name", "food_name", "name", "product_name", "title",
             "recipe_name", "cuisine", "description", "ingredients",
-            "ingredients_text", "category", "categories", "domain"
+            "cleaned_ingredients_list", "ingredients_text", "image_caption",
+            "visual_tags", "visible_ingredients", "retrieval_text",
+            "category", "categories", "domain"
         ]
 
         parts = []
@@ -148,7 +155,8 @@ class FoodRAGService:
             values = []
             for key in [
                 "dish_name", "description", "ingredients", "category",
-                "visual_form", "portion_description", "filename"
+                "visual_form", "portion_description", "filename",
+                "visual_rag_matches"
             ]:
                 value = vision_context.get(key)
                 if value:

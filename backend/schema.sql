@@ -239,6 +239,7 @@ CREATE TABLE IF NOT EXISTS chatmessages (
     image_url LONGTEXT NULL,
     image_name VARCHAR(255) NULL,
     thinking_steps JSON DEFAULT NULL,
+    food_insight JSON DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES chatsessions(session_id) ON DELETE CASCADE,
     INDEX idx_session (session_id)
@@ -287,6 +288,28 @@ CREATE TABLE IF NOT EXISTS mealscheduleitems (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (schedule_id) REFERENCES mealschedules(schedule_id) ON DELETE CASCADE,
     INDEX idx_mealscheduleitems_schedule (schedule_id)
+);
+
+-- =====================================================
+-- User Food Preferences (long-term memory)
+-- Stores cross-session habits: dishes the user favors, avoids, is allergic to, etc.
+-- Used to personalize chatbot recommendations.
+-- =====================================================
+CREATE TABLE IF NOT EXISTS userfoodpreferences (
+    preference_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    food_name VARCHAR(255) NOT NULL,
+    preference_type ENUM('favorite','avoided','disliked','allergy') NOT NULL DEFAULT 'favorite',
+    meal_slot ENUM('breakfast','lunch','dinner','snack','beverage','any') DEFAULT 'any',
+    note VARCHAR(500),
+    weight DECIMAL(4,2) DEFAULT 1.00,
+    source ENUM('user','inferred') DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    UNIQUE KEY uk_user_food_type (user_id, food_name, preference_type),
+    INDEX idx_userfoodprefs_user (user_id),
+    INDEX idx_userfoodprefs_type (user_id, preference_type)
 );
 
 -- =====================================================

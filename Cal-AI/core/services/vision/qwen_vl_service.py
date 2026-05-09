@@ -44,12 +44,29 @@ class QwenVLService:
         except Exception as exc:
             return {"error": str(exc), "_model_used": self.model}
 
-    async def analyze_food(self, image: Image.Image, filename_hint=None):
+    async def analyze_food(self, image: Image.Image, filename_hint=None, vision_evidence=None):
 
         base64_image = self.image_to_base64(image)
 
+        # Vision evidence (classifier + Qdrant matches) is shown to the model
+        # BEFORE the filename hint, with explicit framing as "another vision
+        # model already analyzed this image". The system prompt ranks this
+        # higher than filename so confident classifier outputs (e.g. "cơm tấm")
+        # are no longer drowned out by filename noise like "com-t-m-su-n-...".
+        evidence_block = ""
+        if vision_evidence:
+            evidence_block = (
+                "\n\nVISION_EVIDENCE (classifier kết quả từ CLIP + Qdrant nearest neighbor — "
+                "đã xem cùng ảnh, hãy coi như gợi ý mạnh):\n"
+                + str(vision_evidence)
+            )
+
         payload = {
-            "prompt": f"{FOOD_VISION_PROMPT}\n\nFilename hint:\n{filename_hint or ''}",
+            "prompt": (
+                f"{FOOD_VISION_PROMPT}"
+                f"{evidence_block}"
+                f"\n\nFilename hint (yếu — chỉ tham khảo, không trust):\n{filename_hint or ''}"
+            ),
             "images": [base64_image],
             "stream": False
         }

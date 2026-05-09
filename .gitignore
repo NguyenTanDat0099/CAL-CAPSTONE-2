@@ -6,6 +6,14 @@ coverage/
 *.log
 .codex-run/
 ngrok.yml
+.claude/settings.local.json
+
+# Local training datasets are too large for the application repo.
+/food-101/
+/images/
+/dish_ingredients.xlsx
+/dishes.xlsx
+/ingredients.xlsx
 
 .env
 .env.*

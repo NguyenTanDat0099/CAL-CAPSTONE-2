@@ -83,6 +83,58 @@ const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
   return user;
 };
 
+let initPromise: Promise<void> | null = null;
+
+const initializeSchema = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mealschedules (
+      schedule_id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      description TEXT,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      color VARCHAR(20) DEFAULT '#FB923C',
+      target_calories INT,
+      source ENUM('manual','chat','shared') NOT NULL DEFAULT 'manual',
+      is_published TINYINT NOT NULL DEFAULT 0,
+      published_at TIMESTAMP NULL,
+      achieved TINYINT NOT NULL DEFAULT 0,
+      plan_payload JSON,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+      INDEX idx_mealschedules_user (user_id),
+      INDEX idx_mealschedules_published (is_published)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mealscheduleitems (
+      item_id INT AUTO_INCREMENT PRIMARY KEY,
+      schedule_id INT NOT NULL,
+      day_offset INT DEFAULT 0,
+      meal_type ENUM('breakfast','lunch','dinner','snack') NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      serving VARCHAR(100),
+      calories DECIMAL(10,2),
+      protein DECIMAL(10,2),
+      carbs DECIMAL(10,2),
+      fat DECIMAL(10,2),
+      notes TEXT,
+      sort_order INT DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (schedule_id) REFERENCES mealschedules(schedule_id) ON DELETE CASCADE,
+      INDEX idx_mealscheduleitems_schedule (schedule_id)
+    )
+  `);
+};
+
+const ensureSchema = () => {
+  if (!initPromise) initPromise = initializeSchema();
+  return initPromise;
+};
+
 const verifyOwner = async (userId: number, scheduleId: number) => {
   const [rows] = await pool.query(
     'SELECT schedule_id FROM mealschedules WHERE schedule_id = ? AND user_id = ? LIMIT 1',
@@ -164,6 +216,7 @@ const fetchItems = async (scheduleIds: number[]) => {
 };
 
 export const listUserSchedulesService = async (accountId: number | null | undefined) => {
+  await ensureSchema();
   const user = await resolveUser(accountId);
   const [rows] = await pool.query(
     `SELECT * FROM mealschedules WHERE user_id = ? ORDER BY start_date ASC, schedule_id ASC`,
@@ -178,6 +231,7 @@ export const createScheduleService = async (
   accountId: number | null | undefined,
   payload: CreateSchedulePayload
 ) => {
+  await ensureSchema();
   const user = await resolveUser(accountId);
   const name = payload.name?.trim();
   if (!name) throw new Error('NAME_REQUIRED');
@@ -251,6 +305,7 @@ export const updateScheduleService = async (
   scheduleId: number,
   payload: UpdateSchedulePayload
 ) => {
+  await ensureSchema();
   const user = await resolveUser(accountId);
   const owned = await verifyOwner(user.user_id, scheduleId);
   if (!owned) throw new Error('SCHEDULE_NOT_FOUND');
@@ -280,6 +335,7 @@ export const deleteScheduleService = async (
   accountId: number | null | undefined,
   scheduleId: number
 ) => {
+  await ensureSchema();
   const user = await resolveUser(accountId);
   const owned = await verifyOwner(user.user_id, scheduleId);
   if (!owned) throw new Error('SCHEDULE_NOT_FOUND');
@@ -292,6 +348,7 @@ export const publishScheduleService = async (
   scheduleId: number,
   publish: boolean
 ) => {
+  await ensureSchema();
   const user = await resolveUser(accountId);
   const owned = await verifyOwner(user.user_id, scheduleId);
   if (!owned) throw new Error('SCHEDULE_NOT_FOUND');
@@ -306,6 +363,7 @@ export const publishScheduleService = async (
 };
 
 export const listDiscoverMealsService = async () => {
+  await ensureSchema();
   const [rows] = await pool.query(
     `SELECT ms.*, u.full_name AS author_name
      FROM mealschedules ms

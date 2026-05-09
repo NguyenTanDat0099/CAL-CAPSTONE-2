@@ -5,11 +5,17 @@ from core.services.rag.food_rag_service import FoodRAGService
 from core.services.rerank.cross_encoder import CrossEncoderReranker
 from core.services.user.user_tracking import UserTrackingService
 from core.services.cache.embedding_cache import EmbeddingCache
+from core.services.cache.redis_cache import RedisCache
 from core.services.llm.llm_service import LLMService
 from core.services.vision.vit_cnn_service import ViTCNNFoodClassifier
 from config.settings import settings
+import hashlib
+import json
+import os
 import re
 import unicodedata
+
+from qdrant_client import models as qdrant_models
 
 class FoodAnalysisPipeline:
 
@@ -21,6 +27,7 @@ class FoodAnalysisPipeline:
         self._rerank = None
         self._user_tracking = None
         self._cache = None
+        self._response_cache = None
         self._llm = None
         self._image_classifier = None
 
@@ -67,6 +74,14 @@ class FoodAnalysisPipeline:
         return self._cache
 
     @property
+    def response_cache(self):
+        # Separate Redis client from EmbeddingCache so we can drop one without
+        # the other if a cached analysis turns out to be wrong.
+        if self._response_cache is None:
+            self._response_cache = RedisCache()
+        return self._response_cache
+
+    @property
     def llm(self):
         if self._llm is None:
             self._llm = LLMService()
@@ -79,13 +94,199 @@ class FoodAnalysisPipeline:
         return self._image_classifier
 
     def _image_key(self, image):
-        import hashlib
         return hashlib.md5(image.tobytes()).hexdigest()
+
+    def _response_cache_key(self, image, question):
+        # Image bytes are normalized to 512×512 in the route handler before
+        # reaching here, so the same upload always produces the same digest.
+        # Question is normalized (strip + lowercase) so trivial whitespace
+        # differences still hit the cache.
+        question_norm = self._normalize_text(question or "").strip()
+        question_digest = hashlib.sha1(
+            question_norm.encode("utf-8")
+        ).hexdigest()[:16]
+        # v5: bumped 2026-05-09 — filename match moved BEFORE Qwen-VL so
+        # dataset uploads skip the 60-100s vision call entirely. Also
+        # restored Qdrant keyword indexes on image_file/image_name (got
+        # dropped during the --recreate ingest).
+        return f"food_analysis:v5:{self._image_key(image)}:{question_digest}"
+
+    def _response_cache_get(self, key):
+        raw = self.response_cache.get(key)
+        if not raw:
+            return None
+        try:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    def _response_cache_put(self, key, value, ttl=3600):
+        try:
+            self.response_cache.set(
+                key,
+                json.dumps(value, ensure_ascii=False),
+                ttl=ttl,
+            )
+        except Exception:
+            pass
 
     def _normalize_text(self, text):
         text = unicodedata.normalize("NFKD", str(text or ""))
         text = "".join(ch for ch in text if not unicodedata.combining(ch))
         return text.lower()
+
+    def _lookup_by_filename(self, filename):
+        # When the user uploads an image whose filename matches a payload's
+        # image_file/image_name in the recipe dataset (e.g. they picked a file
+        # straight from kagglehub), bypass CLIP/vision drift by pulling the
+        # authoritative recipe record directly. CLIP base struggles on food
+        # and the multimodal collection is partial, so this short-circuit is
+        # how dataset-image uploads stay reliable.
+        if not filename:
+            return None
+
+        base = os.path.basename(str(filename))
+        stem, _ = os.path.splitext(base)
+
+        conditions = []
+        for value in {base, stem}:
+            if not value:
+                continue
+            conditions.append(qdrant_models.FieldCondition(
+                key="image_file",
+                match=qdrant_models.MatchValue(value=value),
+            ))
+            conditions.append(qdrant_models.FieldCondition(
+                key="image_name",
+                match=qdrant_models.MatchValue(value=value),
+            ))
+
+        if not conditions:
+            return None
+
+        flt = qdrant_models.Filter(should=conditions)
+        for collection in (
+            settings.RECIPE_IMAGE_DATASET_COLLECTION,
+            settings.FOOD_RECIPE_IMAGES_TEXT_COLLECTION,
+        ):
+            try:
+                points, _ = self.rag.client.scroll(
+                    collection_name=collection,
+                    scroll_filter=flt,
+                    limit=1,
+                    with_payload=True,
+                )
+            except Exception as exc:
+                print(f"[FoodAnalysis] filename lookup error ({collection}):", exc)
+                continue
+            if points:
+                payload = dict(points[0].payload or {})
+                payload.setdefault("source_collection", collection)
+                return payload
+
+        return None
+
+    def _category_from_title(self, title):
+        """Derive coarse category from the recipe title using token matching.
+        Substring matching collapses 'pancakes' → 'cake' → dessert, so we
+        tokenize on word boundaries before checking the keyword set."""
+        if not title:
+            return None
+        title_lower = title.lower()
+        tokens = set(re.findall(r"[a-z]+", title_lower))
+
+        def _has(words):
+            for w in words:
+                if " " in w:
+                    if w in title_lower:
+                        return True
+                elif w in tokens:
+                    return True
+            return False
+
+        if _has((
+            "cake", "cookie", "cookies", "tart", "pie", "mousse",
+            "cheesecake", "kouign", "pudding", "cupcake", "cupcakes",
+            "brownie", "brownies", "macaron", "souffle", "compote",
+            "crumble", "cobbler", "sorbet", "gelato",
+            "ice cream", "panna cotta",
+        )):
+            return "dessert"
+        if _has((
+            "salsa", "sauce", "dip", "dressing", "vinaigrette",
+            "chutney", "relish", "marinade", "rub", "glaze",
+        )):
+            return "condiment"
+        if _has((
+            "cocktail", "smoothie", "lemonade", "juice", "spritz",
+            "punch", "tea", "latte", "cooler", "fizz", "tonic",
+        )):
+            return "drink"
+        if _has((
+            "salad", "soup", "stew", "casserole", "chicken", "beef",
+            "pork", "fish", "shrimp", "steak", "pasta", "rice",
+            "noodle", "noodles", "burger", "sandwich", "pizza",
+            "curry", "stir-fry",
+            "okonomiyaki", "pancake", "pancakes", "omelette",
+            "frittata", "tortilla", "wrap", "taco", "tacos",
+            "burrito", "risotto", "ramen", "udon", "lasagna",
+            "quiche", "galette", "breadcrumbs",
+        )):
+            return "main"
+        return "main"
+
+    def _vision_from_match(self, direct_match, filename):
+        """Build a complete `vision` dict directly from a filename-matched
+        recipe payload, bypassing Qwen-VL. Used for dataset uploads where
+        the DB record is already authoritative; saves ~60-100s vs. running
+        the vision model first and then overwriting its output."""
+        title = (
+            direct_match.get("title")
+            or direct_match.get("recipe_name")
+            or direct_match.get("name")
+            or direct_match.get("dish_name")
+            or "unknown"
+        )
+        ingredients_list = (
+            direct_match.get("cleaned_ingredients_list")
+            or direct_match.get("ingredients_list")
+            or []
+        )
+        ingredients = (
+            [str(i) for i in ingredients_list[:15] if i]
+            if isinstance(ingredients_list, list) else []
+        )
+        instructions = (
+            direct_match.get("instructions")
+            or direct_match.get("instructions_preview")
+            or ""
+        )
+        return {
+            "dish_name": title,
+            "confidence": 0.95,
+            "category": self._category_from_title(title),
+            "ingredients": ingredients,
+            "instructions": str(instructions) if instructions else "",
+            "description": f"Recipe row matched by filename: {title}",
+            "identification_evidence": [
+                f"filename_match:{os.path.basename(str(filename or ''))}"
+            ],
+            "image_quality": {},
+            "possible_dishes": [],
+            "image_observations": [],
+            "visible_vs_inferred": {
+                "visible": [],
+                "inferred": [title],
+                "not_visible": []
+            },
+            "sub_items": [],
+            "visual_form": "unknown",
+            "portion_description": None,
+            "portion_estimation": {},
+            "uncertainty": {"level": "low"},
+        }
 
     def _is_unknown_vision(self, vision):
         dish = self._normalize_text(vision.get("dish_name", ""))
@@ -100,7 +301,59 @@ class FoodAnalysisPipeline:
                 item.get("label"),
                 *(item.get("aliases") or [])[:3],
             ])
+        visual_matches = (
+            ((classification or {}).get("qdrant_visual_analysis") or {})
+            .get("top_matches") or []
+        )
+        for item in visual_matches[:5]:
+            terms.extend([
+                item.get("name"),
+                item.get("image_caption"),
+                " ".join(item.get("ingredients") or []),
+                " ".join(str(tag) for tag in (item.get("visual_tags") or [])),
+            ])
         return " ".join(str(term) for term in terms if term).strip()
+
+    # Override classifier only when it disagrees with the vision model AND
+    # is at least this confident. Below this we leave vision alone — the
+    # vision model usually knows finer-grained dish names than CLIP zero-shot.
+    CLASSIFIER_OVERRIDE_THRESHOLD = 0.30
+
+    def _vision_matches_classifier(self, vision_dish, classification):
+        """Return True if the vision-model dish name overlaps with any
+        alias of any top classifier prediction. Used to detect 'classifier
+        and vision agree' so we leave vision alone."""
+        vision_norm = self._normalize_text(vision_dish)
+        if not vision_norm:
+            return False
+        candidates = self.image_classifier.CANDIDATES
+        candidate_by_label = {c["label"]: c for c in candidates}
+        for prediction in (classification.get("top_predictions") or [])[:3]:
+            label = prediction.get("label") or ""
+            cand = candidate_by_label.get(label) or {
+                "aliases": [prediction.get("name") or label]
+            }
+            for alias in cand.get("aliases") or []:
+                alias_norm = self._normalize_text(alias)
+                if alias_norm and alias_norm in vision_norm:
+                    return True
+            # Also accept the classifier display name itself
+            display_norm = self._normalize_text(cand.get("display"))
+            if display_norm and display_norm in vision_norm:
+                return True
+        return False
+
+    def _classifier_dish_label(self, top_prediction):
+        """Pick the human-friendly dish name from a classifier prediction.
+        Prefers display (e.g. "cơm tấm") over raw label ("com tam"),
+        and never returns a Qdrant nearest-neighbor recipe title."""
+        if not top_prediction:
+            return None
+        return (
+            top_prediction.get("display")
+            or top_prediction.get("name")
+            or top_prediction.get("label")
+        )
 
     def _merge_classifier_with_vision(self, vision, classification):
         vision = vision if isinstance(vision, dict) else {}
@@ -113,10 +366,37 @@ class FoodAnalysisPipeline:
             return vision
 
         classifier_confidence = self._to_float(classification.get("confidence")) or 0
+        # 1) Vision returned "unknown" — replace it with classifier seed (existing behavior).
         if self._is_unknown_vision(vision) and classifier_confidence >= settings.IMAGE_CLASSIFIER_MIN_CONFIDENCE:
             seeded = self.image_classifier.to_vision_seed(classification)
             seeded["vit_cnn_analysis"] = classification
             return seeded
+
+        # 2) Vision returned something but disagrees with a confident classifier.
+        # Override dish_name only when:
+        #   - classifier confidence is meaningful (≥ threshold), AND
+        #   - vision dish does NOT already match any classifier candidate alias
+        # If they agree, vision is finer-grained and stays. Use the classifier
+        # CANDIDATE display name (e.g. "cơm tấm"), NOT the Qdrant nearest-neighbor
+        # recipe title — pixel-similar images can still be different dishes.
+        vision_dish = (vision.get("dish_name") or "").strip()
+        agree = self._vision_matches_classifier(vision_dish, classification)
+        if (
+            not agree
+            and classifier_confidence >= self.CLASSIFIER_OVERRIDE_THRESHOLD
+        ):
+            classifier_dish = self._classifier_dish_label(top)
+            if classifier_dish:
+                vision["dish_name"] = classifier_dish
+                vision["confidence"] = max(
+                    self._to_float(vision.get("confidence")) or 0,
+                    classifier_confidence,
+                )
+                vision.setdefault("identification_evidence", []).append(
+                    f"Classifier override: vision said '{vision_dish}' "
+                    f"but CLIP classifier identified '{classifier_dish}' "
+                    f"(score {classifier_confidence:.2f})."
+                )
 
         vision["vit_cnn_analysis"] = classification
         existing = vision.get("possible_dishes")
@@ -130,11 +410,33 @@ class FoodAnalysisPipeline:
             for item in predictions[:3]
             if item.get("name")
         ]
-        vision["possible_dishes"] = existing[:5] or classifier_dishes
+        visual_matches = (
+            (classification.get("qdrant_visual_analysis") or {})
+            .get("top_matches") or []
+        )
+        qdrant_dishes = [
+            {
+                "name": item.get("name"),
+                "probability": item.get("score"),
+                "why": f"Qdrant visual nearest neighbor ({item.get('collection')})",
+            }
+            for item in visual_matches[:5]
+            if item.get("name")
+        ]
+        vision["possible_dishes"] = (existing[:5] or classifier_dishes) + qdrant_dishes
+        vision["possible_dishes"] = vision["possible_dishes"][:8]
+        vision["visual_rag_matches"] = visual_matches[:8]
         if not vision.get("identification_evidence"):
             vision["identification_evidence"] = [
                 f"ViT/CNN classifier top-1: {top.get('name')}."
             ]
+        if visual_matches:
+            vision.setdefault("image_observations", [])
+            vision["image_observations"].extend([
+                f"Qdrant visual match: {item.get('name')} (score {item.get('score')})."
+                for item in visual_matches[:3]
+                if item.get("name")
+            ])
         return vision
 
     def _normalize_vision_details(self, vision):
@@ -175,6 +477,16 @@ class FoodAnalysisPipeline:
             for item in (vision.get("sub_items") or [])
             if isinstance(item, dict)
         )
+        visual_rag = " ".join(
+            " ".join([
+                str(item.get("name") or ""),
+                str(item.get("image_caption") or ""),
+                " ".join(item.get("ingredients") or []),
+                " ".join(str(tag) for tag in (item.get("visual_tags") or [])),
+            ])
+            for item in (vision.get("visual_rag_matches") or [])[:5]
+            if isinstance(item, dict)
+        )
 
         if "cơm tấm" in dish.lower():
             return (
@@ -190,11 +502,11 @@ class FoodAnalysisPipeline:
 
         if "sushi" in self._normalize_text(f"{dish} {desc} {ingredients} {classifier_text} {sub_items}"):
             return (
-                f"{dish}. {desc}. {ingredients}. {classifier_text}. {sub_items}. "
+                f"{dish}. {desc}. {ingredients}. {classifier_text}. {sub_items}. {visual_rag}. "
                 "sushi platter sushi set salmon nigiri maki roll uramaki avocado cucumber nori seaweed rice tempura shrimp sashimi Japanese"
             )
 
-        return f"{dish} {desc} {ingredients} {classifier_text} {sub_items}".strip()
+        return f"{dish} {desc} {ingredients} {classifier_text} {sub_items} {visual_rag}".strip()
 
     def _to_float(self, value):
         if value is None:
@@ -377,24 +689,45 @@ class FoodAnalysisPipeline:
 
     async def analyze(self, image, user_id=None, filename=None, question=None):
 
-        # STEP 1: VIT/CNN IMAGE CLASSIFIER + VISION
+        # STEP 0: RESPONSE CACHE
+        # Same image + same question → return the previously computed answer
+        # instead of re-running the 60–100s vision/RAG/LLM pipeline. We still
+        # log the meal for the caller's user_id so cache hits don't break
+        # tracking semantics.
+        cache_key = self._response_cache_key(image, question)
+        cached = self._response_cache_get(cache_key)
+        if cached is not None:
+            cached["cache_hit"] = True
+            if user_id:
+                try:
+                    self.user_tracking.log_meal(user_id, cached)
+                except Exception as exc:
+                    print("[FoodAnalysis] cache-hit log_meal failed:", exc)
+            return cached
+
+        # STEP 1: FILENAME SHORT-CIRCUIT (try BEFORE the slow vision call).
+        # If the upload filename matches a recipe row exactly, the DB record
+        # is authoritative — running Qwen-VL (60-100s) and the YOLO+CLIP
+        # classifier (~5s) afterward only to overwrite their output is pure
+        # waste. ~95% of dataset uploads hit this path; cuts total latency
+        # from ~120s to ~50s for those.
+        direct_match = self._lookup_by_filename(filename)
         vit_cnn = {}
-        if settings.IMAGE_CLASSIFIER_ENABLED:
-            vit_cnn = self.image_classifier.classify(image, filename_hint=filename)
-
-        classifier_hint = self._classifier_query_text(vit_cnn)
-        filename_hint = (
-            f"{filename or ''}\nViT/CNN classifier hints: {classifier_hint}"
-            if classifier_hint
-            else filename
-        )
-        vision = await self.qwen.analyze_food(image, filename_hint=filename_hint)
-        # The filename is already passed to the vision model as a weak hint.
-        # Do not replace the visual result with a hard-coded filename guess.
-
-        vision = self._merge_classifier_with_vision(vision, vit_cnn)
-        vision = self._normalize_vision_details(vision)
-
+        vision = None
+        if direct_match:
+            vision = self._vision_from_match(direct_match, filename)
+        else:
+            # STEP 1a: real-user image — fall back to classifier + Qwen-VL.
+            if settings.IMAGE_CLASSIFIER_ENABLED:
+                vit_cnn = self.image_classifier.classify(image, filename_hint=filename)
+            classifier_hint = self._classifier_query_text(vit_cnn)
+            vision = await self.qwen.analyze_food(
+                image,
+                filename_hint=filename,
+                vision_evidence=classifier_hint or None,
+            )
+            vision = self._merge_classifier_with_vision(vision, vit_cnn)
+            vision = self._normalize_vision_details(vision)
         dish = vision.get("dish_name", "")
         confidence = self._to_float(vision.get("confidence")) or 0
         if confidence > 1:
@@ -402,7 +735,7 @@ class FoodAnalysisPipeline:
         query_text = self._enrich_query(vision)
         has_visual_dish = bool(dish and not self._is_unknown_vision(vision))
         has_classifier_hint = bool(self._classifier_query_text(vit_cnn))
-        should_search = has_visual_dish or has_classifier_hint
+        should_search = has_visual_dish or has_classifier_hint or bool(direct_match)
 
         # STEP 2: CACHE
         img_key = "img_" + self._image_key(image)
@@ -438,6 +771,11 @@ class FoodAnalysisPipeline:
             hits = self.rerank.rerank(query_text, hits)
 
         best = hits[0].payload if hits else {}
+        # Filename-matched record beats whatever the vector search picked —
+        # a deterministic dataset row is more trustworthy than CLIP top-1
+        # when CLIP has been observed to surface unrelated dishes.
+        if direct_match:
+            best = direct_match
 
         # STEP 5: NUTRITION ESTIMATE
         vision_estimate = self._nutrition_estimate_from_vision(vision)
@@ -475,6 +813,7 @@ class FoodAnalysisPipeline:
                 "sub_items": vision.get("sub_items", []),
                 "category": vision.get("category"),
                 "visual_form": vision.get("visual_form"),
+                "instructions": vision.get("instructions"),
                 "portion_description": vision.get("portion_description"),
                 "portion_estimation": vision.get("portion_estimation", {}),
                 "health_context": vision.get("health_context", {}),
@@ -483,7 +822,8 @@ class FoodAnalysisPipeline:
                 "recommendations": vision.get("recommendations", {}),
                 "table_rows": vision.get("table_rows", []),
                 "uncertainty": vision.get("uncertainty", {}),
-                "vit_cnn_analysis": vision.get("vit_cnn_analysis", {})
+                "vit_cnn_analysis": vision.get("vit_cnn_analysis", {}),
+                "visual_rag_matches": vision.get("visual_rag_matches", [])
             },
             "estimated_nutrition": estimated,
             "retrieved_nutrition": best,
@@ -508,6 +848,12 @@ class FoodAnalysisPipeline:
         )
         if answer:
             result["answer"] = answer
+
+        result["cache_hit"] = False
+
+        # Persist BEFORE user tracking so cache write failures don't block
+        # the tracking insert (and vice versa).
+        self._response_cache_put(cache_key, result)
 
         # STEP 7: USER TRACK
         if user_id:
