@@ -14,6 +14,8 @@ ngrok.yml
 /dish_ingredients.xlsx
 /dishes.xlsx
 /ingredients.xlsx
+/dataset of food-100k/
+/dataset of Healthy Eating/
 
 .env
 .env.*

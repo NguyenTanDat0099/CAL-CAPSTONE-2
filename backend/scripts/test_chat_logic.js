@@ -703,6 +703,285 @@ describe('sendChatMessage body validation', () => {
 });
 
 // =============================================================================
+//  Edge cases & boundary scenarios (extended coverage)
+// =============================================================================
+
+describe('stripAccents — extended', () => {
+  it('keeps digits and punctuation', () => eq(stripAccents('Bún 123 chả!'), 'bun 123 cha!'));
+  it('keeps emoji untouched', () => eq(stripAccents('👍 ngon'), '👍 ngon'));
+  it('handles mixed cases of Đ/đ', () => eq(stripAccents('ĐiỆn ĐàO'), 'dien dao'));
+});
+
+describe('isFollowUpMessage — boundaries', () => {
+  it('empty string is follow-up (length 0 ≤ 28)', () => truthy(isFollowUpMessage('')));
+  it('whitespace-only is follow-up (short)', () => truthy(isFollowUpMessage('     ')));
+  it('exactly 28 chars (no keyword) → follow-up', () => {
+    const msg = 'a'.repeat(28); // length 28 after stripAccents
+    eq(msg.length, 28);
+    truthy(isFollowUpMessage(msg));
+  });
+  it('exactly 29 chars (no keyword) → NOT follow-up', () => {
+    const msg = 'a'.repeat(29);
+    eq(msg.length, 29);
+    falsy(isFollowUpMessage(msg));
+  });
+  it('29+ chars but contains "tiep" → follow-up', () => {
+    const msg = 'Tôi muốn nghe tiếp về dinh dưỡng nhé';
+    truthy(msg.length > 28);
+    truthy(isFollowUpMessage(msg));
+  });
+  it('Vietnamese accents are stripped before length check', () => {
+    // 'á' is one char in JS but two code units after NFD; stripAccents collapses
+    // it back to 'a'. Make sure length is compared post-normalization.
+    const msg = 'á'.repeat(27); // 27 base chars after stripAccents
+    truthy(isFollowUpMessage(msg));
+  });
+});
+
+describe('parseSessionId — extended boundaries', () => {
+  it('0 and "0" → null (must be > 0)', () => {
+    eq(parseSessionId(0), null);
+    eq(parseSessionId('0'), null);
+  });
+  it('-0 → null', () => eq(parseSessionId(-0), null));
+  it('Infinity / -Infinity → null (not integer)', () => {
+    eq(parseSessionId(Infinity), null);
+    eq(parseSessionId(-Infinity), null);
+  });
+  it('NaN → null', () => eq(parseSessionId(NaN), null));
+  it('"" → null (Number("") is 0, not > 0)', () => eq(parseSessionId(''), null));
+  it('whitespace-padded numeric string → number', () => eq(parseSessionId('  7  '), 7));
+  it('"5.0" accepted as integer 5', () => eq(parseSessionId('5.0'), 5));
+  it('SURPRISE: scientific notation accepted ("5e2" → 500)', () => {
+    // Documents an undocumented behaviour: Number("5e2") = 500 is an integer,
+    // so it slips through. Probably harmless because session ids never come
+    // from user free text, but worth knowing.
+    eq(parseSessionId('5e2'), 500);
+  });
+  it('SURPRISE: hex string accepted ("0x10" → 16)', () => {
+    eq(parseSessionId('0x10'), 16);
+  });
+  it('boolean true coerces to 1', () => {
+    // Number(true) === 1. The controller never passes booleans here in
+    // practice but record the coercion.
+    eq(parseSessionId(true), 1);
+  });
+  it('boolean false → null', () => eq(parseSessionId(false), null));
+});
+
+describe('normalizeImageUrl — extended', () => {
+  const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgAAIAAAUAAeImBZsAAAAASUVORK5CYII=';
+  it('mixed-case data URL is accepted (regex /i)', () => {
+    const mixed = 'DATA:Image/PNG;Base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgAAIAAAUAAeImBZsAAAAASUVORK5CYII=';
+    eq(normalizeImageUrl(mixed), mixed);
+  });
+  it('strips outer whitespace before validation', () => {
+    eq(normalizeImageUrl(`   ${tinyPng}   `), tinyPng);
+  });
+  it('rejects data URL with space inside header', () => {
+    throws(() => normalizeImageUrl('data:image/png; base64,abc'), 'INVALID_IMAGE');
+  });
+  it('rejects data URL with malformed base64 in body', () => {
+    throws(() => normalizeImageUrl('data:image/png;base64,!!not!!base64!!'), 'INVALID_IMAGE');
+  });
+  it('rejects bare https URL (not Cloudinary-aware in this harness)', () => {
+    // The harness mirrors the pre-Cloudinary normalizeImageUrl. The actual
+    // chat.service.ts calls isCloudinaryUrl() first — covered separately.
+    throws(() => normalizeImageUrl('https://example.com/foo.png'), 'INVALID_IMAGE');
+  });
+});
+
+describe('escapeMarkdownCell — extended', () => {
+  it('empty string is NOT replaced with placeholder', () => {
+    // Important: ?? only fires for null/undefined. '' passes through.
+    eq(escapeMarkdownCell(''), '');
+  });
+  it('object renders as String(obj)', () => {
+    eq(escapeMarkdownCell({ a: 1 }), '[object Object]');
+  });
+  it('booleans render as text', () => {
+    eq(escapeMarkdownCell(true), 'true');
+    eq(escapeMarkdownCell(false), 'false');
+  });
+  it('multiple pipes all escaped', () => {
+    eq(escapeMarkdownCell('a|b|c|d'), 'a\\|b\\|c\\|d');
+  });
+});
+
+describe('buildChatContextText — extended', () => {
+  it('echo guard ONLY filters trailing user duplicate, not earlier ones', () => {
+    const out = buildChatContextText([
+      { sender: 'user', message: 'tóm lại đi', imageName: null }, // earlier copy
+      { sender: 'ai',   message: 'Đây là tóm tắt...', imageName: null },
+      { sender: 'user', message: 'tóm lại đi', imageName: null }, // trailing copy
+    ], 'tóm lại đi');
+    // earlier 'tóm lại đi' must be retained; only the trailing one is dropped.
+    eq(out, 'User: tóm lại đi\nAssistant: Đây là tóm tắt...');
+  });
+  it('echo guard does NOT fire when trailing entry is from AI', () => {
+    const out = buildChatContextText([
+      { sender: 'user', message: 'hi', imageName: null },
+      { sender: 'ai', message: 'hello', imageName: null },
+    ], 'hello');
+    eq(out, 'User: hi\nAssistant: hello');
+  });
+  it('echo guard requires exact match (case-sensitive)', () => {
+    const out = buildChatContextText([
+      { sender: 'user', message: 'Tóm Lại', imageName: null },
+    ], 'tóm lại');
+    eq(out, 'User: Tóm Lại'); // not deduped because case differs
+  });
+});
+
+describe('formatCalAiResponse — extended', () => {
+  it('empty data array → null', () => {
+    eq(formatCalAiResponse({ data: [] }), null);
+  });
+  it('data array of primitives renders JSON-stringified', () => {
+    const out = formatCalAiResponse({ data: ['a', 1, true] });
+    truthy(out && out.startsWith('I found these nutrition records:'));
+    truthy(out && out.includes('1. "a"'));
+    truthy(out && out.includes('2. 1'));
+    truthy(out && out.includes('3. true'));
+  });
+  it('data array with empty object renders "{}"', () => {
+    const out = formatCalAiResponse({ data: [{}] });
+    truthy(out && out.includes('1. {}'));
+  });
+  it('answer wins even if data array also present', () => {
+    eq(formatCalAiResponse({ answer: 'win', data: [{ x: 1 }] }), 'win');
+  });
+});
+
+describe('riskFlagsToText — extended', () => {
+  it('numeric entries are dropped', () => {
+    eq(riskFlagsToText([42, 0, NaN]), []);
+  });
+  it('empty object → dropped', () => {
+    eq(riskFlagsToText([{ risk: '', severity: '', reason: '' }]), []);
+  });
+  it('object with only severity → "mức X"', () => {
+    eq(riskFlagsToText([{ severity: 'high' }]), ['mức high']);
+  });
+  it('nested array entry is dropped', () => {
+    eq(riskFlagsToText([['nested']]), []);
+  });
+});
+
+describe('wantsCalories / wantsStructuredTable — false-positive documentation', () => {
+  it('"macroeconomics" matches "macro" — known FP', () => {
+    truthy(wantsCalories('Tôi học macroeconomics ở đại học'));
+    truthy(wantsStructuredTable('Tôi học macroeconomics ở đại học'));
+  });
+  it('"photograph" matches "photo" in wantsImageContext — known FP', () => {
+    truthy(wantsImageContext('I bought a photograph yesterday'));
+  });
+  it('chart keyword cascades into wantsStructuredTable', () => {
+    // Sanity: a request that wants a chart automatically wants a structured
+    // table (chart implies tabular underlying data).
+    truthy(wantsChart('show me a graph please'));
+    truthy(wantsStructuredTable('show me a graph please'));
+  });
+  it('wantsCalories on plain greeting → false', () => {
+    falsy(wantsCalories('xin chào'));
+  });
+});
+
+describe('formatMetric — boundary around 100', () => {
+  it('99.5 → 1-decimal mode (small)', () => eq(formatMetric(99.5, 'g'), '99.5 g'));
+  it('100 → integer mode (large)', () => eq(formatMetric(100, 'g'), '100 g'));
+  it('-100 → integer mode (large, abs >= 100)', () => eq(formatMetric(-100, 'g'), '-100 g'));
+  it('-99.9 → 1-decimal mode (small)', () => eq(formatMetric(-99.9, 'g'), '-99.9 g'));
+  it('Infinity rejected as non-finite', () => {
+    eq(formatMetric(Infinity, 'g'), 'Chưa đủ dữ liệu');
+    eq(formatMetric(-Infinity, 'g'), 'Chưa đủ dữ liệu');
+  });
+});
+
+describe('formatConfidence — boundary at 1', () => {
+  it('exactly 1 stays as 100%', () => eq(formatConfidence(1), '100%'));
+  it('1.0001 treated as percent (rescaled to ~1%)', () => {
+    // 1.0001 > 1 → divided by 100 → 0.010001 → round(0.010001*100) = 1 → "1%".
+    // Sharp drop-off at the boundary: 1.0 stays 100%, 1.0001 collapses to 1%.
+    eq(formatConfidence(1.0001), '1%');
+  });
+  it('Infinity → null', () => eq(formatConfidence(Infinity), null));
+  it('0 → 0%', () => eq(formatConfidence(0), '0%'));
+});
+
+describe('toNumber — extended', () => {
+  it('Infinity passes through (finite check is is-NaN-only)', () => {
+    // Note: the helper specifically demands Number.isFinite, so Infinity is
+    // rejected. Documenting the actual contract.
+    eq(toNumber(Infinity), null);
+    eq(toNumber(-Infinity), null);
+  });
+  it('extracts decimal even when leading/trailing words present', () => {
+    eq(toNumber('weight is 67.4 kg today'), 67.4);
+  });
+  it('first match wins when multiple numbers present', () => {
+    eq(toNumber('between 100 and 200'), 100);
+  });
+  it('boolean → null (not coerced)', () => {
+    eq(toNumber(true), null);
+    eq(toNumber(false), null);
+  });
+});
+
+describe('parseImageDataUrl — extended', () => {
+  it('accepts trailing "=" padding', () => {
+    const r = parseImageDataUrl('data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==');
+    eq(r.mime, 'image/png');
+  });
+  it('accepts upper-case base64 charset', () => {
+    const r = parseImageDataUrl('data:image/png;base64,ABCDEF==');
+    eq(r.mime, 'image/png');
+  });
+  it('rejects empty body', () => {
+    throws(() => parseImageDataUrl('data:image/png;base64,'), 'INVALID_IMAGE');
+  });
+});
+
+describe('parseFoodInsight — extended', () => {
+  it('arrays are typeof "object" — passed through (questionable but consistent)', () => {
+    const v = [{ x: 1 }];
+    eq(parseFoodInsight(v), v);
+  });
+  it('JSON parse of array string passes through (not narrowed)', () => {
+    eq(parseFoodInsight('[1,2,3]'), [1, 2, 3]);
+  });
+  it('JSON parse of literal "null" → undefined', () => {
+    eq(parseFoodInsight('null'), undefined);
+  });
+});
+
+describe('sendChatMessage body validation — extended', () => {
+  it('sessionId 0 (number) → INVALID_SESSION_ID', () => {
+    eq(validateSendChatMessageBody({ message: 'hi', sessionId: 0 }).message, 'INVALID_SESSION_ID');
+  });
+  it('sessionId "0" (string) → INVALID_SESSION_ID', () => {
+    eq(validateSendChatMessageBody({ message: 'hi', sessionId: '0' }).message, 'INVALID_SESSION_ID');
+  });
+  it('sessionId 5.5 → INVALID_SESSION_ID', () => {
+    eq(validateSendChatMessageBody({ message: 'hi', sessionId: 5.5 }).message, 'INVALID_SESSION_ID');
+  });
+  it('numeric message coerced — typeof !== string → EMPTY_MESSAGE', () => {
+    eq(validateSendChatMessageBody({ message: 123 }).message, 'EMPTY_MESSAGE');
+  });
+  it('numeric imageUrl → EMPTY_MESSAGE (typeof !== string)', () => {
+    eq(validateSendChatMessageBody({ imageUrl: 123 }).message, 'EMPTY_MESSAGE');
+  });
+  it('whitespace-only message + whitespace-only imageUrl → EMPTY_MESSAGE', () => {
+    eq(validateSendChatMessageBody({ message: '   ', imageUrl: '   ' }).message, 'EMPTY_MESSAGE');
+  });
+  it('valid message + sessionId as numeric string "12" → ok with parsed=12', () => {
+    const r = validateSendChatMessageBody({ message: 'hi', sessionId: '12' });
+    truthy(r.ok);
+    eq(r.parsedSessionId, 12);
+  });
+});
+
+// =============================================================================
 //  Summary
 // =============================================================================
 

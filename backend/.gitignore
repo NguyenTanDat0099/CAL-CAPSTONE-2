@@ -4,3 +4,4 @@ dist/
 *.log
 .env
 .cloudinary-reports/
+.dataset-reports/

@@ -1347,8 +1347,19 @@ function ContentManagement({ showToast }: ViewProps) {
                   <tr key={item.id} className="border-b border-white/5 hover:bg-white/2 transition-colors">
                     <td className="px-8 py-6">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-full bg-brand-orange/20 flex items-center justify-center">
-                          <span className="text-sm">🍲</span>
+                        <div className="relative w-12 h-12 shrink-0 overflow-hidden rounded-xl bg-brand-orange/20 border border-white/10 flex items-center justify-center">
+                          <Utensils size={18} className="text-brand-orange" />
+                          {item.imagePath && (
+                            <img
+                              src={item.imagePath}
+                              alt={item.name}
+                              loading="lazy"
+                              className="absolute inset-0 h-full w-full object-cover"
+                              onError={(event) => {
+                                event.currentTarget.style.display = 'none';
+                              }}
+                            />
+                          )}
                         </div>
                         <div>
                           <p className="font-black text-white">{item.name}</p>
