@@ -20,7 +20,7 @@ class SemanticCache:
         )
 
         self.prefix = "semantic_cache"
-        self.threshold = 0.92
+        self.threshold = 0.92 
 
     def _cosine(self, a, b):
         a = np.array(a)
@@ -70,7 +70,7 @@ class SemanticCache:
         self.client.set(
             key,
             json.dumps(data),
-            ex=60 * 60 * 24
+            ex=60 * 60 * 24 
         )
 
         print("💾 Cached result")

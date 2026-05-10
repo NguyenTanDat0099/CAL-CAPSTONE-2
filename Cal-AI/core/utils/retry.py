@@ -14,7 +14,7 @@ def retry_async(max_retries=3, base_delay=1.0):
                 except Exception as e:
                     if attempt == max_retries - 1:
                         raise
-
+                    
                     delay = base_delay * (2 ** attempt) + random.random()
                     await asyncio.sleep(delay)
         return wrapper

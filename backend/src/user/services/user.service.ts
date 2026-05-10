@@ -1,4 +1,9 @@
 import pool from '../../shared/database/db';
+import {
+  fetchImageBytes,
+  isCloudinaryConfigured,
+  uploadImageDataUrl,
+} from '../../shared/storage/cloudinary';
 
 type AnalysisSource = 'upload' | 'camera';
 
@@ -669,14 +674,15 @@ const analyzeImageWithCalAi = async (imageUrl: string, source: AnalysisSource): 
     throw new Error('CAL_AI_UNAVAILABLE');
   }
 
-  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 150000);
-  const image = parseImageDataUrl(imageUrl);
+  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 360000);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const image = await fetchImageBytes(imageUrl, controller.signal);
     const form = new FormData();
-    form.append('file', new Blob([image.bytes], { type: image.mime }), `food-scan.${image.mime.split('/')[1] || 'jpg'}`);
+    const filename = `food-scan.${image.mime.split('/')[1] || 'jpg'}`;
+    form.append('file', new Blob([image.bytes], { type: image.mime }), filename);
 
     const response = await fetch(`${baseUrl}/api/food/analyze`, {
       method: 'POST',
@@ -1574,10 +1580,27 @@ export const analyzeFoodImageService = async (
   const user = await resolveUser(accountId);
   await ensureUserGoal(user.user_id);
 
+  // Upload to Cloudinary and store the public URL instead of the base64 blob.
+  // The original data URL is still passed to Cal-AI vision below (no extra
+  // network hop needed).
+  let storedImageUrl = imageUrl;
+  if (isCloudinaryConfigured() && /^data:image\//i.test(imageUrl)) {
+    try {
+      const uploaded = await uploadImageDataUrl(imageUrl, {
+        folder: `calai/food-scan/${user.user_id}`,
+        publicIdPrefix: source,
+      });
+      storedImageUrl = uploaded.url;
+    } catch (error) {
+      console.warn('[FoodScan] Cloudinary upload failed, falling back to data URL:',
+        error instanceof Error ? error.message : error);
+    }
+  }
+
   // Save image record
   const [imageResult] = await pool.query(
     'INSERT INTO foodimages (user_id, image_url, source) VALUES (?, ?, ?)',
-    [user.user_id, imageUrl, source]
+    [user.user_id, storedImageUrl, source]
   );
   const imageId = (imageResult as { insertId: number }).insertId;
 

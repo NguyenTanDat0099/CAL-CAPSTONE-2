@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     REDIS_PORT: int
     REDIS_PASSWORD: str
 
-    TEXT_EMBEDDING_MODEL: str = "sentence-transformers/all-mpnet-base-v2"
-    IMAGE_EMBEDDING_MODEL: str = "openai/clip-vit-base-patch32"
+    TEXT_EMBEDDING_MODEL: str = "sentence-transformers/all-mpnet-base-v2"  
+    IMAGE_EMBEDDING_MODEL: str = "openai/clip-vit-base-patch32"          
 
     TEXT_VECTOR_DIM: int = 768
     IMAGE_VECTOR_DIM: int = 512

@@ -1,4 +1,10 @@
 import pool from '../../shared/database/db';
+import {
+  fetchImageBytes,
+  isCloudinaryConfigured,
+  isCloudinaryUrl,
+  uploadImageDataUrl,
+} from '../../shared/storage/cloudinary';
 
 interface UserRow {
   user_id: number;
@@ -81,6 +87,24 @@ interface CalAiFailure {
 }
 
 type CalAiOutcome = (CalAiQueryResult & { ok: true }) | CalAiFailure;
+
+type CalAiVisionFailureReason =
+  | 'unreachable'
+  | 'timeout'
+  | 'http'
+  | 'parse_null'
+  | 'fetch_image_failed'
+  | 'fetch_error';
+
+interface CalAiVisionFailure {
+  ok: false;
+  reason: CalAiVisionFailureReason;
+  detail?: string;
+}
+
+type CalAiVisionOutcome =
+  | { ok: true; insight: FoodImageInsight }
+  | CalAiVisionFailure;
 
 const MAX_IMAGE_DATA_URL_LENGTH = Number(process.env.MAX_IMAGE_DATA_URL_LENGTH || 3_500_000);
 
@@ -364,13 +388,37 @@ const parseImageDataUrl = (imageUrl: string): ImageData => {
   };
 };
 
+const CJK_RE = /[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+
+const containsCjk = (value?: string | null) => Boolean(value && CJK_RE.test(value));
+
+const sanitizeCalAiAnswer = (value?: string | null) => {
+  const text = value?.trim();
+  if (!text) return null;
+  if (!containsCjk(text)) return text;
+
+  const kept = text
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.trim().length > 0 && !containsCjk(line))
+    .join('\n')
+    .trim();
+
+  const minimumUsefulLength = Math.min(80, Math.floor(text.length * 0.35));
+  // If stripping CJK lines leaves too little to be useful, fall back to the
+  // original answer rather than dropping it. The downstream UX is "Mình
+  // chưa tìm thấy dữ liệu phù hợp" when the answer is null, which masks
+  // a successful retrieval and looks like a regression.
+  return kept.length >= minimumUsefulLength ? kept : text;
+};
+
 const formatCalAiResponse = (data: unknown) => {
   if (!data || typeof data !== 'object') return null;
   const record = data as Record<string, unknown>;
 
-  if (typeof record.answer === 'string' && record.answer.trim()) return record.answer.trim();
-  if (typeof record.content === 'string' && record.content.trim()) return record.content.trim();
-  if (typeof record.explanation === 'string' && record.explanation.trim()) return record.explanation.trim();
+  if (typeof record.answer === 'string' && record.answer.trim()) return sanitizeCalAiAnswer(record.answer);
+  if (typeof record.content === 'string' && record.content.trim()) return sanitizeCalAiAnswer(record.content);
+  if (typeof record.explanation === 'string' && record.explanation.trim()) return sanitizeCalAiAnswer(record.explanation);
 
   if (Array.isArray(record.data) && record.data.length > 0) {
     const preview = record.data
@@ -705,6 +753,14 @@ const normalizeImageUrl = (imageUrl?: string | null) => {
   const value = imageUrl?.trim();
   if (!value) return null;
 
+  // Cloudinary URLs are accepted as-is — fetchImageBytes already handles
+  // http(s) sources, so the vision pipeline can pull the bytes server-side
+  // when the user re-references an image stored on Cloudinary (e.g. context
+  // image carried over from a previous turn).
+  if (isCloudinaryUrl(value)) {
+    return value;
+  }
+
   if (!/^data:image\/(png|jpe?g|webp);base64,/i.test(value)) {
     throw new Error('INVALID_IMAGE');
   }
@@ -812,11 +868,14 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   const dishName = cleanDishName(record.dish_name as string | null)
     ?? (vitPredictions.length > 0 ? cleanDishName(String((vitPredictions[0] as Record<string, unknown>)?.name ?? '')) : null);
 
-  const hasAnswer = typeof record.answer === 'string' && record.answer.trim();
+  const safeAnswer = typeof record.answer === 'string'
+    ? sanitizeCalAiAnswer(record.answer)
+    : null;
+  const hasAnswer = Boolean(safeAnswer);
   if (!dishName && !hasAnswer) return null;
 
   return {
-    answer: hasAnswer ? (record.answer as string).trim() : null,
+    answer: safeAnswer,
     dishName: dishName ?? 'Unidentified food',
     confidence: toNumber(record.confidence),
     description: typeof visionDetail.description === 'string' ? visionDetail.description : null,
@@ -844,16 +903,30 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   };
 };
 
-const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null, question?: string) => {
+const askCalAiFoodImage = async (
+  imageUrl: string,
+  imageName?: string | null,
+  question?: string
+): Promise<CalAiVisionOutcome> => {
   const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
-  if (!baseUrl) return null;
-  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 150000);
+  if (!baseUrl) {
+    return { ok: false, reason: 'unreachable', detail: 'CAL_AI_BASE_URL chưa được cấu hình.' };
+  }
+  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 360000);
 
   try {
-    const image = parseImageDataUrl(imageUrl);
-    return await withTimeout(async signal => {
+    return await withTimeout<CalAiVisionOutcome>(async signal => {
+      let image: Awaited<ReturnType<typeof fetchImageBytes>>;
+      try {
+        image = await fetchImageBytes(imageUrl, signal);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[ChatVision] fetchImageBytes failed:', message);
+        return { ok: false, reason: 'fetch_image_failed', detail: message };
+      }
+
       const form = new FormData();
-      const filename = imageName?.trim() || `chat-upload.${image.mime.split('/')[1] || 'jpg'}`;
+      const filename = imageName?.trim() || image.filename;
       form.append('file', new Blob([image.bytes], { type: image.mime }), filename);
       if (question?.trim()) {
         form.append('question', question.trim());
@@ -868,21 +941,61 @@ const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null, qu
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');
         console.warn(`[ChatVision] Cal-AI image analyze failed with HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
-        return null;
+        // Forward the response body excerpt so the trace shows the real
+        // reason ("Invalid file type", "File too large", pipeline crash, …)
+        // instead of just "HTTP 400".
+        const bodyExcerpt = errorBody.replace(/\s+/g, ' ').trim().slice(0, 240);
+        const detail = bodyExcerpt
+          ? `HTTP ${response.status} — ${bodyExcerpt}`
+          : `HTTP ${response.status}`;
+        return { ok: false, reason: 'http', detail };
       }
-      return parseCalAiFoodInsight(await response.json());
+
+      const parsed = parseCalAiFoodInsight(await response.json());
+      if (!parsed) {
+        return { ok: false, reason: 'parse_null', detail: 'Cal-AI trả 200 nhưng payload thiếu dish_name/answer.' };
+      }
+      return { ok: true, insight: parsed };
     }, timeoutMs);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     const isTimeout = error instanceof Error && (
-      error.name === 'AbortError' || error.message.includes('aborted')
+      error.name === 'AbortError' || message.includes('aborted')
     );
     if (isTimeout) {
       console.warn(`[ChatVision] Cal-AI image analyze timed out after ${timeoutMs}ms. Consider increasing CAL_AI_VISION_TIMEOUT_MS.`);
-    } else {
-      console.warn('[ChatVision] Cal-AI image analyze unavailable:', error instanceof Error ? error.message : error);
+      return { ok: false, reason: 'timeout', detail: `Quá ${Math.round(timeoutMs / 1000)}s` };
     }
-    return null;
+    console.warn('[ChatVision] Cal-AI image analyze unavailable:', message);
+    return { ok: false, reason: 'fetch_error', detail: message };
   }
+};
+
+const VISION_FAILURE_TRACE: Record<CalAiVisionFailureReason, { trace: string; user: string }> = {
+  unreachable: {
+    trace: 'Backend không gọi được Cal-AI vision vì chưa cấu hình URL hoặc service không chạy.',
+    user: 'Service Cal-AI hiện không khả dụng cho phân tích ảnh.',
+  },
+  timeout: {
+    trace: 'Cal-AI vision không trả lời kịp trong thời gian chờ — Qwen-VL hoặc RAG vẫn đang chạy quá lâu.',
+    user: 'Mình chưa kịp phân tích ảnh vì model vision mất quá lâu. Bạn thử lại hoặc tăng `CAL_AI_VISION_TIMEOUT_MS` ở backend.',
+  },
+  http: {
+    trace: 'Cal-AI vision trả HTTP lỗi; có thể ảnh quá lớn hoặc pipeline crash.',
+    user: 'Cal-AI trả lỗi khi phân tích ảnh. Hãy kiểm tra log của Cal-AI Python server.',
+  },
+  parse_null: {
+    trace: 'Cal-AI trả 200 nhưng payload không có dish_name/answer dùng được — có thể vision không nhận diện được món.',
+    user: 'Mình chưa xác định được món trong ảnh. Bạn thử gửi ảnh rõ hơn hoặc chụp gần phần món chính.',
+  },
+  fetch_image_failed: {
+    trace: 'Backend không tải được ảnh nguồn (data URL không hợp lệ hoặc Cloudinary URL không truy cập được).',
+    user: 'Mình không tải được ảnh để phân tích. Bạn thử upload lại ảnh nhé.',
+  },
+  fetch_error: {
+    trace: 'Backend gọi Cal-AI vision nhưng gặp lỗi mạng/kết nối.',
+    user: 'Mình không kết nối được Cal-AI service để phân tích ảnh.',
+  },
 };
 
 const wantsIdentity = (message: string) => {
@@ -1085,18 +1198,22 @@ const generateAssistantReply = async (
       evidence: [message || 'Không có ghi chú kèm ảnh'],
     });
 
-    const calAiInsight = await askCalAiFoodImage(imageUrl, imageName, message);
+    const visionOutcome = await askCalAiFoodImage(imageUrl, imageName, message);
+    const calAiInsight = visionOutcome.ok ? visionOutcome.insight : null;
     let insight = calAiInsight;
 
-    if (calAiInsight) {
+    if (visionOutcome.ok) {
       addThinkingStep(trace, 'Chạy Cal-AI vision pipeline', 'Cal-AI đã trả về món ăn, khẩu phần và nutrition estimate.', {
         detail: 'Nguồn gồm vision model, RAG/nutrition estimate và metadata phân tích ảnh.',
         evidence: summarizeNutritionEvidence(calAiInsight).slice(0, 6),
       });
     } else {
-      addThinkingStep(trace, 'Chạy Cal-AI vision pipeline', 'Cal-AI chưa trả về kết quả vision đủ dùng trong thời gian chờ.', {
+      const failure = VISION_FAILURE_TRACE[visionOutcome.reason];
+      addThinkingStep(trace, 'Chạy Cal-AI vision pipeline', failure.trace, {
         status: 'warning',
-        detail: 'Không gọi model vision khác ngoài Cal-AI để giữ một nguồn xử lý thống nhất.',
+        detail: visionOutcome.detail
+          ? `${visionOutcome.reason}: ${visionOutcome.detail}`
+          : visionOutcome.reason,
       });
     }
 
@@ -1119,8 +1236,12 @@ const generateAssistantReply = async (
         detail: insight?.source ? `Nguồn cuối cùng: ${insight.source}` : 'Không có nguồn vision đủ chắc.',
     });
 
+    const fallbackText = !visionOutcome.ok
+      ? VISION_FAILURE_TRACE[visionOutcome.reason].user
+      : formatImageQuestionReply(insight, message);
+
     return {
-      text: insight?.answer ?? formatImageQuestionReply(insight, message),
+      text: insight?.answer ?? fallbackText,
       thinkingSteps: trace,
       foodInsight: insight ?? null,
     };
@@ -1364,12 +1485,39 @@ export const sendChatMessageService = async (
     targetSessionId = await createSession(user.user_id);
   }
 
+  // Upload the freshly-received image (data URL) to Cloudinary so we store a
+  // public URL instead of a multi-megabyte base64 string. The original data
+  // URL stays in memory for the vision pipeline below. If the caller already
+  // hands us a Cloudinary URL we keep it as-is.
+  let storedImageUrl: string | null = null;
+  if (normalizedImageUrl) {
+    if (isCloudinaryUrl(normalizedImageUrl)) {
+      storedImageUrl = normalizedImageUrl;
+    } else if (isCloudinaryConfigured()) {
+      try {
+        const uploaded = await uploadImageDataUrl(normalizedImageUrl, {
+          folder: `calai/chat/${user.user_id}`,
+          publicIdPrefix: `chat${targetSessionId}`,
+        });
+        storedImageUrl = uploaded.url;
+      } catch (error) {
+        console.warn('[Chat] Cloudinary upload failed, falling back to data URL:',
+          error instanceof Error ? error.message : error);
+        storedImageUrl = normalizedImageUrl;
+      }
+    } else {
+      storedImageUrl = normalizedImageUrl;
+    }
+  }
+
   await pool.query(
     'INSERT INTO chatmessages (session_id, sender, message_text, image_url, image_name) VALUES (?, ?, ?, ?, ?)',
-    [targetSessionId, 'user', messageText, normalizedImageUrl, normalizedImageName]
+    [targetSessionId, 'user', messageText, storedImageUrl, normalizedImageName]
   );
 
-  let replyImageUrl = normalizedImageUrl;
+  // For the in-flight vision call, prefer the original data URL (no extra
+  // round-trip back to Cloudinary). Fallback chain stays the same.
+  let replyImageUrl: string | null = normalizedImageUrl;
   let replyImageName = normalizedImageName;
 
   if (!replyImageUrl && normalizedContextImageUrl) {

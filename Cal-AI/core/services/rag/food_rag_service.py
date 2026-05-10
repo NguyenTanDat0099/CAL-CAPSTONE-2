@@ -247,7 +247,7 @@ class FoodRAGService:
             )
 
         return [] if dish_name else hits
-
+    
     def hybrid_search(
         self,
         image_vec=None,
