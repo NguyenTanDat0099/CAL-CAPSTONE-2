@@ -1,8 +1,4 @@
 import pool from '../../shared/database/db';
-import {
-  isCloudinaryConfigured,
-  uploadImageDataUrl,
-} from '../../shared/storage/cloudinary';
 
 // ──────────────────────────────────────────────
 // Error class
@@ -17,32 +13,6 @@ export class AdminServiceError extends Error {
     this.name = 'AdminServiceError';
   }
 }
-
-const resolveAdminFoodImagePath = async (raw: string | undefined | null): Promise<string | null> => {
-  const value = raw?.trim();
-  if (!value) return null;
-  if (!/^data:image\//i.test(value)) return value;
-  if (!isCloudinaryConfigured()) {
-    throw new AdminServiceError(
-      'Image upload requires Cloudinary configuration',
-      'CLOUDINARY_NOT_CONFIGURED',
-      400
-    );
-  }
-  try {
-    const uploaded = await uploadImageDataUrl(value, {
-      folder: 'calai/food-catalog',
-      publicIdPrefix: 'food',
-    });
-    return uploaded.url;
-  } catch (error) {
-    throw new AdminServiceError(
-      `Failed to upload image: ${error instanceof Error ? error.message : 'unknown error'}`,
-      'IMAGE_UPLOAD_FAILED',
-      500
-    );
-  }
-};
 
 // ──────────────────────────────────────────────
 // Interfaces
@@ -1117,7 +1087,6 @@ export const createAdminFoodService = async (payload: FoodPayload) => {
   validateFoodPayload(payload, true);
 
   const categoryId = await ensureFoodCategory(payload.category ?? 'General');
-  const resolvedImagePath = await resolveAdminFoodImagePath(payload.imagePath);
   const [insertResult] = await pool.query(
     `
       INSERT INTO foods
@@ -1135,7 +1104,7 @@ export const createAdminFoodService = async (payload: FoodPayload) => {
       payload.sugar ?? null,
       payload.sodium ?? null,
       payload.servingSize?.trim() || null,
-      resolvedImagePath,
+      payload.imagePath?.trim() || null,
     ]
   );
 
@@ -1200,7 +1169,7 @@ export const updateAdminFoodService = async (foodId: number, payload: FoodPayloa
   }
   if (payload.imagePath !== undefined) {
     updates.push(`image_path = ?`);
-    params.push(await resolveAdminFoodImagePath(payload.imagePath));
+    params.push(payload.imagePath.trim() || null);
   }
 
   if (updates.length === 0) {

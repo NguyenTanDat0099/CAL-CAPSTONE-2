@@ -1,9 +1,4 @@
 import pool from '../../shared/database/db';
-import {
-  fetchImageBytes,
-  isCloudinaryConfigured,
-  uploadImageDataUrl,
-} from '../../shared/storage/cloudinary';
 
 type AnalysisSource = 'upload' | 'camera';
 
@@ -679,7 +674,7 @@ const analyzeImageWithCalAi = async (imageUrl: string, source: AnalysisSource): 
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const image = await fetchImageBytes(imageUrl, controller.signal);
+    const image = parseImageDataUrl(imageUrl);
     const form = new FormData();
     const filename = `food-scan.${image.mime.split('/')[1] || 'jpg'}`;
     form.append('file', new Blob([image.bytes], { type: image.mime }), filename);
@@ -1580,27 +1575,9 @@ export const analyzeFoodImageService = async (
   const user = await resolveUser(accountId);
   await ensureUserGoal(user.user_id);
 
-  // Upload to Cloudinary and store the public URL instead of the base64 blob.
-  // The original data URL is still passed to Cal-AI vision below (no extra
-  // network hop needed).
-  let storedImageUrl = imageUrl;
-  if (isCloudinaryConfigured() && /^data:image\//i.test(imageUrl)) {
-    try {
-      const uploaded = await uploadImageDataUrl(imageUrl, {
-        folder: `calai/food-scan/${user.user_id}`,
-        publicIdPrefix: source,
-      });
-      storedImageUrl = uploaded.url;
-    } catch (error) {
-      console.warn('[FoodScan] Cloudinary upload failed, falling back to data URL:',
-        error instanceof Error ? error.message : error);
-    }
-  }
-
-  // Save image record
   const [imageResult] = await pool.query(
     'INSERT INTO foodimages (user_id, image_url, source) VALUES (?, ?, ?)',
-    [user.user_id, storedImageUrl, source]
+    [user.user_id, imageUrl, source]
   );
   const imageId = (imageResult as { insertId: number }).insertId;
 

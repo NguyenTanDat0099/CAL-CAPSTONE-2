@@ -784,9 +784,7 @@ describe('normalizeImageUrl — extended', () => {
   it('rejects data URL with malformed base64 in body', () => {
     throws(() => normalizeImageUrl('data:image/png;base64,!!not!!base64!!'), 'INVALID_IMAGE');
   });
-  it('rejects bare https URL (not Cloudinary-aware in this harness)', () => {
-    // The harness mirrors the pre-Cloudinary normalizeImageUrl. The actual
-    // chat.service.ts calls isCloudinaryUrl() first — covered separately.
+  it('rejects bare https URL', () => {
     throws(() => normalizeImageUrl('https://example.com/foo.png'), 'INVALID_IMAGE');
   });
 });

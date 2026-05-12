@@ -1,10 +1,4 @@
 import pool from '../../shared/database/db';
-import {
-  fetchImageBytes,
-  isCloudinaryConfigured,
-  isCloudinaryUrl,
-  uploadImageDataUrl,
-} from '../../shared/storage/cloudinary';
 
 interface UserRow {
   user_id: number;
@@ -753,14 +747,6 @@ const normalizeImageUrl = (imageUrl?: string | null) => {
   const value = imageUrl?.trim();
   if (!value) return null;
 
-  // Cloudinary URLs are accepted as-is — fetchImageBytes already handles
-  // http(s) sources, so the vision pipeline can pull the bytes server-side
-  // when the user re-references an image stored on Cloudinary (e.g. context
-  // image carried over from a previous turn).
-  if (isCloudinaryUrl(value)) {
-    return value;
-  }
-
   if (!/^data:image\/(png|jpe?g|webp);base64,/i.test(value)) {
     throw new Error('INVALID_IMAGE');
   }
@@ -916,17 +902,17 @@ const askCalAiFoodImage = async (
 
   try {
     return await withTimeout<CalAiVisionOutcome>(async signal => {
-      let image: Awaited<ReturnType<typeof fetchImageBytes>>;
+      let image: ImageData;
       try {
-        image = await fetchImageBytes(imageUrl, signal);
+        image = parseImageDataUrl(imageUrl);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn('[ChatVision] fetchImageBytes failed:', message);
+        console.warn('[ChatVision] parseImageDataUrl failed:', message);
         return { ok: false, reason: 'fetch_image_failed', detail: message };
       }
 
       const form = new FormData();
-      const filename = imageName?.trim() || image.filename;
+      const filename = imageName?.trim() || `chat-upload.${image.mime.split('/')[1] || 'jpg'}`;
       form.append('file', new Blob([image.bytes], { type: image.mime }), filename);
       if (question?.trim()) {
         form.append('question', question.trim());
@@ -989,7 +975,7 @@ const VISION_FAILURE_TRACE: Record<CalAiVisionFailureReason, { trace: string; us
     user: 'Mình chưa xác định được món trong ảnh. Bạn thử gửi ảnh rõ hơn hoặc chụp gần phần món chính.',
   },
   fetch_image_failed: {
-    trace: 'Backend không tải được ảnh nguồn (data URL không hợp lệ hoặc Cloudinary URL không truy cập được).',
+    trace: 'Backend không đọc được data URL ảnh (định dạng không hợp lệ).',
     user: 'Mình không tải được ảnh để phân tích. Bạn thử upload lại ảnh nhé.',
   },
   fetch_error: {
@@ -1485,38 +1471,11 @@ export const sendChatMessageService = async (
     targetSessionId = await createSession(user.user_id);
   }
 
-  // Upload the freshly-received image (data URL) to Cloudinary so we store a
-  // public URL instead of a multi-megabyte base64 string. The original data
-  // URL stays in memory for the vision pipeline below. If the caller already
-  // hands us a Cloudinary URL we keep it as-is.
-  let storedImageUrl: string | null = null;
-  if (normalizedImageUrl) {
-    if (isCloudinaryUrl(normalizedImageUrl)) {
-      storedImageUrl = normalizedImageUrl;
-    } else if (isCloudinaryConfigured()) {
-      try {
-        const uploaded = await uploadImageDataUrl(normalizedImageUrl, {
-          folder: `calai/chat/${user.user_id}`,
-          publicIdPrefix: `chat${targetSessionId}`,
-        });
-        storedImageUrl = uploaded.url;
-      } catch (error) {
-        console.warn('[Chat] Cloudinary upload failed, falling back to data URL:',
-          error instanceof Error ? error.message : error);
-        storedImageUrl = normalizedImageUrl;
-      }
-    } else {
-      storedImageUrl = normalizedImageUrl;
-    }
-  }
-
   await pool.query(
     'INSERT INTO chatmessages (session_id, sender, message_text, image_url, image_name) VALUES (?, ?, ?, ?, ?)',
-    [targetSessionId, 'user', messageText, storedImageUrl, normalizedImageName]
+    [targetSessionId, 'user', messageText, normalizedImageUrl, normalizedImageName]
   );
 
-  // For the in-flight vision call, prefer the original data URL (no extra
-  // round-trip back to Cloudinary). Fallback chain stays the same.
   let replyImageUrl: string | null = normalizedImageUrl;
   let replyImageName = normalizedImageName;
 
