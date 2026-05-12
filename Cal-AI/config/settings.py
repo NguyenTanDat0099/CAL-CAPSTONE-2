@@ -43,7 +43,8 @@ class Settings(BaseSettings):
         "food_recipes_vectors_768",
         "recipes_64k_vectors_768",
         "food_recipe_images_text_768",
-        "meta_vectors"
+        "meta_vectors",
+        "vn_food_vectors_768",
     ]
 
     FOOD_RAG_COLLECTIONS: List[str] = [
@@ -59,7 +60,8 @@ class Settings(BaseSettings):
         "nutrition5k_vectors_768",
         "food_nutrition_dev_vectors_768",
         "food_vectors_768",
-        "food_fruit_vectors_768"
+        "food_fruit_vectors_768",
+        "vn_food_vectors_768",
     ]
 
     RECIPES_64K_COLLECTION: str = "recipes_64k_vectors_768"
