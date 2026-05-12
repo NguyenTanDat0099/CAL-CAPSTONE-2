@@ -651,10 +651,6 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     return [];
   })();
 
-  const storedPendingRequestId = (() => {
-    try { return sessionStorage.getItem('calai_pending_request'); } catch { return null; }
-  })();
-
   const [conversations, setConversations] = useState<Conversation[]>(storedConversations);
   const [activeChatId, setActiveChatId] = useState<string | null>(storedActiveChatId);
   const [inputText, setInputText] = useState('');
@@ -681,7 +677,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
   const isAtBottomRef = useRef(true);
 
   // Ref to track pending request separately from render cycle
-  const pendingRequestIdRef = useRef<string | null>(storedPendingRequestId);
+  const pendingRequestIdRef = useRef<string | null>(null);
   // Per-conversation AbortControllers so requests in different chats don't cross-cancel.
   // Switching chats no longer aborts in-flight work — the response will return to the
   // originating conversation. Sending a NEW message in the same chat aborts only that chat.
@@ -689,12 +685,13 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
 
   const isTyping = isTypingMap[activeChatId ?? ''] ?? false;
 
-  // Restore isTyping on mount if there was a pending request for the active chat
+  // Browser reloads abort in-flight fetches, so persisted pending state would leave
+  // the chat disabled forever. Clear any stale request markers on mount.
   useEffect(() => {
-    const pending = pendingRequestIdRef.current;
-    if (pending && activeChatId && pending === activeChatId) {
-      setIsTypingMap(prev => ({ ...prev, [activeChatId]: true }));
-    }
+    try {
+      sessionStorage.removeItem('calai_pending_request');
+      sessionStorage.removeItem('calai_typing_chats');
+    } catch { /* ignore */ }
   }, []); // only on mount
 
   // Persist state across navigations

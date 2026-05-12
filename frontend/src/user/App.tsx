@@ -6,14 +6,23 @@ import { Homepage } from './components/Homepage';
 import { Dashboard } from './components/Dashboard';
 import { Chatbox } from './components/Chatbox';
 import { Settings } from './components/Settings';
+import { ProfileSetup } from './components/ProfileSetup';
 import { DietItem, MealSchedule, ScheduleItem } from './types';
-import { Bell, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bell, CheckCircle2, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { buildApiUrl } from '../config/api';
 
 export type Goal = 'lose' | 'maintain' | 'gain';
 export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active';
 export type Gender = 'male' | 'female';
+
+export interface WeightHistoryEntry {
+  id: number;
+  weight: number;
+  recordedAt: string;
+  source: string;
+  note?: string | null;
+}
 
 export interface UserProfile {
   name: string;
@@ -26,6 +35,7 @@ export interface UserProfile {
   weight: number;
   targetWeight: number;
   startingWeight: number;
+  weightHistory: WeightHistoryEntry[];
   hasCompletedSetup: boolean;
 }
 
@@ -38,9 +48,27 @@ type AddToDietOptions = {
   mealType?: string;
 };
 
+type DietToastKind = 'success' | 'error';
+
+interface DietToast {
+  id: string;
+  kind: DietToastKind;
+  title: string;
+  message: string;
+  itemName?: string;
+  calories?: number;
+  count: number;
+}
+
 const AUTH_TOKEN_KEY = 'calai_token';
 const AVATAR_STORAGE_KEY = 'calai_profile_avatar';
 const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop';
+const DIET_TOAST_LIMIT = 3;
+const DIET_TOAST_DURATION = 3200;
+const MEAL_HISTORY_LIMIT = 400;
+const MAX_CARRY_OVER_DEBT = 300;
+
+const getMinimumDailyTarget = (gender: Gender) => (gender === 'female' ? 1200 : 1500);
 
 const getAuthHeaders = (includeJson = false) => {
   let token = '';
@@ -70,6 +98,7 @@ const createDefaultProfile = (): UserProfile => ({
   weight: 0,
   targetWeight: 0,
   startingWeight: 0,
+  weightHistory: [],
   hasCompletedSetup: false,
 });
 
@@ -103,10 +132,15 @@ export default function App({ onLogout }: UserAppProps) {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [notifications, setNotifications] = useState<{ id: string; message: string; time: string }[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [dietToasts, setDietToasts] = useState<DietToast[]>([]);
   const profileSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dietToastsRef = useRef<DietToast[]>([]);
+  const dietToastTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   // Calculate Base Daily Target (without carry-over)
   const baseTarget = useMemo(() => {
+    if (profile.age <= 0 || profile.height <= 0 || profile.weight <= 0) return 0;
+
     let bmr = 0;
     if (profile.gender === 'male') {
       bmr = 10 * profile.weight + 6.25 * profile.height - 5 * profile.age + 5;
@@ -122,14 +156,20 @@ export default function App({ onLogout }: UserAppProps) {
     };
 
     const tdee = bmr * activityFactors[profile.activityLevel];
-    
-    if (profile.goal === 'lose') return Math.round(tdee - 500);
-    if (profile.goal === 'gain') return Math.round(tdee + 500);
-    return Math.round(tdee);
+
+    const estimatedTarget = profile.goal === 'lose'
+      ? tdee - 500
+      : profile.goal === 'gain'
+        ? tdee + 300
+        : tdee;
+
+    return Math.max(getMinimumDailyTarget(profile.gender), Math.round(estimatedTarget));
   }, [profile]);
 
   // Calculate Calorie Carry-over (Debt from previous days)
   const carryOver = useMemo(() => {
+    if (baseTarget <= 0) return 0;
+
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
     
@@ -157,11 +197,13 @@ export default function App({ onLogout }: UserAppProps) {
     // This implements the "trừ hao" (offsetting debt) logic requested by the user
     // We cap it at 0 so that eating less doesn't "reward" the user with more calories later,
     // but eating more definitely "punishes" them by reducing future targets.
-    return Math.min(0, totalBalance);
+    return Math.max(-MAX_CARRY_OVER_DEBT, Math.min(0, totalBalance));
   }, [myDiets, baseTarget]);
 
   // Final Adjusted Daily Target
-  const dailyTarget = baseTarget + carryOver;
+  const dailyTarget = baseTarget > 0
+    ? Math.max(getMinimumDailyTarget(profile.gender), baseTarget + carryOver)
+    : 0;
 
   const handleProfileChange: React.Dispatch<React.SetStateAction<UserProfile>> = (updater) => {
     setProfileState(prev => (typeof updater === 'function' ? updater(prev) : updater));
@@ -189,8 +231,53 @@ export default function App({ onLogout }: UserAppProps) {
     about: 'This meal is loaded from your backend meal history and contributes to your diet tracking progress.',
   });
 
+  const syncDietToasts = (nextToasts: DietToast[]) => {
+    dietToastsRef.current = nextToasts;
+    setDietToasts(nextToasts);
+  };
+
+  const clearDietToastTimer = (id: string) => {
+    const timer = dietToastTimersRef.current[id];
+    if (timer) {
+      clearTimeout(timer);
+      delete dietToastTimersRef.current[id];
+    }
+  };
+
+  const dismissDietToast = (id: string) => {
+    clearDietToastTimer(id);
+    syncDietToasts(dietToastsRef.current.filter(toast => toast.id !== id));
+  };
+
+  const scheduleDietToastDismiss = (id: string) => {
+    clearDietToastTimer(id);
+    dietToastTimersRef.current[id] = setTimeout(() => {
+      syncDietToasts(dietToastsRef.current.filter(toast => toast.id !== id));
+      delete dietToastTimersRef.current[id];
+    }, DIET_TOAST_DURATION);
+  };
+
+  const showDietToast = (toast: Omit<DietToast, 'id' | 'count'>) => {
+    const existing = toast.kind === 'success' && toast.itemName
+      ? dietToastsRef.current.find(item => item.kind === 'success' && item.itemName === toast.itemName)
+      : undefined;
+
+    const nextToast: DietToast = existing
+      ? { ...existing, ...toast, count: existing.count + 1 }
+      : { ...toast, id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, count: 1 };
+
+    const withoutCurrent = dietToastsRef.current.filter(item => item.id !== nextToast.id);
+    const nextToasts = [nextToast, ...withoutCurrent].slice(0, DIET_TOAST_LIMIT);
+    dietToastsRef.current
+      .filter(item => !nextToasts.some(next => next.id === item.id))
+      .forEach(item => clearDietToastTimer(item.id));
+
+    syncDietToasts(nextToasts);
+    scheduleDietToastDismiss(nextToast.id);
+  };
+
   const loadMeals = async () => {
-    const response = await fetch(buildApiUrl('/users/meals/history'), {
+    const response = await fetch(buildApiUrl(`/users/meals/history?limit=${MEAL_HISTORY_LIMIT}`), {
       headers: getAuthHeaders(),
     });
     const result = await response.json();
@@ -286,7 +373,7 @@ export default function App({ onLogout }: UserAppProps) {
         const [profileResponse, goalsResponse, mealsResponse] = await Promise.all([
           fetch(buildApiUrl('/users/profile'), { headers: getAuthHeaders() }),
           fetch(buildApiUrl('/users/goals'), { headers: getAuthHeaders() }),
-          fetch(buildApiUrl('/users/meals/history'), { headers: getAuthHeaders() }),
+          fetch(buildApiUrl(`/users/meals/history?limit=${MEAL_HISTORY_LIMIT}`), { headers: getAuthHeaders() }),
         ]);
 
         const [profileResult, goalsResult, mealsResult] = await Promise.all([
@@ -306,6 +393,10 @@ export default function App({ onLogout }: UserAppProps) {
         }
 
         const avatar = getStoredAvatar();
+        const weightHistory = Array.isArray(profileResult.data?.weightHistory)
+          ? profileResult.data.weightHistory as WeightHistoryEntry[]
+          : [];
+        const currentWeight = Number(profileResult.data?.weight || goalsResult.data?.currentWeight || 0);
 
         setProfileState({
           name: profileResult.data?.name || '',
@@ -317,9 +408,10 @@ export default function App({ onLogout }: UserAppProps) {
           gender: profileResult.data?.gender || 'male',
           age: profileResult.data?.age || 0,
           height: Number(profileResult.data?.height || 0),
-          weight: Number(profileResult.data?.weight || goalsResult.data?.currentWeight || 0),
+          weight: currentWeight,
           targetWeight: Number(goalsResult.data?.targetWeight || 0),
-          startingWeight: Number(profileResult.data?.weight || goalsResult.data?.currentWeight || 0),
+          startingWeight: Number(profileResult.data?.startingWeight || weightHistory[0]?.weight || currentWeight),
+          weightHistory,
           hasCompletedSetup: Boolean(profileResult.data?.hasCompletedSetup),
         });
 
@@ -338,6 +430,13 @@ export default function App({ onLogout }: UserAppProps) {
   useEffect(() => {
     setStoredAvatar(profile.avatar);
   }, [profile.avatar]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(dietToastTimersRef.current).forEach(timer => clearTimeout(timer));
+      dietToastTimersRef.current = {};
+    };
+  }, []);
 
   useEffect(() => {
     if (isBootstrapping) return;
@@ -424,6 +523,13 @@ export default function App({ onLogout }: UserAppProps) {
     try {
       if (options?.alreadyPersisted) {
         await loadMeals();
+        showDietToast({
+          kind: 'success',
+          title: 'Added to Diet Goals',
+          itemName: item.name,
+          calories: item.calories,
+          message: `${Math.round(item.calories).toLocaleString()} kcal | Saved in your diet log`,
+        });
         return;
       }
 
@@ -431,6 +537,7 @@ export default function App({ onLogout }: UserAppProps) {
         method: 'POST',
         headers: getAuthHeaders(true),
         body: JSON.stringify({
+          foodId: item.foodId,
           foodName: item.name,
           calories: item.calories,
           mealType: normalizeMealType(options?.mealType),
@@ -439,14 +546,27 @@ export default function App({ onLogout }: UserAppProps) {
           fats: item.fats,
         }),
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => ({ message: 'Failed to save meal' }));
       if (!response.ok) {
         throw new Error(result.message || 'Failed to save meal');
       }
 
-      setMyDiets(prev => [mapMealToDietItem(result.data), ...prev]);
+      const savedItem = mapMealToDietItem(result.data);
+      setMyDiets(prev => [savedItem, ...prev]);
+      showDietToast({
+        kind: 'success',
+        title: 'Added to Diet Goals',
+        itemName: savedItem.name,
+        calories: savedItem.calories,
+        message: `${savedItem.calories.toLocaleString()} kcal | P ${savedItem.protein}g | C ${savedItem.carbs}g | F ${savedItem.fats}g`,
+      });
     } catch (error) {
       console.error(error);
+      showDietToast({
+        kind: 'error',
+        title: 'Could not add meal',
+        message: error instanceof Error ? error.message : 'Please try again',
+      });
     }
   };
 
@@ -475,6 +595,16 @@ export default function App({ onLogout }: UserAppProps) {
       <div className="flex min-h-screen bg-bg-dark items-center justify-center text-white">
         <div className="text-sm font-bold uppercase tracking-widest text-text-muted">Loading profile...</div>
       </div>
+    );
+  }
+
+  if (!profile.hasCompletedSetup) {
+    return (
+      <ProfileSetup
+        profile={profile}
+        setProfile={handleProfileChange}
+        onLogout={onLogout}
+      />
     );
   }
 
@@ -549,6 +679,78 @@ export default function App({ onLogout }: UserAppProps) {
             />
           </div>
         </div>
+      </div>
+
+      <div className="fixed bottom-6 right-6 z-[70] flex w-[min(360px,calc(100vw-2rem))] flex-col-reverse gap-3 pointer-events-none">
+        <AnimatePresence initial={false}>
+          {dietToasts.map(toast => (
+            <motion.div
+              key={toast.id}
+              layout
+              initial={{ opacity: 0, x: 42, scale: 0.96 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 42, scale: 0.96 }}
+              transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.7 }}
+              className={`pointer-events-auto overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl ${
+                toast.kind === 'success'
+                  ? 'bg-[#101714]/95 border-emerald-400/25 shadow-emerald-950/30'
+                  : 'bg-[#1d1111]/95 border-red-400/25 shadow-red-950/30'
+              }`}
+            >
+              <div className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                    toast.kind === 'success'
+                      ? 'bg-emerald-400/10 border-emerald-400/25 text-emerald-300'
+                      : 'bg-red-400/10 border-red-400/25 text-red-300'
+                  }`}>
+                    {toast.kind === 'success' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-sm font-black text-white">{toast.title}</p>
+                      {toast.count > 1 && (
+                        <span className="shrink-0 rounded-full bg-brand-orange px-2 py-0.5 text-[10px] font-black text-bg-dark">
+                          x{toast.count}
+                        </span>
+                      )}
+                    </div>
+                    {toast.itemName && (
+                      <p className="mt-1 truncate text-sm font-bold text-white/85">{toast.itemName}</p>
+                    )}
+                    <p className="mt-1 truncate text-xs font-medium text-text-muted">{toast.message}</p>
+                  </div>
+
+                  <button
+                    onClick={() => dismissDietToast(toast.id)}
+                    className="shrink-0 rounded-lg p-1.5 text-text-muted hover:bg-white/10 hover:text-white transition-colors"
+                    aria-label="Dismiss notification"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                {toast.kind === 'success' && (
+                  <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/5 pt-3">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-emerald-300/80">
+                      Diet log updated
+                    </span>
+                    <button
+                      onClick={() => {
+                        setActiveTab('goals');
+                        dismissDietToast(toast.id);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-white hover:bg-brand-orange hover:text-bg-dark transition-colors"
+                    >
+                      View <ArrowRight size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
 
       <main className="flex-1">

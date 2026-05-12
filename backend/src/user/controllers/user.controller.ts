@@ -68,7 +68,18 @@ export const getUserMeals = async (req: Request, res: Response) => {
 };
 
 export const getUserMealHistory = async (req: Request, res: Response) => {
-  const history = await getUserMealHistoryService(req.auth?.accountId);
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+  const dateFrom = typeof req.query.dateFrom === 'string'
+    ? req.query.dateFrom
+    : typeof req.query.from === 'string'
+      ? req.query.from
+      : undefined;
+  const dateTo = typeof req.query.dateTo === 'string'
+    ? req.query.dateTo
+    : typeof req.query.to === 'string'
+      ? req.query.to
+      : undefined;
+  const history = await getUserMealHistoryService(req.auth?.accountId, { limit, dateFrom, dateTo });
 
   return res.status(200).json({
     message: 'User meal history fetched successfully',
@@ -87,7 +98,9 @@ export const getUserDashboard = async (req: Request, res: Response) => {
 
 export const searchFoods = async (req: Request, res: Response) => {
   const query = typeof req.query.q === 'string' ? req.query.q : '';
-  const foods = await searchFoodsService(query);
+  const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+  const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+  const foods = await searchFoodsService(query, { limit, category });
 
   return res.status(200).json({
     message: 'Foods fetched successfully',
@@ -96,11 +109,12 @@ export const searchFoods = async (req: Request, res: Response) => {
 };
 
 export const createMeal = async (req: Request, res: Response) => {
-  const { foodName, calories, mealType } = req.body;
+  const { foodId, foodName, calories, mealType } = req.body;
+  const parsedFoodId = Number(foodId) || 0;
 
-  if (!foodName || typeof calories !== 'number' || !mealType) {
+  if (!mealType || (parsedFoodId <= 0 && (!foodName || typeof calories !== 'number'))) {
     return res.status(400).json({
-      message: 'foodName, calories and mealType are required',
+      message: 'foodId or foodName/calories plus mealType are required',
     });
   }
 

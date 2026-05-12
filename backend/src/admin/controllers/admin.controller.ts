@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import {
   getAdminProfileService,
   getAdminStatsService,
+  getAdminAnalyticsService,
   getAllUsersService,
   getUserByIdService,
   createUserService,
@@ -10,6 +11,17 @@ import {
   deleteUserService,
   bulkUpdateUserStatusService,
   getUserStatisticsService,
+  getAdminFoodsService,
+  getAdminFoodByIdService,
+  createAdminFoodService,
+  updateAdminFoodService,
+  deleteAdminFoodService,
+  getFoodCategoriesService,
+  createAdminAuditLogService,
+  getAdminSecurityOverviewService,
+  getRoleAccountsService,
+  updateAccountRoleService,
+  getAdminAuditLogsService,
   AdminServiceError,
 } from '../services/admin.service';
 
@@ -24,11 +36,31 @@ const handleError = (error: unknown, res: Response) => {
   return res.status(500).json({ message: 'INTERNAL_SERVER_ERROR' });
 };
 
-const parseIntParam = (value: unknown, defaultValue: number): number => {
-  if (value === undefined || value === null) return defaultValue;
+const parseIntParam = (value: unknown, fallback: number): number => {
+  if (value === undefined || value === null) return fallback;
   const str = Array.isArray(value) ? String(value[0]) : String(value);
   const parsed = parseInt(str, 10);
-  return isNaN(parsed) ? defaultValue : parsed;
+  return isNaN(parsed) ? fallback : parsed;
+};
+
+const writeAuditLog = async (
+  req: Request,
+  action: string,
+  targetType: string,
+  targetId?: number | null,
+  detail?: string | null
+) => {
+  try {
+    await createAdminAuditLogService({
+      adminAccountId: req.auth?.accountId,
+      action,
+      targetType,
+      targetId,
+      detail,
+    });
+  } catch (error) {
+    console.error('[AdminAudit] Failed to write audit log:', error);
+  }
 };
 
 // ──────────────────────────────────────────────
@@ -48,6 +80,15 @@ export const getAdminStats = async (req: Request, res: Response) => {
   try {
     const stats = await getAdminStatsService();
     res.status(200).json({ message: 'Admin stats fetched successfully', data: stats });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const getAdminAnalytics = async (req: Request, res: Response) => {
+  try {
+    const analytics = await getAdminAnalyticsService();
+    res.status(200).json({ message: 'Admin analytics fetched successfully', data: analytics });
   } catch (error) {
     handleError(error, res);
   }
@@ -122,6 +163,7 @@ export const createUser = async (req: Request, res: Response) => {
     }
 
     const result = await createUserService({ email, fullName, gender, age, height, weight });
+    await writeAuditLog(req, 'CREATE_USER', 'user', result.user?.id, `Created user ${email}`);
     res.status(201).json({ message: 'User created successfully', data: result });
   } catch (error) {
     handleError(error, res);
@@ -140,6 +182,7 @@ export const updateUser = async (req: Request, res: Response) => {
     }
     console.log('[AdminController] PUT /users/:userId', userId, req.body);
     const user = await updateUserService(userId, req.body);
+    await writeAuditLog(req, 'UPDATE_USER', 'user', userId, `Updated user ${userId}`);
     console.log('[AdminController] PUT /users/:userId success', userId);
     res.status(200).json({ message: 'User updated successfully', data: user });
   } catch (error) {
@@ -163,6 +206,7 @@ export const updateUserStatus = async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'MISSING_STATUS' });
     }
     const user = await updateUserStatusService(userId, { status });
+    await writeAuditLog(req, 'UPDATE_USER_STATUS', 'user', userId, `Changed status to ${status}`);
     res.status(200).json({ message: 'User status updated successfully', data: user });
   } catch (error) {
     handleError(error, res);
@@ -180,6 +224,7 @@ export const deleteUser = async (req: Request, res: Response) => {
     }
     console.log('[AdminController] DELETE /users/:userId', userId);
     const result = await deleteUserService(userId);
+    await writeAuditLog(req, 'DELETE_USER', 'user', userId, `Deleted user ${userId}`);
     console.log('[AdminController] DELETE /users/:userId success', userId);
     res.status(200).json({ message: 'User deleted successfully', data: result });
   } catch (error) {
@@ -202,7 +247,117 @@ export const bulkUpdateUserStatus = async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'MISSING_STATUS' });
     }
     const result = await bulkUpdateUserStatusService(userIds, status);
+    await writeAuditLog(req, 'BULK_UPDATE_USER_STATUS', 'user', null, `Changed ${userIds.length} users to ${status}`);
     res.status(200).json({ message: 'Bulk status update successful', data: result });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const getAllFoods = async (req: Request, res: Response) => {
+  try {
+    const page = parseIntParam(req.query.page, 1);
+    const limit = parseIntParam(req.query.limit, 20);
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+
+    const result = await getAdminFoodsService({ page, limit, search, category });
+    res.status(200).json({ message: 'Foods fetched successfully', data: result });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const getFoodById = async (req: Request, res: Response) => {
+  try {
+    const foodId = parseIntParam(req.params.foodId, 0);
+    const food = await getAdminFoodByIdService(foodId);
+    res.status(200).json({ message: 'Food fetched successfully', data: food });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const createFood = async (req: Request, res: Response) => {
+  try {
+    const food = await createAdminFoodService(req.body);
+    await writeAuditLog(req, 'CREATE_FOOD', 'food', food.id, `Created food ${food.name}`);
+    res.status(201).json({ message: 'Food created successfully', data: food });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const updateFood = async (req: Request, res: Response) => {
+  try {
+    const foodId = parseIntParam(req.params.foodId, 0);
+    const food = await updateAdminFoodService(foodId, req.body);
+    await writeAuditLog(req, 'UPDATE_FOOD', 'food', foodId, `Updated food ${food.name}`);
+    res.status(200).json({ message: 'Food updated successfully', data: food });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const deleteFood = async (req: Request, res: Response) => {
+  try {
+    const foodId = parseIntParam(req.params.foodId, 0);
+    const result = await deleteAdminFoodService(foodId);
+    await writeAuditLog(req, 'DELETE_FOOD', 'food', foodId, `Deleted food ${foodId}`);
+    res.status(200).json({ message: 'Food deleted successfully', data: result });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const getSecurityOverview = async (req: Request, res: Response) => {
+  try {
+    const overview = await getAdminSecurityOverviewService();
+    res.status(200).json({ message: 'Security overview fetched successfully', data: overview });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const getRoleAccounts = async (req: Request, res: Response) => {
+  try {
+    const accounts = await getRoleAccountsService();
+    res.status(200).json({ message: 'Role accounts fetched successfully', data: accounts });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const updateAccountRole = async (req: Request, res: Response) => {
+  try {
+    const accountId = parseIntParam(req.params.accountId, 0);
+    const { role } = req.body;
+    if (role !== 'admin' && role !== 'user') {
+      return res.status(400).json({ message: 'INVALID_ROLE' });
+    }
+
+    const account = await updateAccountRoleService(accountId, role);
+    await writeAuditLog(req, 'UPDATE_ACCOUNT_ROLE', 'account', accountId, `Changed account ${accountId} role to ${role}`);
+    res.status(200).json({ message: 'Account role updated successfully', data: account });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const getAuditLogs = async (req: Request, res: Response) => {
+  try {
+    const limit = parseIntParam(req.query.limit, 50);
+    const logs = await getAdminAuditLogsService(limit);
+    res.status(200).json({ message: 'Audit logs fetched successfully', data: logs });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const getFoodCategories = async (req: Request, res: Response) => {
+  try {
+    const categories = await getFoodCategoriesService();
+    res.status(200).json({ message: 'Food categories fetched successfully', data: categories });
   } catch (error) {
     handleError(error, res);
   }

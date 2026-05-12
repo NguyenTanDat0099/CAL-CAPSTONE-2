@@ -1,20 +1,20 @@
 # CalAI - Nutrition Tracking & AI Assistant
 
-A full-stack calorie tracking application with a Cal-AI Agentic RAG backend for food search, image analysis, and nutrition chat.
+A full-stack calorie tracking application with a hybrid AI chatbot combining Qdrant-backed food search and Ollama LLM.
 
 ## Tech Stack
 
 - **Frontend**: React + TypeScript + Vite
 - **Backend**: Node.js + Express + TypeScript
 - **Database**: MySQL
-- **AI**: CalAI Python Agentic RAG (Qdrant + Ollama served inside Cal-AI)
+- **AI**: CalAI Python agent (Qdrant + Ollama) with Ollama fallback
 
 ## Prerequisites
 
 - Node.js 18+
 - MySQL 8.0+
 - [Ollama](https://ollama.com/) installed and running
-- [CalAI Python backend](Cal-AI/) for Agentic RAG and food image analysis
+- [CalAI Python backend](Cal_ai/) (optional, for food search)
 
 ## Setup
 
@@ -42,25 +42,24 @@ npm run dev
 
 ### 3. Ollama (required)
 
-Make sure Ollama is running and pull the models configured by `Cal-AI/config/settings.py`.
+Make sure Ollama is running and pull a model:
 
 ```bash
-ollama pull qwen2.5vl:3b
-ollama pull qcwind/qwen2.5-7B-instruct-Q4_K_M:latest
+ollama pull llama3.2
 ```
 
-### 4. CalAI Python Backend
+### 4. CalAI Python Backend (optional)
 
-For Agentic RAG and food nutrition search powered by Qdrant:
+For food nutrition search powered by Qdrant:
 
 ```bash
-cd Cal-AI
+cd Cal_ai
 pip install -r requirements.txt
 # Edit .env with Qdrant URL if needed
-python -m uvicorn api.main:app --reload
+python -m uvicorn api.app:app --reload
 ```
 
-The backend calls Cal-AI as the single AI entrypoint.
+The chatbot uses this automatically when available. If CalAI is unavailable or returns no data, it falls back to Ollama.
 
 ### 5. Frontend
 
@@ -80,30 +79,34 @@ backend/src/
 │   ├── controllers/chat.controller.ts
 │   ├── routes/chat.routes.ts
 │   ├── services/
-│   │   └── chat.service.ts         # Chat session/message logic + Cal-AI adapter
+│   │   ├── ai-provider.service.ts   # Hybrid: CalAI agent + Ollama fallback
+│   │   └── chat.service.ts         # Chat session/message logic
 ├── auth/                           # Authentication (JWT)
 ├── user/                           # User management
 ├── admin/                          # Admin panel
 ├── shared/database/db.ts           # MySQL connection pool
 └── server.ts                       # Entry point
 
-Cal-AI/                             # Python AI backend
-├── api/main.py                     # FastAPI app with Agentic RAG, QA, recipe, food image routes
+Cal_ai/                             # Python backend (optional)
+├── api/app.py                      # FastAPI app with /query endpoint
 ├── core/
-│   ├── agent/agentic_rag.py        # Agentic RAG router/retriever/response generator
-│   ├── services/retrieval/         # Qdrant vector search
-│   ├── services/vision/            # Qwen-VL image analysis
-│   └── prompts/                    # Shared prompts for text and image models
+│   ├── agent/agent.py              # Data agent with search/compute/chart tools
+│   ├── services/qdrant_service.py  # Qdrant vector search
+│   └── search/hybrid_search.py     # Hybrid search
 ```
 
 ## AI Architecture
 
-The chatbot uses a **single Agentic RAG approach**:
+The chatbot uses a **hybrid approach**:
 
 1. User sends a message
-2. Backend calls Cal-AI (`/api/agent/query` for text or `/api/food/analyze` for images)
-3. Cal-AI routes intent, retrieves Qdrant context, and uses the shared response prompt
-4. The answer is returned directly to the user with trace and citations when available
+2. Backend calls the CalAI Python agent (`http://localhost:8000/query`)
+   - Agent searches Qdrant for food nutrition data
+   - Computes/sorts/aggregates results
+   - Generates charts if needed
+3. If CalAI returns valid results, they are returned to the user
+4. If CalAI is unavailable or returns no data, the system falls back to Ollama
+5. Ollama receives user context (profile, goals, today's progress, recent meals) and answers directly
 
 ## Environment Variables
 
@@ -116,6 +119,7 @@ The chatbot uses a **single Agentic RAG approach**:
 | `DB_PASSWORD` | - | MySQL password |
 | `DB_NAME` | calai | Database name |
 | `CAL_AI_BASE_URL` | http://localhost:8000 | CalAI Python agent URL |
-| `OLLAMA_BASE_URL` | http://localhost:11434 | Ollama server URL used by Cal-AI |
+| `OLLAMA_BASE_URL` | http://localhost:11434 | Ollama server URL |
+| `OLLAMA_MODEL` | llama3.2 | Ollama model name |
 | `JWT_SECRET` | - | JWT signing secret |
 | `JWT_EXPIRES_IN` | 7d | JWT expiry |

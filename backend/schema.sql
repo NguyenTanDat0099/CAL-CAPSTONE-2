@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255),
     email_verified TINYINT DEFAULT 0,
-    status ENUM('ACTIVE', 'INACTIVE', 'SUSPENDED') DEFAULT 'ACTIVE',
+    status ENUM('active', 'inactive', 'suspended') DEFAULT 'active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_email (email)
@@ -43,6 +43,23 @@ CREATE TABLE IF NOT EXISTS accountroles (
 );
 
 -- =====================================================
+-- Admin Audit Logs
+-- =====================================================
+CREATE TABLE IF NOT EXISTS adminauditlogs (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    admin_account_id INT NULL,
+    action VARCHAR(100) NOT NULL,
+    target_type VARCHAR(100) NOT NULL,
+    target_id INT NULL,
+    detail TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (admin_account_id) REFERENCES accounts(account_id) ON DELETE SET NULL,
+    INDEX idx_adminauditlogs_admin (admin_account_id),
+    INDEX idx_adminauditlogs_target (target_type, target_id),
+    INDEX idx_adminauditlogs_created (created_at)
+);
+
+-- =====================================================
 -- Users (profile information)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS users (
@@ -61,6 +78,20 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- =====================================================
+-- Weight History
+-- =====================================================
+CREATE TABLE IF NOT EXISTS weight_history (
+    weight_history_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    weight DECIMAL(5,2) NOT NULL,
+    recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    source VARCHAR(50) DEFAULT 'manual',
+    note VARCHAR(255) NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    INDEX idx_weight_history_user_date (user_id, recorded_at)
+);
+
+-- =====================================================
 -- User Goals
 -- =====================================================
 CREATE TABLE IF NOT EXISTS usergoals (
@@ -72,6 +103,7 @@ CREATE TABLE IF NOT EXISTS usergoals (
     target_fat INT,
     target_weight DECIMAL(5,2),
     goal_type ENUM('weight_loss', 'muscle_gain', 'maintenance', 'general') DEFAULT 'general',
+    activity_level VARCHAR(50) DEFAULT 'moderate',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
     INDEX idx_user (user_id)
@@ -204,6 +236,8 @@ CREATE TABLE IF NOT EXISTS chatmessages (
     session_id INT NOT NULL,
     sender ENUM('user', 'ai') NOT NULL,
     message_text TEXT,
+    image_url LONGTEXT NULL,
+    image_name VARCHAR(255) NULL,
     thinking_steps JSON DEFAULT NULL,
     food_insight JSON DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -281,8 +315,10 @@ CREATE TABLE IF NOT EXISTS userfoodpreferences (
 -- =====================================================
 -- Procedure to update daily nutrition logs
 -- =====================================================
+DROP PROCEDURE IF EXISTS update_daily_nutrition;
+
 DELIMITER //
-CREATE PROCEDURE IF NOT EXISTS update_daily_nutrition(IN p_user_id INT, IN p_date DATE)
+CREATE PROCEDURE update_daily_nutrition(IN p_user_id INT, IN p_date DATE)
 BEGIN
     INSERT INTO dailynutritionlogs (user_id, date, total_calories, total_protein, total_carbs, total_fat)
     SELECT

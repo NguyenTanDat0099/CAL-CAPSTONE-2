@@ -28,9 +28,9 @@ import {
   updateSchedule,
 } from '../controllers/schedule.controller';
 import {
+  deleteFoodPreference,
   listFoodPreferences,
   upsertFoodPreference,
-  deleteFoodPreference,
 } from '../controllers/foodPreferences.controller';
 
 const userRouter = Router();

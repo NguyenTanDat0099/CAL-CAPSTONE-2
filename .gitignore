@@ -1,8 +1,26 @@
 node_modules/
-# build/
-# dist/
-# coverage/
-# .DS_Store
-# *.log
-# .env*
-# !.env.example
+**/node_modules/
+dist/
+build/
+coverage/
+*.log
+.codex-run/
+ngrok.yml
+.claude/settings.local.json
+
+# Local training datasets are too large for the application repo.
+/food-101/
+/images/
+/dish_ingredients.xlsx
+/dishes.xlsx
+/ingredients.xlsx
+/dataset of food-100k/
+/dataset of Healthy Eating/
+
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.cache/

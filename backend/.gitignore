@@ -1,5 +1,7 @@
 node_modules/
 dist/
-Database/
+/Database/
 *.log
 .env
+.cloudinary-reports/
+.dataset-reports/

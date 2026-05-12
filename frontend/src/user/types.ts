@@ -1,20 +1,26 @@
-export type MealCategory = 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack';
+export type MealCategory = 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack' | 'Other';
 
 export interface Meal {
   id: string;
+  sourceFoodId?: number;
   name: string;
   calories: number;
   protein: number;
   carbs: number;
   fats: number;
+  fiber?: number | null;
+  sugar?: number | null;
   image: string;
   category: MealCategory;
+  displayCategory?: string;
+  servingSize?: string | null;
   description: string;
   about: string;
 }
 
 export interface DietItem {
   id: string;
+  foodId?: number;
   name: string;
   calories: number;
   protein: number;

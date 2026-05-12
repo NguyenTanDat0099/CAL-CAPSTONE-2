@@ -30,8 +30,8 @@ export interface AdminStats {
   activeUsers: number;
   inactiveUsers: number;
   newUsersToday: number;
+  totalMealsLogged: number;
   mealsLoggedToday: number;
-  totalAnalyses: number;
   totalChats: number;
   systemStatus: string;
 }
@@ -51,7 +51,6 @@ export interface PaginatedUsers {
 export interface UserStatistics {
   totalMeals: number;
   todayCalories: number;
-  totalAnalyses: number;
   totalChats: number;
 }
 
@@ -70,6 +69,102 @@ export interface UpdateUserPayload {
   age?: number;
   height?: number;
   weight?: number;
+}
+
+export interface FoodItem {
+  id: number;
+  name: string;
+  category: string | null;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fats: number;
+  fiber: number | null;
+  sugar: number | null;
+  sodium: number | null;
+  servingSize: string | null;
+  imagePath: string | null;
+  createdAt: string | null;
+}
+
+export interface PaginatedFoods {
+  data: FoodItem[];
+  pagination: PaginationInfo;
+}
+
+export interface FoodCategory {
+  id: number;
+  name: string;
+}
+
+export interface FoodPayload {
+  name: string;
+  category: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fats: number;
+  servingSize?: string;
+  imagePath?: string;
+}
+
+export interface AdminAnalytics {
+  overview: {
+    totalMeals: number;
+    totalFoods: number;
+    totalUsers: number;
+    averageCalories: number;
+    setupCompletionRate: number;
+  };
+  macroAverages: Array<{
+    name: string;
+    average: number;
+    target: number;
+  }>;
+  mealTrend: Array<{
+    date: string;
+    label: string;
+    meals: number;
+  }>;
+  topFoods: Array<{
+    id: number;
+    name: string;
+    calories: number;
+    count: number;
+  }>;
+  foodsByCategory: Array<{
+    name: string;
+    value: number;
+  }>;
+}
+
+export interface SecurityOverview {
+  adminAccounts: number;
+  activeAccounts: number;
+  suspendedAccounts: number;
+  unverifiedAccounts: number;
+  auditEvents: number;
+}
+
+export interface RoleAccount {
+  accountId: number;
+  userId: number | null;
+  name: string;
+  email: string;
+  role: 'admin' | 'user' | string;
+  status: string;
+  emailVerified: boolean;
+}
+
+export interface AuditLog {
+  id: number;
+  adminAccountId: number | null;
+  adminEmail: string;
+  action: string;
+  targetType: string;
+  targetId: number | null;
+  detail: string | null;
+  createdAt: string;
 }
 
 export interface ApiResponse<T> {

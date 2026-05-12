@@ -83,7 +83,10 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
       body: JSON.stringify(payload),
     });
 
-    const result = await response.json();
+    const contentType = response.headers.get('content-type') || '';
+    const result = contentType.includes('application/json')
+      ? await response.json()
+      : { message: (await response.text()) || 'REQUEST_FAILED' };
     if (!response.ok) {
       throw new Error(result.message || 'Request failed');
     }

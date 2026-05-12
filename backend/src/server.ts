@@ -9,13 +9,18 @@ import { initializeUserServices } from './user/services/user.service';
 const PORT = process.env.PORT || 3000;
 
 const startServer = async () => {
-  await testDatabaseConnection();
-  await initializeAuthData(); // Create auth tables (accounts, roles, users) FIRST
-  await initializeUserServices(); // Then create user module tables
+  try {
+    await testDatabaseConnection();
+    await initializeAuthData();
+    await initializeUserServices();
 
-  app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-  });
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
 };
 
 startServer();

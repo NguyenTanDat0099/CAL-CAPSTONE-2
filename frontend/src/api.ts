@@ -53,6 +53,35 @@ export const fetchAdminStats = () =>
     '/admin/stats'
   );
 
+export const fetchAdminAnalytics = () =>
+  request<{ message: string; data: import('./admin/types').AdminAnalytics }>(
+    '/admin/analytics'
+  );
+
+export const fetchSecurityOverview = () =>
+  request<{ message: string; data: import('./admin/types').SecurityOverview }>(
+    '/admin/security/overview'
+  );
+
+export const fetchRoleAccounts = () =>
+  request<{ message: string; data: import('./admin/types').RoleAccount[] }>(
+    '/admin/security/roles'
+  );
+
+export const updateAccountRole = (accountId: number, role: 'admin' | 'user') =>
+  request<{ message: string; data: import('./admin/types').RoleAccount }>(
+    `/admin/security/roles/${accountId}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    }
+  );
+
+export const fetchAuditLogs = (limit = 50) =>
+  request<{ message: string; data: import('./admin/types').AuditLog[] }>(
+    `/admin/security/audit-logs?limit=${limit}`
+  );
+
 // ──────────────────────────────────────────────
 // User Management
 // ──────────────────────────────────────────────
@@ -140,3 +169,52 @@ export const bulkUpdateUserStatus = (
     method: 'POST',
     body: JSON.stringify({ userIds, status }),
   });
+
+export interface GetFoodsParams {
+  page?: number;
+  limit?: number;
+  search?: string;
+  category?: string;
+}
+
+export const fetchFoods = (params: GetFoodsParams = {}) => {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set('page', String(params.page));
+  if (params.limit) qs.set('limit', String(params.limit));
+  if (params.search) qs.set('search', params.search);
+  if (params.category) qs.set('category', params.category);
+
+  const query = qs.toString();
+  return request<{ message: string; data: import('./admin/types').PaginatedFoods }>(
+    `/admin/foods${query ? `?${query}` : ''}`
+  );
+};
+
+export const fetchFoodCategories = () =>
+  request<{ message: string; data: import('./admin/types').FoodCategory[] }>(
+    '/admin/foods/categories'
+  );
+
+export const createFood = (payload: import('./admin/types').FoodPayload) =>
+  request<{ message: string; data: import('./admin/types').FoodItem }>('/admin/foods', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+export const updateFood = (
+  foodId: number,
+  payload: import('./admin/types').FoodPayload
+) =>
+  request<{ message: string; data: import('./admin/types').FoodItem }>(
+    `/admin/foods/${foodId}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }
+  );
+
+export const deleteFood = (foodId: number) =>
+  request<{ message: string; data: { deleted: boolean; foodId: number } }>(
+    `/admin/foods/${foodId}`,
+    { method: 'DELETE' }
+  );

@@ -5,14 +5,14 @@ import {
   LayoutDashboard, Database,
   PieChart as PieChartIcon,
   ArrowUpRight, ArrowDownRight,
-  Camera, Target, ShieldCheck, CheckCircle2,
+  Target, ShieldCheck, CheckCircle2,
   AlertTriangle, ChevronRight, Eye, Edit, Trash2,
   Download, Filter, Plus, Save, RefreshCw,
   Clock, Shield, Mail, Phone,
   Settings as SettingsIcon, Flag, Zap, Upload, Server, Cpu,
   Ban, ChevronDown, Minus, MessageSquare, ShieldAlert,
   ChevronUp, BellRing, Smartphone, MessageCircle, Image as ImageIcon,
-  Loader2, UserPlus, Activity, TrendingDown, Flame
+  Loader2, UserPlus, Activity, TrendingDown, Flame, Utensils
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -22,12 +22,15 @@ import {
 } from 'recharts';
 import {
   AdminProfile, AdminStats, User, PaginatedUsers,
-  CreateUserPayload, UpdateUserPayload
+  CreateUserPayload, UpdateUserPayload, FoodItem, FoodPayload, AdminAnalytics,
+  SecurityOverview, RoleAccount, AuditLog
 } from './types';
 import {
   fetchAdminProfile, fetchAdminStats,
   fetchUsers, fetchUserById, fetchUserStatistics,
-  createUser, updateUser, updateUserStatus, deleteUser
+  createUser, updateUser, updateUserStatus, deleteUser,
+  fetchFoods, createFood, updateFood, deleteFood, fetchAdminAnalytics,
+  fetchSecurityOverview, fetchRoleAccounts, updateAccountRole, fetchAuditLogs
 } from '../api';
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -257,7 +260,7 @@ function AdminDashboard({ showToast }: DashboardProps) {
   const [activePieIndex, setActivePieIndex] = useState(0);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
-  const [chartData, setChartData] = useState<Array<{ name: string; scans: number; target: number }>>([]);
+  const [chartData, setChartData] = useState<Array<{ name: string; meals: number; target: number }>>([]);
   const [loadingChart, setLoadingChart] = useState(true);
 
   const loadStats = useCallback(async () => {
@@ -278,10 +281,11 @@ function AdminDashboard({ showToast }: DashboardProps) {
     // Generate chart data from stats
     if (stats) {
       const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      const mock = days.map((name, i) => ({
+      const weeklyAverage = Math.round(stats.totalMealsLogged / 7);
+      const mock = days.map((name) => ({
         name,
-        scans: Math.max(0, Math.round(stats.totalAnalyses / 7 + (Math.random() - 0.3) * stats.totalAnalyses / 14)),
-        target: Math.round(stats.totalAnalyses / 7) || 100,
+        meals: Math.max(0, Math.round(weeklyAverage + (Math.random() - 0.3) * Math.max(weeklyAverage / 2, 1))),
+        target: weeklyAverage || 10,
       }));
       setChartData(mock);
       setLoadingChart(false);
@@ -329,7 +333,7 @@ function AdminDashboard({ showToast }: DashboardProps) {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {[
               { label: 'Total Users', value: stats.totalUsers.toLocaleString(), change: stats.newUsersToday > 0 ? `+${stats.newUsersToday} today` : '0 new today', icon: Users, trend: stats.newUsersToday > 0 ? 'up' : 'neutral' },
-              { label: 'AI Scans Today', value: stats.mealsLoggedToday.toLocaleString(), change: `${Math.round(stats.totalAnalyses / 7)} avg/day`, icon: Camera, trend: 'up' },
+              { label: 'Meals Logged Today', value: stats.mealsLoggedToday.toLocaleString(), change: `${Math.round(stats.totalMealsLogged / 7)} avg/day`, icon: Utensils, trend: 'up' },
               { label: 'Active Users', value: stats.activeUsers.toLocaleString(), change: `${stats.totalUsers > 0 ? Math.round((stats.activeUsers / stats.totalUsers) * 100) : 0}% active`, icon: ShieldCheck, trend: 'up' },
               { label: 'Chat Sessions', value: stats.totalChats.toLocaleString(), change: 'Total sessions', icon: MessageSquare, trend: 'neutral' },
             ].map((stat, i) => (
@@ -359,8 +363,8 @@ function AdminDashboard({ showToast }: DashboardProps) {
               <div className="bg-surface-dark border border-white/5 p-8 rounded-[2.5rem] shadow-xl">
                 <div className="flex justify-between items-center mb-8">
                   <div>
-                    <h3 className="text-xl font-black italic uppercase tracking-tighter">AI Recognition Volume</h3>
-                    <p className="text-text-muted text-xs font-medium">Daily scan throughput and accuracy trends</p>
+                    <h3 className="text-xl font-black italic uppercase tracking-tighter">Meal Logging Volume</h3>
+                    <p className="text-text-muted text-xs font-medium">Daily meal logging activity across users</p>
                   </div>
                 </div>
                 <div className="h-[350px] w-full">
@@ -377,7 +381,7 @@ function AdminDashboard({ showToast }: DashboardProps) {
                         <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#adaaaa', fontSize: 10, fontWeight: 700}} dy={10} />
                         <YAxis axisLine={false} tickLine={false} tick={{fill: '#adaaaa', fontSize: 10, fontWeight: 700}} />
                         <Tooltip contentStyle={{backgroundColor: '#1a1919', border: '1px solid #ffffff10', borderRadius: '1rem', color: '#fff'}} itemStyle={{color: '#ff9060', fontWeight: 900}} />
-                        <Area type="monotone" dataKey="scans" stroke="#ff9060" strokeWidth={4} fillOpacity={1} fill="url(#colorScans)" />
+                        <Area type="monotone" dataKey="meals" stroke="#ff9060" strokeWidth={4} fillOpacity={1} fill="url(#colorScans)" />
                       </AreaChart>
                     </ResponsiveContainer>
                   )}
@@ -922,7 +926,7 @@ function UserDetailModal({
           {loadingStats ? (
             <LoadingSpinner />
           ) : userStats ? (
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
                 <p className="text-2xl font-black text-white mb-1">{userStats.totalMeals}</p>
                 <p className="text-[8px] font-black uppercase tracking-widest text-text-muted">Meals Logged</p>
@@ -930,10 +934,6 @@ function UserDetailModal({
               <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
                 <p className="text-2xl font-black text-white mb-1">{userStats.todayCalories}</p>
                 <p className="text-[8px] font-black uppercase tracking-widest text-text-muted">Calories Today</p>
-              </div>
-              <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
-                <p className="text-2xl font-black text-white mb-1">{userStats.totalAnalyses}</p>
-                <p className="text-[8px] font-black uppercase tracking-widest text-text-muted">AI Scans</p>
               </div>
               <div className="text-center p-4 bg-bg-dark/30 rounded-2xl border border-white/5 shadow-inner shadow-black/20">
                 <p className="text-2xl font-black text-white mb-1">{userStats.totalChats}</p>
@@ -1147,59 +1147,854 @@ function BanConfirmModal({
   );
 }
 
-// ─── Content Management (placeholder - kept original design) ───────────────
+// ─── Content Management ───────────────────────
 function ContentManagement({ showToast }: ViewProps) {
+  const [activeTab, setActiveTab] = useState<'food' | 'logs'>('food');
+  const [showAddFood, setShowAddFood] = useState(false);
+  const [foods, setFoods] = useState<FoodItem[]>([]);
+  const [foodsLoading, setFoodsLoading] = useState(true);
+  const [foodSearch, setFoodSearch] = useState('');
+  const [editingFood, setEditingFood] = useState<FoodItem | null>(null);
+  const [foodForm, setFoodForm] = useState({
+    name: '',
+    category: 'Breakfast',
+    calories: 0,
+    protein: 0,
+    carbs: 0,
+    fats: 0,
+    servingSize: '1 serving',
+    imagePath: '',
+  });
+
+  const aiLogs: Array<{ user: string; food: string; confidence: number; status: string }> = [];
+
+  const resetFoodForm = () => {
+    setFoodForm({
+      name: '',
+      category: 'Breakfast',
+      calories: 0,
+      protein: 0,
+      carbs: 0,
+      fats: 0,
+      servingSize: '1 serving',
+      imagePath: '',
+    });
+    setEditingFood(null);
+  };
+
+  const loadFoods = useCallback(async () => {
+    setFoodsLoading(true);
+    try {
+      const res = await fetchFoods({ search: foodSearch, limit: 100 });
+      setFoods(res.data.data);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to load foods', 'error');
+    } finally {
+      setFoodsLoading(false);
+    }
+  }, [foodSearch, showToast]);
+
+  useEffect(() => {
+    loadFoods();
+  }, [loadFoods]);
+
+  const openAddFood = () => {
+    resetFoodForm();
+    setShowAddFood(true);
+  };
+
+  const openEditFood = (food: FoodItem) => {
+    setEditingFood(food);
+    setFoodForm({
+      name: food.name,
+      category: food.category || 'General',
+      calories: food.calories,
+      protein: food.protein,
+      carbs: food.carbs,
+      fats: food.fats,
+      servingSize: food.servingSize || '1 serving',
+      imagePath: food.imagePath || '',
+    });
+    setShowAddFood(true);
+  };
+
+  const handleSaveFood = async () => {
+    const payload: FoodPayload = {
+      name: foodForm.name.trim(),
+      category: foodForm.category.trim(),
+      calories: Number(foodForm.calories),
+      protein: Number(foodForm.protein),
+      carbs: Number(foodForm.carbs),
+      fats: Number(foodForm.fats),
+      servingSize: foodForm.servingSize.trim(),
+      imagePath: foodForm.imagePath.trim(),
+    };
+
+    if (!payload.name) {
+      showToast('Food name is required', 'error');
+      return;
+    }
+
+    try {
+      if (editingFood) {
+        await updateFood(editingFood.id, payload);
+        showToast('Food item updated successfully', 'success');
+      } else {
+        await createFood(payload);
+        showToast('Food item added to library', 'success');
+      }
+      await loadFoods();
+      resetFoodForm();
+      setShowAddFood(false);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to save food', 'error');
+    }
+  };
+
+  const handleDeleteFood = async (food: FoodItem) => {
+    if (!window.confirm(`Delete ${food.name} from the food library?`)) return;
+    try {
+      await deleteFood(food.id);
+      showToast('Food item deleted successfully', 'success');
+      await loadFoods();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to delete food', 'error');
+    }
+  };
+
+  const handleCloseFoodModal = () => {
+    resetFoodForm();
+    setShowAddFood(false);
+  };
+
   return (
     <div className="space-y-8">
       <header>
-        <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">CONTENT MANAGER</h1>
-        <p className="text-text-muted font-medium font-sans">Food database and AI scan management coming soon.</p>
-      </header>
-      <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] p-20 flex items-center justify-center">
-        <div className="text-center">
-          <Database size={64} className="text-text-muted mx-auto mb-6 opacity-30" />
-          <p className="text-text-muted text-lg font-bold">Content Management</p>
-          <p className="text-text-muted text-sm mt-2">Feature under development</p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">CONTENT MANAGER</h1>
+            <p className="text-text-muted font-medium font-sans">Curate the food database used by Meal Plans and chatbot nutrition references.</p>
+          </div>
+          <button
+            onClick={openAddFood}
+            className="px-6 py-3 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform shadow-xl shadow-brand-orange/20"
+          >
+            + ADD FOOD ITEM
+          </button>
         </div>
+      </header>
+
+      <div className="hidden">
+        <button
+          onClick={() => setActiveTab('food')}
+          className={`px-6 py-4 font-black text-xs uppercase tracking-widest border-b-2 transition-colors ${
+            activeTab === 'food'
+              ? 'border-brand-orange text-brand-orange'
+              : 'border-transparent text-text-muted hover:text-white'
+          }`}
+        >
+          🍽️ FOOD LIBRARY
+        </button>
+        <button
+          onClick={() => setActiveTab('logs')}
+          className={`px-6 py-4 font-black text-xs uppercase tracking-widest border-b-2 transition-colors ${
+            activeTab === 'logs'
+              ? 'border-brand-orange text-brand-orange'
+              : 'border-transparent text-text-muted hover:text-white'
+          }`}
+        >
+          LEGACY LOGS
+        </button>
       </div>
+
+      {/* Food Library Tab */}
+      {activeTab === 'food' && (
+        <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] overflow-hidden">
+          <div className="px-8 py-6 border-b border-white/5 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-black italic uppercase text-white">Food Library</h3>
+              <p className="text-xs text-text-muted">Foods saved here are available in user Meal Plans search.</p>
+            </div>
+            <div className="relative w-80">
+              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted" />
+              <input
+                value={foodSearch}
+                onChange={(event) => setFoodSearch(event.target.value)}
+                placeholder="Search food library..."
+                className="w-full bg-bg-dark border border-white/10 rounded-2xl py-3 pl-11 pr-4 text-sm outline-none focus:border-brand-orange text-white"
+              />
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-bg-dark/50 border-b border-white/5">
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">FOOD ITEM</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">CATEGORY</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">MACRO PROFILE</th>
+                  <th className="px-8 py-6 text-right text-[10px] font-black uppercase tracking-widest text-text-muted">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {foodsLoading && (
+                  <tr>
+                    <td colSpan={4} className="px-8 py-14">
+                      <LoadingSpinner size={32} />
+                    </td>
+                  </tr>
+                )}
+                {!foodsLoading && foods.map((item) => (
+                  <tr key={item.id} className="border-b border-white/5 hover:bg-white/2 transition-colors">
+                    <td className="px-8 py-6">
+                      <div className="flex items-center gap-4">
+                        <div className="relative w-12 h-12 shrink-0 overflow-hidden rounded-xl bg-brand-orange/20 border border-white/10 flex items-center justify-center">
+                          <Utensils size={18} className="text-brand-orange" />
+                          {item.imagePath && (
+                            <img
+                              src={item.imagePath}
+                              alt={item.name}
+                              loading="lazy"
+                              className="absolute inset-0 h-full w-full object-cover"
+                              onError={(event) => {
+                                event.currentTarget.style.display = 'none';
+                              }}
+                            />
+                          )}
+                        </div>
+                        <div>
+                          <p className="font-black text-white">{item.name}</p>
+                          <p className="text-xs text-text-muted">{item.calories} KCAL / {item.servingSize || 'serving'}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-8 py-6">
+                      <span className="px-4 py-2 bg-brand-orange/10 text-brand-orange rounded-full text-[10px] font-black uppercase tracking-widest border border-brand-orange/20">
+                        {item.category || 'GENERAL'}
+                      </span>
+                    </td>
+                    <td className="px-8 py-6">
+                      <div className="flex gap-4">
+                        <span className="text-green-400 font-black">💪 {item.protein}g</span>
+                        <span className="text-blue-400 font-black">🥗 {item.carbs}g</span>
+                        <span className="text-yellow-400 font-black">⚡ {item.fats}g</span>
+                      </div>
+                    </td>
+                    <td className="px-8 py-6 text-right space-x-2">
+                      <button
+                        onClick={() => openEditFood(item)}
+                        className="px-4 py-2 text-brand-orange hover:bg-brand-orange/10 rounded-lg transition-colors font-black text-xs"
+                      >
+                        EDIT
+                      </button>
+                      <button
+                        onClick={() => handleDeleteFood(item)}
+                        className="px-4 py-2 text-red-400 hover:bg-red-400/10 rounded-lg transition-colors font-black text-xs"
+                      >
+                        DELETE
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!foodsLoading && foods.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-8 py-14 text-center text-text-muted">
+                      No foods found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Legacy recognition log view hidden after Scan was removed. */}
+      {activeTab === 'logs' && (
+        <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-bg-dark/50 border-b border-white/5">
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">USER</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">AI DETECTION</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">SYSTEM CONFIDENCE</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">STATUS</th>
+                  <th className="px-8 py-6 text-right text-[10px] font-black uppercase tracking-widest text-text-muted">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {aiLogs.map((log, idx) => (
+                  <tr key={idx} className="border-b border-white/5 hover:bg-white/2 transition-colors">
+                    <td className="px-8 py-6">
+                      <p className="font-black text-white">{log.user}</p>
+                    </td>
+                    <td className="px-8 py-6">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">🍲</span>
+                        <span className="font-black text-white">{log.food}</span>
+                      </div>
+                    </td>
+                    <td className="px-8 py-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-24 h-2 bg-bg-dark rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${log.confidence >= 85 ? 'bg-green-400' : 'bg-yellow-400'}`}
+                            style={{ width: `${log.confidence}%` }}
+                          />
+                        </div>
+                        <span className="font-black text-white min-w-12">{log.confidence}%</span>
+                      </div>
+                    </td>
+                    <td className="px-8 py-6">
+                      <span
+                        className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                          log.status === 'VERIFIED'
+                            ? 'bg-green-400/10 text-green-400 border-green-400/20'
+                            : 'bg-red-400/10 text-red-400 border-red-400/20'
+                        }`}
+                      >
+                        {log.status === 'VERIFIED' ? '✓' : '⚠'} {log.status}
+                      </span>
+                    </td>
+                    <td className="px-8 py-6 text-right">
+                      <button className="px-4 py-2 text-brand-orange hover:bg-brand-orange/10 rounded-lg transition-colors font-black text-xs">
+                        👁️ REVIEW
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Add Food Modal */}
+      {showAddFood && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleCloseFoodModal}
+            className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md"
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="relative bg-surface-dark border border-white/10 rounded-[2rem] max-w-2xl w-full shadow-2xl overflow-hidden p-12 space-y-8"
+          >
+            <div className="flex justify-between items-center">
+              <h2 className="text-3xl font-black italic uppercase tracking-tighter text-white">
+                {editingFood ? 'EDIT FOOD ITEM' : 'ADD NEW FOOD ITEM'}
+              </h2>
+              <button
+                onClick={handleCloseFoodModal}
+                className="p-3 rounded-2xl bg-white/5 text-text-muted hover:text-white transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <form onSubmit={(e) => { e.preventDefault(); handleSaveFood(); }} className="space-y-6">
+              <div className="grid grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">ITEM NAME *</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Greek Salad"
+                    value={foodForm.name}
+                    onChange={(e) => setFoodForm({ ...foodForm, name: e.target.value })}
+                    className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white shadow-inner shadow-black/20"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">CATEGORY</label>
+                  <CustomSelect
+                    value={foodForm.category}
+                    onChange={(val) => setFoodForm({ ...foodForm, category: val })}
+                    options={[
+                      { value: 'Breakfast', label: 'BREAKFAST' },
+                      { value: 'Lunch', label: 'LUNCH' },
+                      { value: 'Dinner', label: 'DINNER' },
+                      { value: 'Snack', label: 'SNACK' },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-widest text-text-muted block mb-4">MACROS (PER 100G)</label>
+                <div className="grid grid-cols-4 gap-4">
+                  {[
+                    { label: 'CALORIES', key: 'calories', color: 'text-orange-400' },
+                    { label: 'PROTEIN', key: 'protein', color: 'text-green-400' },
+                    { label: 'CARBS', key: 'carbs', color: 'text-blue-400' },
+                    { label: 'FATS', key: 'fats', color: 'text-yellow-400' },
+                  ].map((macro) => (
+                    <div key={macro.key} className="space-y-2">
+                      <label className={`text-[8px] font-black uppercase tracking-widest ${macro.color}`}>{macro.label}</label>
+                      <input
+                        type="number"
+                        value={(foodForm as any)[macro.key]}
+                        onChange={(e) => setFoodForm({ ...foodForm, [macro.key]: Number(e.target.value) })}
+                        className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 font-bold outline-none focus:border-brand-orange transition-colors text-white text-center shadow-inner shadow-black/20"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">SERVING SIZE</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 1 bowl, 100g, 1 plate"
+                  value={foodForm.servingSize}
+                  onChange={(e) => setFoodForm({ ...foodForm, servingSize: e.target.value })}
+                  className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white shadow-inner shadow-black/20"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-text-muted">IMAGE URL</label>
+                <input
+                  type="text"
+                  placeholder="Optional image URL"
+                  value={foodForm.imagePath}
+                  onChange={(e) => setFoodForm({ ...foodForm, imagePath: e.target.value })}
+                  className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 font-bold outline-none focus:border-brand-orange transition-colors text-white shadow-inner shadow-black/20"
+                />
+              </div>
+
+              <div className="flex gap-4 pt-4">
+                <button
+                  type="button"
+                  onClick={handleCloseFoodModal}
+                  className="flex-1 py-5 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors shadow-lg"
+                >
+                  DISCARD CHANGES
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20"
+                >
+                  {editingFood ? 'SAVE CHANGES' : 'PUBLISH TO LIBRARY'}
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Analytics View ─────────────────────────────────────────
 function AnalyticsView() {
+  const [analytics, setAnalytics] = useState<AdminAnalytics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const loadAnalytics = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetchAdminAnalytics();
+      setAnalytics(res.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load analytics');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAnalytics();
+  }, [loadAnalytics]);
+
+  const overview = analytics?.overview;
+
   return (
     <div className="space-y-8">
-      <header>
-        <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">SYSTEM ANALYTICS</h1>
-        <p className="text-text-muted font-medium font-sans">Aggregate data insights on user nutrition and system health.</p>
-      </header>
-      <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] p-20 flex items-center justify-center">
-        <div className="text-center">
-          <PieChartIcon size={64} className="text-text-muted mx-auto mb-6 opacity-30" />
-          <p className="text-text-muted text-lg font-bold">Analytics Dashboard</p>
-          <p className="text-text-muted text-sm mt-2">Feature under development</p>
+      <header className="flex items-start justify-between">
+        <div>
+          <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">SYSTEM ANALYTICS</h1>
+          <p className="text-text-muted font-medium font-sans">Aggregate data insights on user nutrition and system health.</p>
         </div>
-      </div>
+        <button
+          onClick={loadAnalytics}
+          className="flex items-center gap-2 px-6 py-3 bg-brand-orange text-bg-dark rounded-2xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-lg shadow-brand-orange/20"
+        >
+          <RefreshCw size={14} />
+          Refresh
+        </button>
+      </header>
+
+      {error && (
+        <div className="rounded-2xl border border-red-400/30 bg-red-400/10 px-5 py-4 text-sm text-red-200">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="py-20">
+          <LoadingSpinner size={40} />
+        </div>
+      ) : analytics && overview ? (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+            {[
+              { label: 'Total Meals', value: overview.totalMeals.toLocaleString(), icon: Utensils, sub: 'All logged meals' },
+              { label: 'Avg Calories', value: overview.averageCalories.toLocaleString(), icon: Flame, sub: 'Per user day' },
+              { label: 'Food Library', value: overview.totalFoods.toLocaleString(), icon: Database, sub: 'Available items' },
+              { label: 'Setup Rate', value: `${overview.setupCompletionRate}%`, icon: Target, sub: `${overview.totalUsers} total users` },
+            ].map((item) => (
+              <div key={item.label} className="bg-surface-dark border border-white/5 p-6 rounded-[2rem] shadow-lg">
+                <div className="flex items-start justify-between mb-5">
+                  <div className="w-12 h-12 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
+                    <item.icon size={22} />
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">{item.sub}</span>
+                </div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-1">{item.label}</p>
+                <p className="text-3xl font-black text-white">{item.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+            <div className="xl:col-span-2 bg-surface-dark border border-white/5 rounded-[2.5rem] p-8">
+              <h3 className="text-lg font-black italic uppercase text-white mb-8">CONSUMPTION VS. TARGETS (MEAN)</h3>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={analytics.macroAverages} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
+                  <XAxis dataKey="name" stroke="#999" />
+                  <YAxis stroke="#999" />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#1a1919', border: '1px solid #ffffff10', borderRadius: '1rem', color: '#fff' }}
+                    itemStyle={{ color: '#ff9060', fontWeight: 900 }}
+                  />
+                  <Bar dataKey="average" fill="#ff9060" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="target" fill="#ffffff20" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] p-8">
+              <h3 className="text-lg font-black italic uppercase text-white mb-8">FOODS BY CATEGORY</h3>
+              <div className="space-y-4">
+                {analytics.foodsByCategory.slice(0, 6).map((category) => {
+                  const max = Math.max(...analytics.foodsByCategory.map(item => item.value), 1);
+                  return (
+                    <div key={category.name}>
+                      <div className="flex justify-between text-xs font-black uppercase tracking-widest mb-2">
+                        <span className="text-text-muted">{category.name}</span>
+                        <span className="text-white">{category.value}</span>
+                      </div>
+                      <div className="h-2 bg-bg-dark rounded-full overflow-hidden">
+                        <div className="h-full bg-brand-orange rounded-full" style={{ width: `${Math.max(6, (category.value / max) * 100)}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+            <div className="xl:col-span-2 bg-surface-dark border border-white/5 rounded-[2.5rem] p-8">
+              <h3 className="text-lg font-black italic uppercase text-white mb-8">MEALS LOGGED - LAST 7 DAYS</h3>
+              <ResponsiveContainer width="100%" height={260}>
+                <AreaChart data={analytics.mealTrend}>
+                  <defs>
+                    <linearGradient id="analyticsMeals" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ff9060" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#ff9060" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                  <XAxis dataKey="label" stroke="#999" />
+                  <YAxis stroke="#999" allowDecimals={false} />
+                  <Tooltip contentStyle={{ backgroundColor: '#1a1919', border: '1px solid #ffffff10', borderRadius: '1rem', color: '#fff' }} />
+                  <Area type="monotone" dataKey="meals" stroke="#ff9060" strokeWidth={4} fill="url(#analyticsMeals)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] overflow-hidden">
+              <div className="px-8 py-6 border-b border-white/5">
+                <h3 className="text-lg font-black italic uppercase text-white">TOP LOGGED FOODS</h3>
+              </div>
+              <div className="divide-y divide-white/5">
+                {analytics.topFoods.length === 0 ? (
+                  <div className="p-8 text-center text-text-muted text-sm">No meal logs yet.</div>
+                ) : analytics.topFoods.map((food, index) => (
+                  <div key={food.id} className="p-6 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-2xl bg-brand-orange/10 text-brand-orange flex items-center justify-center font-black">
+                        {index + 1}
+                      </div>
+                      <div>
+                        <p className="font-black text-white">{food.name}</p>
+                        <p className="text-xs text-text-muted">{food.calories} kcal</p>
+                      </div>
+                    </div>
+                    <span className="text-sm font-black text-brand-orange">{food.count} logs</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
 
 // ─── Security View ─────────────────────────────────────────
 function SecurityView({ showToast }: ViewProps) {
+  const [activeSecTab, setActiveSecTab] = useState<'audit' | 'roles' | 'api'>('audit');
+  const [overview, setOverview] = useState<SecurityOverview | null>(null);
+  const [roles, setRoles] = useState<RoleAccount[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadSecurityData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [overviewRes, rolesRes, auditRes] = await Promise.all([
+        fetchSecurityOverview(),
+        fetchRoleAccounts(),
+        fetchAuditLogs(50),
+      ]);
+      setOverview(overviewRes.data);
+      setRoles(rolesRes.data);
+      setAuditLogs(auditRes.data);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to load security data', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadSecurityData();
+  }, [loadSecurityData]);
+
+  const handleRoleChange = async (account: RoleAccount, nextRole: 'admin' | 'user') => {
+    if (account.role === nextRole) return;
+    try {
+      await updateAccountRole(account.accountId, nextRole);
+      showToast(`Role changed to ${nextRole}`, 'success');
+      await loadSecurityData();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update role', 'error');
+    }
+  };
+
   return (
     <div className="space-y-8">
-      <header>
-        <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">SECURITY & ROLES</h1>
-        <p className="text-text-muted font-medium">Infrastructure security, moderator permissions, and audit trails.</p>
-      </header>
-      <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] p-20 flex items-center justify-center">
-        <div className="text-center">
-          <ShieldCheck size={64} className="text-text-muted mx-auto mb-6 opacity-30" />
-          <p className="text-text-muted text-lg font-bold">Security & Roles</p>
-          <p className="text-text-muted text-sm mt-2">Feature under development</p>
+      <div className="flex items-start justify-between">
+        <header>
+          <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">SECURITY & ROLES</h1>
+          <p className="text-text-muted font-medium">Infrastructure security, moderator permissions, and audit trails.</p>
+        </header>
+        
+        {/* Tabs on Top Right */}
+        <div className="flex gap-2">
+          {['audit', 'roles', 'api'].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveSecTab(tab as any)}
+              className={`px-4 py-2 font-black text-xs uppercase tracking-widest rounded-xl transition-colors ${
+                activeSecTab === tab
+                  ? 'bg-brand-orange text-bg-dark'
+                  : 'bg-white/5 text-text-muted hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              {tab === 'audit' && 'AUDIT'}
+              {tab === 'roles' && 'ROLES'}
+              {tab === 'api' && 'API'}
+            </button>
+          ))}
         </div>
       </div>
+
+      {/* System Integrity Card */}
+      <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] p-8 flex items-start gap-8">
+        <div className="w-20 h-20 rounded-full bg-green-400/20 border-2 border-green-400 flex items-center justify-center flex-shrink-0">
+          <ShieldCheck size={40} className="text-green-400" />
+        </div>
+        <div className="flex-1">
+          <h3 className="text-2xl font-black italic uppercase text-white mb-2">SYSTEM INTEGRITY: OPTIMAL</h3>
+          <p className="text-text-muted mb-4">
+            End-to-end encryption is active for all user meal data. Database backups are synced every 6 hours to AWS S3 cluster.
+          </p>
+          <div className="flex gap-3">
+            <span className="px-4 py-2 bg-green-400/10 text-green-400 rounded-full text-[10px] font-black uppercase tracking-widest border border-green-400/20">
+              ✓ API GATEWAY ONLINE
+            </span>
+            <span className="px-4 py-2 bg-green-400/10 text-green-400 rounded-full text-[10px] font-black uppercase tracking-widest border border-green-400/20">
+              ✓ AUTHLIB INTEGRATION VALID
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="py-20"><LoadingSpinner size={40} /></div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-6">
+          {[
+            { label: 'Admins', value: overview?.adminAccounts ?? 0, icon: ShieldCheck },
+            { label: 'Active Accounts', value: overview?.activeAccounts ?? 0, icon: Users },
+            { label: 'Suspended', value: overview?.suspendedAccounts ?? 0, icon: Ban },
+            { label: 'Unverified', value: overview?.unverifiedAccounts ?? 0, icon: Mail },
+            { label: 'Audit Events', value: overview?.auditEvents ?? 0, icon: Activity },
+          ].map((item) => (
+            <div key={item.label} className="bg-surface-dark border border-white/5 rounded-[2rem] p-6">
+              <div className="w-11 h-11 rounded-2xl bg-brand-orange/10 text-brand-orange flex items-center justify-center mb-4">
+                <item.icon size={20} />
+              </div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-1">{item.label}</p>
+              <p className="text-3xl font-black text-white">{item.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Audit Trail Table */}
+      {activeSecTab === 'audit' && (
+        <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] overflow-hidden">
+          <div className="px-8 py-6 flex items-center justify-between border-b border-white/5">
+            <h3 className="text-lg font-black italic uppercase text-white">RECENT AUDIT TRAIL</h3>
+            <button onClick={loadSecurityData} className="text-brand-orange text-[10px] font-black uppercase tracking-widest hover:text-orange-300 transition-colors">
+              📥 REVEIEW LOGS
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-bg-dark/50 border-b border-white/5">
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">ADMINISTRATOR</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">ACTION PERFORMED</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">ENTITY TARGET</th>
+                  <th className="px-8 py-6 text-right text-[10px] font-black uppercase tracking-widest text-text-muted">TIMESTAMP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditLogs.map((log) => (
+                  <tr key={log.id} className="border-b border-white/5 hover:bg-white/2 transition-colors">
+                    <td className="px-8 py-6">
+                      <p className="font-black text-white italic">{log.adminEmail}</p>
+                    </td>
+                    <td className="px-8 py-6">
+                      <p className="text-white font-bold">{log.action}</p>
+                      {log.detail && <p className="text-xs text-text-muted mt-1">{log.detail}</p>}
+                    </td>
+                    <td className="px-8 py-6">
+                      <span className="px-3 py-1 bg-brand-orange/10 text-brand-orange rounded-full text-[10px] font-black uppercase tracking-widest border border-brand-orange/20">
+                        {log.targetType}{log.targetId ? ` #${log.targetId}` : ''}
+                      </span>
+                    </td>
+                    <td className="px-8 py-6 text-right">
+                      <p className="text-text-muted text-[10px] font-black uppercase tracking-widest">{new Date(log.createdAt).toLocaleString()}</p>
+                    </td>
+                  </tr>
+                ))}
+                {auditLogs.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-8 py-14 text-center text-text-muted">No audit events yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Roles Tab Placeholder */}
+      {activeSecTab === 'roles' && (
+        <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] overflow-hidden">
+          <div className="px-8 py-6 border-b border-white/5">
+            <h3 className="text-lg font-black italic uppercase text-white">ROLES MANAGEMENT</h3>
+            <p className="text-xs text-text-muted mt-1">Promote users to admin or return admin accounts to user role.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-bg-dark/50 border-b border-white/5">
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">ACCOUNT</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">STATUS</th>
+                  <th className="px-8 py-6 text-left text-[10px] font-black uppercase tracking-widest text-text-muted">CURRENT ROLE</th>
+                  <th className="px-8 py-6 text-right text-[10px] font-black uppercase tracking-widest text-text-muted">ACTION</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roles.map((account) => (
+                  <tr key={account.accountId} className="border-b border-white/5 hover:bg-white/2 transition-colors">
+                    <td className="px-8 py-6">
+                      <p className="font-black text-white">{account.name}</p>
+                      <p className="text-xs text-text-muted">{account.email}</p>
+                    </td>
+                    <td className="px-8 py-6">
+                      <span className="px-3 py-1 rounded-full bg-white/5 text-text-muted text-[10px] font-black uppercase tracking-widest border border-white/10">
+                        {account.status}
+                      </span>
+                    </td>
+                    <td className="px-8 py-6">
+                      <span className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                        account.role === 'admin'
+                          ? 'bg-brand-orange/10 text-brand-orange border-brand-orange/20'
+                          : 'bg-blue-400/10 text-blue-400 border-blue-400/20'
+                      }`}>
+                        {account.role}
+                      </span>
+                    </td>
+                    <td className="px-8 py-6 text-right">
+                      <button
+                        onClick={() => handleRoleChange(account, account.role === 'admin' ? 'user' : 'admin')}
+                        className="px-4 py-2 text-brand-orange hover:bg-brand-orange/10 rounded-lg transition-colors font-black text-xs"
+                      >
+                        {account.role === 'admin' ? 'MAKE USER' : 'MAKE ADMIN'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* API Tab Placeholder */}
+      {activeSecTab === 'api' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] p-8">
+            <div className="w-16 h-16 rounded-3xl bg-green-400/10 text-green-400 flex items-center justify-center mb-6">
+              <Server size={32} />
+            </div>
+            <h3 className="text-2xl font-black italic uppercase text-white mb-3">Backend API</h3>
+            <p className="text-text-muted text-sm mb-6">Admin routes are protected by JWT authentication and role checks.</p>
+            <span className="px-4 py-2 rounded-full bg-green-400/10 text-green-400 text-[10px] font-black uppercase tracking-widest border border-green-400/20">
+              Running
+            </span>
+          </div>
+          <div className="bg-surface-dark border border-white/5 rounded-[2.5rem] p-8">
+            <div className="w-16 h-16 rounded-3xl bg-brand-orange/10 text-brand-orange flex items-center justify-center mb-6">
+              <ShieldAlert size={32} />
+            </div>
+            <h3 className="text-2xl font-black italic uppercase text-white mb-3">Access Model</h3>
+            <p className="text-text-muted text-sm mb-6">Current supported roles are admin and user. Role changes are logged in the audit trail.</p>
+            <div className="flex gap-3">
+              <span className="px-4 py-2 rounded-full bg-brand-orange/10 text-brand-orange text-[10px] font-black uppercase tracking-widest border border-brand-orange/20">admin</span>
+              <span className="px-4 py-2 rounded-full bg-blue-400/10 text-blue-400 text-[10px] font-black uppercase tracking-widest border border-blue-400/20">user</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
