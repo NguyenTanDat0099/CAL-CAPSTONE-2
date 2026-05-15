@@ -7,6 +7,7 @@ interface UserRow {
 interface ScheduleItemInput {
   dayOffset?: number;
   mealType: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+  scheduledTime?: string | null;
   name: string;
   serving?: string | null;
   calories?: number | null;
@@ -62,6 +63,7 @@ interface ScheduleItemRow {
   schedule_id: number;
   day_offset: number;
   meal_type: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+  scheduled_time: string | null;
   name: string;
   serving: string | null;
   calories: string | number | null;
@@ -84,6 +86,21 @@ const resolveUser = async (accountId?: number | null): Promise<UserRow> => {
 };
 
 let initPromise: Promise<void> | null = null;
+
+const hasColumn = async (tableName: string, columnName: string) => {
+  const [rows] = await pool.query(
+    `
+      SELECT 1
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ?
+        AND COLUMN_NAME = ?
+      LIMIT 1
+    `,
+    [tableName, columnName]
+  );
+  return (rows as Array<{ '1': number }>).length > 0;
+};
 
 const initializeSchema = async () => {
   await pool.query(`
@@ -115,6 +132,7 @@ const initializeSchema = async () => {
       schedule_id INT NOT NULL,
       day_offset INT DEFAULT 0,
       meal_type ENUM('breakfast','lunch','dinner','snack') NOT NULL,
+      scheduled_time TIME NULL,
       name VARCHAR(255) NOT NULL,
       serving VARCHAR(100),
       calories DECIMAL(10,2),
@@ -128,6 +146,13 @@ const initializeSchema = async () => {
       INDEX idx_mealscheduleitems_schedule (schedule_id)
     )
   `);
+
+  if (!(await hasColumn('mealscheduleitems', 'scheduled_time'))) {
+    await pool.query(`
+      ALTER TABLE mealscheduleitems
+      ADD COLUMN scheduled_time TIME NULL AFTER meal_type
+    `);
+  }
 };
 
 const ensureSchema = () => {
@@ -163,10 +188,18 @@ const formatDate = (value: string | Date) => {
   return value.toISOString().slice(0, 10);
 };
 
+const normalizeTime = (value: string | null) => {
+  if (!value) return null;
+  // MySQL TIME values come back as "HH:MM:SS"; the UI uses "HH:MM".
+  const match = String(value).match(/^(\d{2}):(\d{2})/);
+  return match ? `${match[1]}:${match[2]}` : null;
+};
+
 const mapItem = (row: ScheduleItemRow) => ({
   itemId: row.item_id,
   dayOffset: row.day_offset,
   mealType: row.meal_type,
+  scheduledTime: normalizeTime(row.scheduled_time),
   name: row.name,
   serving: row.serving,
   calories: toNumberOrNull(row.calories),
@@ -199,7 +232,7 @@ const fetchItems = async (scheduleIds: number[]) => {
   if (scheduleIds.length === 0) return new Map<number, ScheduleItemRow[]>();
   const placeholders = scheduleIds.map(() => '?').join(',');
   const [rows] = await pool.query(
-    `SELECT item_id, schedule_id, day_offset, meal_type, name, serving,
+    `SELECT item_id, schedule_id, day_offset, meal_type, scheduled_time, name, serving,
             calories, protein, carbs, fat, notes, sort_order
      FROM mealscheduleitems
      WHERE schedule_id IN (${placeholders})
@@ -263,14 +296,18 @@ export const createScheduleService = async (
     if (payload.items?.length) {
       for (let i = 0; i < payload.items.length; i++) {
         const item = payload.items[i];
+        const timeValue = item.scheduledTime?.trim()
+          ? (item.scheduledTime.length === 5 ? `${item.scheduledTime}:00` : item.scheduledTime)
+          : null;
         await conn.query(
           `INSERT INTO mealscheduleitems
-            (schedule_id, day_offset, meal_type, name, serving, calories, protein, carbs, fat, notes, sort_order)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (schedule_id, day_offset, meal_type, scheduled_time, name, serving, calories, protein, carbs, fat, notes, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             scheduleId,
             item.dayOffset ?? 0,
             item.mealType,
+            timeValue,
             item.name,
             item.serving ?? null,
             item.calories ?? null,

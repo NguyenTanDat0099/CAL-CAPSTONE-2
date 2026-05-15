@@ -8,7 +8,7 @@ import { Chatbox } from './components/Chatbox';
 import { Settings } from './components/Settings';
 import { ProfileSetup } from './components/ProfileSetup';
 import { DietItem, MealSchedule, ScheduleItem } from './types';
-import { AlertTriangle, ArrowRight, Bell, CheckCircle2, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bell, CheckCircle2, Menu, Moon, Sun, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { buildApiUrl } from '../config/api';
 
@@ -62,6 +62,16 @@ interface DietToast {
 
 const AUTH_TOKEN_KEY = 'calai_token';
 const AVATAR_STORAGE_KEY = 'calai_profile_avatar';
+const THEME_STORAGE_KEY = 'calai_theme';
+
+type Theme = 'dark' | 'light';
+
+const getStoredTheme = (): Theme => {
+  try {
+    const value = localStorage.getItem(THEME_STORAGE_KEY);
+    return value === 'light' ? 'light' : 'dark';
+  } catch { return 'dark'; }
+};
 const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop';
 const DIET_TOAST_LIMIT = 3;
 const DIET_TOAST_DURATION = 3200;
@@ -126,16 +136,32 @@ const normalizeMealType = (value?: string) => {
 
 export default function App({ onLogout }: UserAppProps) {
   const [activeTab, setActiveTab] = useState('home');
+  const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
   const [myDiets, setMyDiets] = useState<DietItem[]>([]);
   const [schedules, setSchedules] = useState<MealSchedule[]>([]);
   const [profile, setProfileState] = useState<UserProfile>(createDefaultProfile);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [notifications, setNotifications] = useState<{ id: string; message: string; time: string }[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [chatSummaries, setChatSummaries] = useState<{ id: string; title: string; lastMessage: string; timestamp: string }[]>([]);
+  const [pendingChatId, setPendingChatId] = useState<string | null>(null);
+  const [activeSidebarChatId, setActiveSidebarChatId] = useState<string | null>(null);
+  const [pendingDeleteChatId, setPendingDeleteChatId] = useState<string | null>(null);
+  const [pendingNewChat, setPendingNewChat] = useState(0);
   const [dietToasts, setDietToasts] = useState<DietToast[]>([]);
   const profileSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dietToastsRef = useRef<DietToast[]>([]);
   const dietToastTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const firedScheduleAlertsRef = useRef<Set<string>>(new Set(
+    (() => {
+      try {
+        const raw = localStorage.getItem('calai_schedule_notif_fired') || '[]';
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed as string[] : [];
+      } catch { return []; }
+    })()
+  ));
 
   // Calculate Base Daily Target (without carry-over)
   const baseTarget = useMemo(() => {
@@ -354,19 +380,6 @@ export default function App({ onLogout }: UserAppProps) {
     setSchedules(prev => prev.filter(s => s.scheduleId !== scheduleId));
   };
 
-  const publishScheduleHandler = async (scheduleId: number, publish: boolean) => {
-    const response = await fetch(buildApiUrl(`/users/schedules/${scheduleId}/publish`), {
-      method: 'POST',
-      headers: getAuthHeaders(true),
-      body: JSON.stringify({ publish }),
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.message || 'Failed to update share status');
-    }
-    setSchedules(prev => prev.map(s => s.scheduleId === scheduleId ? result.data as MealSchedule : s));
-  };
-
   useEffect(() => {
     const bootstrapUserData = async () => {
       try {
@@ -430,6 +443,11 @@ export default function App({ onLogout }: UserAppProps) {
   useEffect(() => {
     setStoredAvatar(profile.avatar);
   }, [profile.avatar]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch {}
+  }, [theme]);
 
   useEffect(() => {
     return () => {
@@ -518,6 +536,84 @@ export default function App({ onLogout }: UserAppProps) {
     checkNotifications(); // Initial check
     return () => clearInterval(interval);
   }, [notifications]);
+
+  // Schedule-aware meal reminders: notify the user when each item in their
+  // saved schedules hits its scheduled time on its planned day. Persists
+  // fired keys in localStorage so a page reload doesn't re-fire the same
+  // reminder later in the same minute.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
+    } catch { /* ignore */ }
+
+    const persist = () => {
+      try {
+        const arr = Array.from(firedScheduleAlertsRef.current).slice(-200);
+        localStorage.setItem('calai_schedule_notif_fired', JSON.stringify(arr));
+      } catch { /* ignore */ }
+    };
+
+    const FIRE_WINDOW_MS = 90_000; // accept up to 90s late so we don't miss a tick
+    const MEAL_EMOJI: Record<string, string> = {
+      breakfast: '🍳',
+      lunch: '🥗',
+      dinner: '🍽️',
+      snack: '🍎',
+    };
+
+    const check = () => {
+      const now = Date.now();
+      for (const schedule of schedules) {
+        const startMs = new Date(`${schedule.startDate}T00:00:00`).getTime();
+        if (!Number.isFinite(startMs)) continue;
+        for (const item of schedule.items) {
+          if (!item.scheduledTime || item.itemId == null) continue;
+          const offsetDays = item.dayOffset ?? 0;
+          const itemDate = new Date(startMs + offsetDays * 86400000);
+          const isoDay = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}-${String(itemDate.getDate()).padStart(2, '0')}`;
+          const [hhStr, mmStr] = item.scheduledTime.split(':');
+          const hh = Number(hhStr);
+          const mm = Number(mmStr);
+          if (!Number.isFinite(hh) || !Number.isFinite(mm)) continue;
+          const triggerMs = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate(), hh, mm, 0).getTime();
+          const elapsed = now - triggerMs;
+          if (elapsed < 0 || elapsed > FIRE_WINDOW_MS) continue;
+          const key = `${item.itemId}-${isoDay}`;
+          if (firedScheduleAlertsRef.current.has(key)) continue;
+          firedScheduleAlertsRef.current.add(key);
+          persist();
+
+          const timeLabel = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+          const emoji = MEAL_EMOJI[item.mealType] ?? '🔔';
+          const title = `${emoji} ${item.name}`;
+          const detail = `${item.mealType.charAt(0).toUpperCase() + item.mealType.slice(1)} · ${timeLabel} · ${schedule.name}`;
+
+          setNotifications(prev => [
+            { id: `sched-${key}`, message: `${title} — ${detail}`, time: timeLabel },
+            ...prev,
+          ]);
+          showDietToast({
+            kind: 'success',
+            title,
+            message: detail,
+          });
+          try {
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification(title, { body: detail, tag: key });
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    };
+
+    const interval = setInterval(check, 30_000);
+    check();
+    return () => clearInterval(interval);
+  }, [schedules]);
 
   const handleAddToMyDiet = async (item: Omit<DietItem, 'id' | 'date'>, options?: AddToDietOptions) => {
     try {
@@ -608,12 +704,81 @@ export default function App({ onLogout }: UserAppProps) {
     );
   }
 
+  const handleSelectChat = (chatId: string) => {
+    setPendingChatId(chatId);
+    setActiveTab('chat');
+  };
+
+  const handleDeleteChat = (chatId: string) => {
+    setPendingDeleteChatId(chatId);
+  };
+
+  const handleNewChat = () => {
+    setActiveTab('chat');
+    setPendingNewChat(prev => prev + 1);
+  };
+
   return (
     <div className="flex min-h-screen bg-bg-dark">
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onLogout={onLogout} />
-      
+      <Sidebar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onLogout={onLogout}
+        mobileOpen={mobileNavOpen}
+        onMobileClose={() => setMobileNavOpen(false)}
+        chatSummaries={chatSummaries}
+        onSelectChat={handleSelectChat}
+        onDeleteChat={handleDeleteChat}
+        onNewChat={handleNewChat}
+        activeChatId={activeSidebarChatId}
+      />
+
+      {/* Mobile hamburger — only shown when sidebar is collapsed (< lg). */}
+      <button
+        onClick={() => setMobileNavOpen(true)}
+        className="lg:hidden fixed top-4 left-4 z-40 w-11 h-11 rounded-2xl bg-surface-dark border border-white/10 flex items-center justify-center text-white shadow-lg"
+        aria-label="Open menu"
+      >
+        <Menu size={20} />
+      </button>
+
       {/* Global Header with Avatar & Notifications */}
-      <div className="fixed top-0 right-0 p-8 z-40 flex items-center gap-4">
+      <div className="fixed top-0 right-0 p-4 sm:p-6 lg:p-8 z-40 flex items-center gap-3 sm:gap-4">
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => setTheme(prev => (prev === 'dark' ? 'light' : 'dark'))}
+          className="w-12 h-12 rounded-2xl bg-surface-dark border border-white/5 flex items-center justify-center text-text-muted hover:text-white transition-colors relative overflow-hidden"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label="Toggle theme"
+        >
+          <AnimatePresence mode="wait" initial={false}>
+            {theme === 'dark' ? (
+              <motion.span
+                key="moon"
+                initial={{ rotate: -90, opacity: 0, scale: 0.7 }}
+                animate={{ rotate: 0, opacity: 1, scale: 1 }}
+                exit={{ rotate: 90, opacity: 0, scale: 0.7 }}
+                transition={{ duration: 0.28 }}
+                className="absolute inset-0 flex items-center justify-center"
+              >
+                <Moon size={20} />
+              </motion.span>
+            ) : (
+              <motion.span
+                key="sun"
+                initial={{ rotate: 90, opacity: 0, scale: 0.7 }}
+                animate={{ rotate: 0, opacity: 1, scale: 1 }}
+                exit={{ rotate: -90, opacity: 0, scale: 0.7 }}
+                transition={{ duration: 0.28 }}
+                className="absolute inset-0 flex items-center justify-center"
+              >
+                <Sun size={20} />
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </motion.button>
+
         <div className="relative">
           <motion.button
             whileHover={{ scale: 1.05 }}
@@ -635,7 +800,7 @@ export default function App({ onLogout }: UserAppProps) {
                 initial={{ opacity: 0, y: 10, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                className="absolute top-16 right-0 w-80 bg-surface-dark border border-white/10 rounded-[2rem] shadow-2xl overflow-hidden"
+                className="absolute top-16 right-0 w-80 max-w-[calc(100vw-2rem)] bg-surface-dark border border-white/10 rounded-[2rem] shadow-2xl overflow-hidden"
               >
                 <div className="p-6 border-b border-white/5 flex justify-between items-center">
                   <h3 className="font-black text-sm uppercase tracking-widest">Notifications</h3>
@@ -669,16 +834,21 @@ export default function App({ onLogout }: UserAppProps) {
           </AnimatePresence>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl border border-white/10 overflow-hidden shadow-lg shadow-brand-orange/5">
-            <img 
-              src={profile.avatar} 
-              alt={profile.name} 
-              className="w-full h-full object-cover"
-              referrerPolicy="no-referrer"
-            />
-          </div>
-        </div>
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => setActiveTab('settings')}
+          className="w-12 h-12 rounded-2xl border border-white/10 overflow-hidden shadow-lg shadow-brand-orange/5 hover:border-brand-orange/50 transition-colors"
+          title="Open settings"
+          aria-label="Open settings"
+        >
+          <img
+            src={profile.avatar}
+            alt={profile.name}
+            className="w-full h-full object-cover"
+            referrerPolicy="no-referrer"
+          />
+        </motion.button>
       </div>
 
       <div className="fixed bottom-6 right-6 z-[70] flex w-[min(360px,calc(100vw-2rem))] flex-col-reverse gap-3 pointer-events-none">
@@ -784,11 +954,22 @@ export default function App({ onLogout }: UserAppProps) {
             schedules={schedules}
             onUpdateSchedule={updateScheduleHandler}
             onDeleteSchedule={deleteScheduleHandler}
-            onPublishSchedule={publishScheduleHandler}
+            onCreateSchedule={createScheduleFromPlan}
           />
         )}
         {activeTab === 'meals' && <MealPlans onAddToMyDiet={handleAddToMyDiet} />}
-        {activeTab === 'chat' && <Chatbox onSavePlanToSchedule={createScheduleFromPlan} />}
+        {activeTab === 'chat' && (
+          <Chatbox
+            onSavePlanToSchedule={createScheduleFromPlan}
+            pendingChatId={pendingChatId}
+            onPendingChatResolved={() => setPendingChatId(null)}
+            onConversationsChange={setChatSummaries}
+            onActiveChatChange={setActiveSidebarChatId}
+            pendingDeleteChatId={pendingDeleteChatId}
+            onPendingDeleteChatResolved={() => setPendingDeleteChatId(null)}
+            pendingNewChat={pendingNewChat}
+          />
+        )}
         {activeTab === 'settings' && (
           <Settings 
             profile={profile}
@@ -796,7 +977,7 @@ export default function App({ onLogout }: UserAppProps) {
           />
         )}
         {activeTab !== 'home' && activeTab !== 'goals' && activeTab !== 'meals' && activeTab !== 'dashboard' && activeTab !== 'chat' && activeTab !== 'settings' && (
-          <div className="flex-1 ml-64 p-10 flex items-center justify-center text-text-muted">
+          <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 flex items-center justify-center text-text-muted">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2">Section "{activeTab}"</h2>
               <p>This feature is currently under development.</p>

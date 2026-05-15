@@ -1,18 +1,41 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  CalendarDays, Trophy, Trash2, Share2, X, ChevronLeft, ChevronRight,
-  ListTree, GanttChart, Sparkles, Flame, Zap, Droplets, Heart, MessageSquareText,
-  ZoomIn, ZoomOut,
+  CalendarDays, Trophy, Trash2, X, ChevronLeft, ChevronRight,
+  ListTree, GanttChart, Flame, Zap, Droplets, Heart, MessageSquareText,
+  ZoomIn, ZoomOut, Plus, Bell,
 } from 'lucide-react';
-import { MealSchedule } from '../types';
+import { MealSchedule, ScheduleItem, MealType } from '../types';
 
 interface MyScheduleProps {
   schedules: MealSchedule[];
   onUpdate: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>) => Promise<void>;
   onDelete: (scheduleId: number) => Promise<void>;
-  onPublish: (scheduleId: number, publish: boolean) => Promise<void>;
+  onCreate: (payload: {
+    name: string;
+    description?: string;
+    startDate: string;
+    endDate: string;
+    color?: string;
+    targetCalories?: number;
+    source: 'manual' | 'chat';
+    items?: ScheduleItem[];
+  }) => Promise<MealSchedule>;
 }
+
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const DEFAULT_TIME_BY_MEAL: Record<MealType, string> = {
+  breakfast: '07:30',
+  lunch: '12:00',
+  dinner: '19:00',
+  snack: '15:30',
+};
+
+const SCHEDULE_PALETTE = ['#FB923C', '#34D399', '#A78BFA', '#F472B6', '#60A5FA', '#FBBF24'];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -39,12 +62,12 @@ const SOURCE_LABEL: Record<MealSchedule['source'], string> = {
   shared: 'Shared',
 };
 
-export function MySchedule({ schedules, onUpdate, onDelete, onPublish }: MyScheduleProps) {
+export function MySchedule({ schedules, onUpdate, onDelete, onCreate }: MyScheduleProps) {
   const [view, setView] = useState<'list' | 'timeline'>('timeline');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-  const [confirmPublishId, setConfirmPublishId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const selected = useMemo(
     () => (selectedId == null ? null : schedules.find(s => s.scheduleId === selectedId) ?? null),
@@ -53,10 +76,6 @@ export function MySchedule({ schedules, onUpdate, onDelete, onPublish }: MySched
   const confirmDelete = useMemo(
     () => (confirmDeleteId == null ? null : schedules.find(s => s.scheduleId === confirmDeleteId) ?? null),
     [confirmDeleteId, schedules]
-  );
-  const confirmPublish = useMemo(
-    () => (confirmPublishId == null ? null : schedules.find(s => s.scheduleId === confirmPublishId) ?? null),
-    [confirmPublishId, schedules]
   );
 
   const today = useMemo(() => {
@@ -85,16 +104,6 @@ export function MySchedule({ schedules, onUpdate, onDelete, onPublish }: MySched
     }
   };
 
-  const handlePublish = async (schedule: MealSchedule, publish: boolean) => {
-    setBusyId(schedule.scheduleId);
-    try {
-      await onPublish(schedule.scheduleId, publish);
-      setConfirmPublishId(null);
-    } finally {
-      setBusyId(null);
-    }
-  };
-
   const handleAchieved = async (schedule: MealSchedule) => {
     setBusyId(schedule.scheduleId);
     try {
@@ -104,50 +113,57 @@ export function MySchedule({ schedules, onUpdate, onDelete, onPublish }: MySched
     }
   };
 
-  if (schedules.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 text-text-muted bg-surface-dark/30 rounded-[3rem] border border-dashed border-white/10">
-        <CalendarDays size={48} className="mb-4 opacity-20" />
-        <p className="font-medium">No meal schedules yet.</p>
-        <p className="text-sm opacity-60 max-w-md text-center mt-2">
-          Ask CalAI to plan a meal in chat, then tap <span className="text-brand-orange font-bold">Save to My schedule</span> to plan it across a date range.
-        </p>
-      </div>
-    );
-  }
+  const isEmpty = schedules.length === 0;
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold mb-1">My schedule</h2>
           <p className="text-text-muted text-sm">
-            Track your meal plans over time. Publish a successful one so the community can try it.
+            Track your meal plans over time. Plan it from chat or create one manually.
           </p>
         </div>
-        <div className="flex items-center gap-2 bg-surface-dark border border-white/5 rounded-2xl p-1">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => setView('timeline')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors ${
-              view === 'timeline' ? 'bg-brand-orange text-bg-dark' : 'text-text-muted hover:text-white'
-            }`}
+            onClick={() => setCreateOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold bg-brand-orange text-bg-dark hover:bg-brand-orange-dark transition-colors"
           >
-            <GanttChart size={14} />
-            Timeline
+            <Plus size={14} />
+            Create schedule
           </button>
-          <button
-            onClick={() => setView('list')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors ${
-              view === 'list' ? 'bg-brand-orange text-bg-dark' : 'text-text-muted hover:text-white'
-            }`}
-          >
-            <ListTree size={14} />
-            List
-          </button>
+          <div className="flex items-center gap-2 bg-surface-dark border border-white/5 rounded-2xl p-1">
+            <button
+              onClick={() => setView('timeline')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors ${
+                view === 'timeline' ? 'bg-brand-orange text-bg-dark' : 'text-text-muted hover:text-white'
+              }`}
+            >
+              <GanttChart size={14} />
+              Timeline
+            </button>
+            <button
+              onClick={() => setView('list')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-colors ${
+                view === 'list' ? 'bg-brand-orange text-bg-dark' : 'text-text-muted hover:text-white'
+              }`}
+            >
+              <ListTree size={14} />
+              List
+            </button>
+          </div>
         </div>
       </div>
 
-      {view === 'timeline' ? (
+      {isEmpty ? (
+        <div className="flex flex-col items-center justify-center py-20 text-text-muted bg-surface-dark/30 rounded-[3rem] border border-dashed border-white/10">
+          <CalendarDays size={48} className="mb-4 opacity-20" />
+          <p className="font-medium">No meal schedules yet.</p>
+          <p className="text-sm opacity-60 max-w-md text-center mt-2">
+            Tap <span className="text-brand-orange font-bold">Create schedule</span> to plan your own, or ask CalAI to plan one in chat and save it from there.
+          </p>
+        </div>
+      ) : view === 'timeline' ? (
         <TimelineView
           schedules={sorted}
           today={today}
@@ -164,7 +180,6 @@ export function MySchedule({ schedules, onUpdate, onDelete, onPublish }: MySched
               today={today}
               onClick={() => setSelectedId(schedule.scheduleId)}
               onAchieved={() => handleAchieved(schedule)}
-              onShare={() => setConfirmPublishId(schedule.scheduleId)}
               onDelete={() => setConfirmDeleteId(schedule.scheduleId)}
               busy={busyId === schedule.scheduleId}
             />
@@ -179,7 +194,6 @@ export function MySchedule({ schedules, onUpdate, onDelete, onPublish }: MySched
             today={today}
             onClose={() => setSelectedId(null)}
             onAchieved={() => handleAchieved(selected)}
-            onShare={() => setConfirmPublishId(selected.scheduleId)}
             onDelete={() => setConfirmDeleteId(selected.scheduleId)}
           />
         )}
@@ -194,19 +208,10 @@ export function MySchedule({ schedules, onUpdate, onDelete, onPublish }: MySched
             busy={busyId === confirmDelete.scheduleId}
           />
         )}
-        {confirmPublish && (
-          <ConfirmModal
-            title={confirmPublish.isPublished ? 'Unpublish from Discover?' : 'Share to Discover New Meals?'}
-            description={
-              confirmPublish.isPublished
-                ? 'Other users will no longer see this meal plan in Discover.'
-                : 'Other users will see this plan on the Discover page so they can try it themselves.'
-            }
-            confirmLabel={confirmPublish.isPublished ? 'Unpublish' : 'Publish'}
-            confirmStyle={confirmPublish.isPublished ? 'neutral' : 'primary'}
-            onCancel={() => setConfirmPublishId(null)}
-            onConfirm={() => handlePublish(confirmPublish, !confirmPublish.isPublished)}
-            busy={busyId === confirmPublish.scheduleId}
+        {createOpen && (
+          <CreateScheduleModal
+            onClose={() => setCreateOpen(false)}
+            onCreate={onCreate}
           />
         )}
       </AnimatePresence>
@@ -219,12 +224,11 @@ interface ScheduleCardProps {
   today: Date;
   onClick: () => void;
   onAchieved: () => void;
-  onShare: () => void;
   onDelete: () => void;
   busy: boolean;
 }
 
-function ScheduleCard({ schedule, today, onClick, onAchieved, onShare, onDelete, busy }: ScheduleCardProps) {
+function ScheduleCard({ schedule, today, onClick, onAchieved, onDelete, busy }: ScheduleCardProps) {
   const start = parseDate(schedule.startDate);
   const end = parseDate(schedule.endDate);
   const totalDays = Math.max(1, dayDelta(end, start) + 1);
@@ -253,12 +257,6 @@ function ScheduleCard({ schedule, today, onClick, onAchieved, onShare, onDelete,
               <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-400/10 border border-emerald-400/30 rounded-full px-2 py-0.5">
                 <Trophy size={10} />
                 Achieved
-              </span>
-            )}
-            {schedule.isPublished && (
-              <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-brand-orange bg-brand-orange/10 border border-brand-orange/30 rounded-full px-2 py-0.5">
-                <Sparkles size={10} />
-                Published
               </span>
             )}
           </div>
@@ -309,15 +307,6 @@ function ScheduleCard({ schedule, today, onClick, onAchieved, onShare, onDelete,
           >
             <Trophy size={12} />
             {schedule.achieved ? 'Unmark' : 'Achieved'}
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onShare(); }}
-            disabled={busy || (!schedule.achieved && !schedule.isPublished)}
-            title={!schedule.achieved && !schedule.isPublished ? 'Mark as achieved first' : ''}
-            className="flex-1 flex items-center justify-center gap-1.5 text-[11px] font-bold py-2 rounded-xl bg-brand-orange/10 hover:bg-brand-orange/20 text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <Share2 size={12} />
-            {schedule.isPublished ? 'Unpublish' : 'Share'}
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
@@ -582,7 +571,6 @@ function TimelineView({ schedules, today, monthAnchor, setMonthAnchor, onSelect 
                   >
                     {schedule.source === 'chat' && <MessageSquareText size={12} className="shrink-0" />}
                     {schedule.achieved && <Trophy size={12} className="shrink-0" />}
-                    {schedule.isPublished && <Sparkles size={12} className="shrink-0" />}
                     <span className="truncate text-left flex-1">{schedule.name}</span>
                     <span className="text-[10px] opacity-80 shrink-0">{span}d</span>
                   </button>
@@ -601,11 +589,10 @@ interface ScheduleDetailProps {
   today: Date;
   onClose: () => void;
   onAchieved: () => void;
-  onShare: () => void;
   onDelete: () => void;
 }
 
-function ScheduleDetailModal({ schedule, today, onClose, onAchieved, onShare, onDelete }: ScheduleDetailProps) {
+function ScheduleDetailModal({ schedule, today, onClose, onAchieved, onDelete }: ScheduleDetailProps) {
   const start = parseDate(schedule.startDate);
   const end = parseDate(schedule.endDate);
   const totalDays = Math.max(1, dayDelta(end, start) + 1);
@@ -729,15 +716,6 @@ function ScheduleDetailModal({ schedule, today, onClose, onAchieved, onShare, on
               <Trophy size={14} />
               {schedule.achieved ? 'Unmark achieved' : 'Mark achieved'}
             </button>
-            <button
-              onClick={onShare}
-              disabled={!schedule.achieved && !schedule.isPublished}
-              title={!schedule.achieved && !schedule.isPublished ? 'Mark as achieved first to share' : ''}
-              className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-bold bg-brand-orange/10 hover:bg-brand-orange/20 text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <Share2 size={14} />
-              {schedule.isPublished ? 'Unpublish' : 'Share to Discover'}
-            </button>
           </div>
         </div>
       </motion.div>
@@ -807,6 +785,344 @@ function ConfirmModal({ title, description, confirmLabel, confirmStyle, onCancel
           >
             {busy ? 'Working…' : confirmLabel}
           </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+interface CreateScheduleModalProps {
+  onClose: () => void;
+  onCreate: MyScheduleProps['onCreate'];
+}
+
+interface DraftItem {
+  key: string;
+  dayOffset: number;
+  mealType: MealType;
+  scheduledTime: string;
+  name: string;
+  serving: string;
+  calories: string;
+}
+
+const newDraftItem = (dayOffset = 0, mealType: MealType = 'breakfast'): DraftItem => ({
+  key: `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  dayOffset,
+  mealType,
+  scheduledTime: DEFAULT_TIME_BY_MEAL[mealType],
+  name: '',
+  serving: '',
+  calories: '',
+});
+
+function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
+  const minDate = todayISO();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState(minDate);
+  const [endDate, setEndDate] = useState(minDate);
+  const [color, setColor] = useState(SCHEDULE_PALETTE[0]);
+  const [items, setItems] = useState<DraftItem[]>([newDraftItem()]);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const totalDays = useMemo(() => {
+    const startMs = new Date(`${startDate}T00:00:00`).getTime();
+    const endMs = new Date(`${endDate}T00:00:00`).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 0;
+    return Math.round((endMs - startMs) / 86400000) + 1;
+  }, [startDate, endDate]);
+
+  const totalKcal = useMemo(
+    () => items.reduce((sum, it) => sum + (Number(it.calories) || 0), 0),
+    [items]
+  );
+
+  const updateItem = (key: string, patch: Partial<DraftItem>) => {
+    setItems(prev => prev.map(it => (it.key === key ? { ...it, ...patch } : it)));
+  };
+
+  const removeItem = (key: string) => {
+    setItems(prev => (prev.length <= 1 ? prev : prev.filter(it => it.key !== key)));
+  };
+
+  const addItem = () => {
+    setItems(prev => [...prev, newDraftItem()]);
+  };
+
+  const handleSubmit = async () => {
+    if (!name.trim()) { setError('Please enter a schedule name.'); return; }
+    if (startDate < minDate) { setError('Start date cannot be in the past.'); return; }
+    if (startDate > endDate) { setError('End date must be on or after start date.'); return; }
+    if (totalDays > 60) { setError('Schedule cannot exceed 60 days.'); return; }
+    const cleaned = items
+      .map(it => ({ ...it, name: it.name.trim() }))
+      .filter(it => it.name.length > 0);
+    if (cleaned.length === 0) { setError('Add at least one meal item.'); return; }
+    const outOfRange = cleaned.find(it => it.dayOffset < 0 || it.dayOffset >= totalDays);
+    if (outOfRange) { setError(`Item "${outOfRange.name}" is on day ${outOfRange.dayOffset + 1}, which is outside the schedule's ${totalDays} day(s).`); return; }
+
+    setSaving(true);
+    setError('');
+    try {
+      await onCreate({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        startDate,
+        endDate,
+        color,
+        targetCalories: totalKcal > 0 ? Math.round(totalKcal) : undefined,
+        source: 'manual',
+        items: cleaned.map((it, idx) => ({
+          dayOffset: it.dayOffset,
+          mealType: it.mealType,
+          scheduledTime: it.scheduledTime || null,
+          name: it.name,
+          serving: it.serving.trim() || null,
+          calories: it.calories ? Number(it.calories) : null,
+          sortOrder: idx,
+        })),
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create schedule.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-bg-dark/90 backdrop-blur-sm"
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="relative bg-surface-dark rounded-[2rem] border border-white/10 max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl"
+      >
+        <div className="h-2" style={{ backgroundColor: color }} />
+        <div className="px-8 py-6 border-b border-white/5 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-text-muted mb-1">Manual</p>
+            <h2 className="text-2xl font-black">Create schedule</h2>
+            <p className="text-text-muted text-sm mt-1">
+              Pick your meals, days and times. We'll remind you when each one is up.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors shrink-0"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto px-8 py-6 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2">
+              <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. High-protein week"
+                className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Start date</label>
+              <input
+                type="date"
+                value={startDate}
+                min={minDate}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  const clamped = next && next < minDate ? minDate : next;
+                  setStartDate(clamped);
+                  if (endDate < clamped) setEndDate(clamped);
+                }}
+                className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">End date</label>
+              <input
+                type="date"
+                value={endDate}
+                min={startDate || minDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Notes (optional)</label>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What is this plan for?"
+                className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Color</label>
+              <div className="flex gap-2 flex-wrap">
+                {SCHEDULE_PALETTE.map(c => (
+                  <button
+                    key={c}
+                    onClick={() => setColor(c)}
+                    className={`w-8 h-8 rounded-full border-2 transition-all ${color === c ? 'border-white scale-110' : 'border-transparent opacity-70 hover:opacity-100'}`}
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-sm font-bold">Meals</p>
+                <p className="text-[11px] text-text-muted">
+                  {totalDays > 0 ? `${totalDays} day${totalDays === 1 ? '' : 's'} · ` : ''}
+                  {items.length} item{items.length === 1 ? '' : 's'}
+                  {totalKcal > 0 ? ` · ~${Math.round(totalKcal)} kcal` : ''}
+                </p>
+              </div>
+              <button
+                onClick={addItem}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 transition-colors"
+              >
+                <Plus size={12} /> Add meal
+              </button>
+            </div>
+            <div className="space-y-3">
+              {items.map((it, idx) => (
+                <div key={it.key} className="bg-bg-dark/60 border border-white/5 rounded-2xl p-4 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
+                    <div className="md:col-span-5">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Dish name</label>
+                      <input
+                        type="text"
+                        value={it.name}
+                        onChange={(e) => updateItem(it.key, { name: e.target.value })}
+                        placeholder={idx === 0 ? 'e.g. Greek yogurt + berries' : 'Dish name'}
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
+                    </div>
+                    <div className="md:col-span-3">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Slot</label>
+                      <select
+                        value={it.mealType}
+                        onChange={(e) => {
+                          const next = e.target.value as MealType;
+                          updateItem(it.key, {
+                            mealType: next,
+                            scheduledTime: it.scheduledTime || DEFAULT_TIME_BY_MEAL[next],
+                          });
+                        }}
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      >
+                        <option value="breakfast">Breakfast</option>
+                        <option value="lunch">Lunch</option>
+                        <option value="dinner">Dinner</option>
+                        <option value="snack">Snack</option>
+                      </select>
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Time</label>
+                      <input
+                        type="time"
+                        value={it.scheduledTime}
+                        onChange={(e) => updateItem(it.key, { scheduledTime: e.target.value })}
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Day</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={Math.max(1, totalDays)}
+                        value={it.dayOffset + 1}
+                        onChange={(e) => {
+                          const num = Math.max(1, Number(e.target.value) || 1);
+                          updateItem(it.key, { dayOffset: num - 1 });
+                        }}
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
+                    <div className="md:col-span-7">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Serving (optional)</label>
+                      <input
+                        type="text"
+                        value={it.serving}
+                        onChange={(e) => updateItem(it.key, { serving: e.target.value })}
+                        placeholder="e.g. 1 bowl, 200g"
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
+                    </div>
+                    <div className="md:col-span-3">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Calories (optional)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={it.calories}
+                        onChange={(e) => updateItem(it.key, { calories: e.target.value })}
+                        placeholder="kcal"
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
+                    </div>
+                    <div className="md:col-span-2 flex items-end">
+                      <button
+                        onClick={() => removeItem(it.key)}
+                        disabled={items.length <= 1}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <Trash2 size={12} /> Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {error && (
+            <p className="text-[12px] text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">{error}</p>
+          )}
+        </div>
+
+        <div className="px-8 py-5 border-t border-white/5 flex items-center justify-between gap-3 bg-bg-dark/40">
+          <div className="text-[11px] text-text-muted flex items-center gap-2">
+            <Bell size={12} />
+            We'll show an in-app reminder at each meal's time on its day.
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              disabled={saving}
+              className="px-5 py-2 rounded-xl text-sm font-bold bg-white/5 hover:bg-white/10 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={saving}
+              className="px-5 py-2 rounded-xl text-sm font-bold bg-brand-orange hover:bg-brand-orange-dark text-bg-dark transition-colors disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Create schedule'}
+            </button>
+          </div>
         </div>
       </motion.div>
     </div>

@@ -562,6 +562,186 @@ class FoodAnalysisPipeline:
         grams = self._to_float(portion_estimation.get("estimated_grams"))
         return grams if grams and grams > 0 else None
 
+    # Default visible-portion grams per visual_form bucket. Used as the
+    # multiplier when vision identified a dish_name but failed to estimate
+    # grams, and we recovered per_100g macros from a RAG fallback lookup.
+    _DEFAULT_PORTION_GRAMS = {
+        "noodle_soup": 400,
+        "soup": 300,
+        "bowl": 300,
+        "plate": 280,
+        "mixed_meal": 320,
+        "salad": 200,
+        "sandwich": 180,
+        "pizza": 200,
+        "sushi": 180,
+        "dessert": 120,
+        "snack": 100,
+        "drink": 250,
+    }
+
+    # Friendly Vietnamese labels for visual_form buckets (shown to end user).
+    _VISUAL_FORM_VI = {
+        "noodle_soup": "một tô bún/phở",
+        "soup": "một tô canh/súp",
+        "bowl": "một tô",
+        "plate": "một đĩa",
+        "mixed_meal": "một suất ăn",
+        "salad": "một phần salad",
+        "sandwich": "một ổ bánh mì",
+        "pizza": "một phần pizza",
+        "sushi": "một phần sushi",
+        "dessert": "một phần tráng miệng",
+        "snack": "một phần ăn vặt",
+        "drink": "một ly đồ uống",
+    }
+
+    # Friendly source labels — Qdrant collection names are internal jargon
+    # and must not leak into user-facing copy.
+    _SOURCE_LABEL_VI = {
+        "vn_food_vectors_768": "Bảng dinh dưỡng món Việt",
+        "food_common_vectors_768": "Bảng dinh dưỡng thực phẩm thông dụng",
+        "food_nutrition_vectors_768": "Bảng dinh dưỡng tổng hợp",
+        "nutrition5k_vectors_768": "Cơ sở Nutrition5k",
+        "food_nutrition_dev_vectors_768": "Bảng dinh dưỡng mở rộng",
+        "food_global_10k_vectors_768": "Bảng dinh dưỡng thực phẩm toàn cầu",
+        "food_text_vectors_768": "Bảng dinh dưỡng tham chiếu",
+        "food_vectors_768": "Bảng dinh dưỡng tham chiếu",
+        "food_fruit_vectors_768": "Bảng dinh dưỡng trái cây",
+        "beverage_vectors_768": "Bảng dinh dưỡng đồ uống",
+        "beverage_text_vectors_768": "Bảng dinh dưỡng đồ uống",
+    }
+
+    def _default_portion_grams(self, vision):
+        if not isinstance(vision, dict):
+            return 250
+        visual_form = str(vision.get("visual_form") or "").strip().lower()
+        return self._DEFAULT_PORTION_GRAMS.get(visual_form, 250)
+
+    def _visual_form_label(self, vision):
+        visual_form = str((vision or {}).get("visual_form") or "").strip().lower()
+        return self._VISUAL_FORM_VI.get(visual_form, "một phần ăn")
+
+    def _source_label(self, collection):
+        return self._SOURCE_LABEL_VI.get(
+            str(collection or "").strip(),
+            "bảng dinh dưỡng tham chiếu",
+        )
+
+    # Curated collections searched first by the dish-name fallback. Recipe
+    # collections (recipes_64k, food_ingredients_recipes_multimodal) tend to
+    # dominate the generic hybrid search for short dish names like "pho" but
+    # carry no per_100g macros; querying nutrition-bearing collections
+    # directly is the only way to recover real numbers.
+    _DISH_FALLBACK_COLLECTIONS = (
+        "vn_food_vectors_768",
+        "food_common_vectors_768",
+        "food_nutrition_vectors_768",
+        "nutrition5k_vectors_768",
+        "food_global_10k_vectors_768",
+        "food_text_vectors_768",
+    )
+
+    # Minimum cosine similarity for the dish-name fallback to be considered a
+    # plausible semantic match. Below this the top hit is essentially the
+    # least-unrelated neighbor (e.g. searching "Zuni Ricotta Gnocchi" in a
+    # Vietnamese-food collection returns "cùi dừa già"), and accepting it
+    # produces wildly wrong macros attributed to the actual dish.
+    _DISH_FALLBACK_MIN_SCORE = 0.62
+    # Above this we trust the hit even without lexical token overlap — useful
+    # for legitimate cross-language synonyms the embedding captures.
+    _DISH_FALLBACK_STRONG_SCORE = 0.78
+
+    def _dish_name_tokens(self, value):
+        """Lower-cased, accent-stripped tokens (≥ 3 chars) from a dish/food
+        name. Used for cheap lexical overlap as a sanity check on top of the
+        vector similarity score."""
+        normalized = self._normalize_text(value or "")
+        if not normalized:
+            return set()
+        # Split on anything non-alphanumeric; ignore short generic glue words.
+        raw_tokens = re.split(r"[^a-z0-9]+", normalized)
+        stop = {"and", "with", "the", "for", "mon", "and", "kieu", "cua"}
+        return {t for t in raw_tokens if len(t) >= 3 and t not in stop}
+
+    def _payload_name_candidates(self, payload):
+        """Names we'll compare against the queried dish_name. Recipe rows
+        usually expose multiple of these — checking all reduces false
+        rejections when the canonical column name varies by collection."""
+        if not payload:
+            return []
+        keys = (
+            "food_name", "name", "dish_name", "title",
+            "recipe_name", "product_name", "label", "vi_name",
+        )
+        return [str(payload.get(k)) for k in keys if payload.get(k)]
+
+    def _dish_name_nutrition_lookup(self, dish_name):
+        """Fallback RAG search when vision identifies a dish_name but no
+        nutrition data made it through (low image quality, sparse dataset for
+        the cuisine). Returns the first payload that exposes per_100g macros
+        AND is plausibly the same dish (vector score ≥ threshold and/or
+        lexical token overlap). Rejecting weak hits prevents the pipeline
+        from labeling unrelated nutrition (e.g. coconut) as the dish's macros
+        and forcing the LLM to cite it in the answer.
+        """
+        if not dish_name:
+            return None
+        cleaned = str(dish_name).strip()
+        if len(cleaned) < 2:
+            return None
+        try:
+            text_vec = self.text_embed.embed(cleaned)
+        except Exception as exc:
+            print("[FoodAnalysis] dish-name embed failed:", exc)
+            return None
+        if text_vec is None:
+            return None
+
+        query_tokens = self._dish_name_tokens(cleaned)
+        best_rejected = None
+
+        client = self.rag.client
+        for collection in self._DISH_FALLBACK_COLLECTIONS:
+            try:
+                hits = client.search(
+                    collection_name=collection,
+                    query_vector=text_vec,
+                    limit=6,
+                    with_payload=True,
+                    score_threshold=self._DISH_FALLBACK_MIN_SCORE,
+                )
+            except Exception as exc:
+                print(f"[FoodAnalysis] dish fallback {collection} search failed:", exc)
+                continue
+            for hit in hits or []:
+                payload = dict(getattr(hit, "payload", None) or {})
+                payload.setdefault("source_collection", collection)
+                if not self._payload_nutrition_per_100g(payload):
+                    continue
+
+                score = getattr(hit, "score", None) or 0.0
+                payload_tokens = set()
+                for name in self._payload_name_candidates(payload):
+                    payload_tokens |= self._dish_name_tokens(name)
+
+                has_overlap = bool(query_tokens & payload_tokens)
+                if score >= self._DISH_FALLBACK_STRONG_SCORE or has_overlap:
+                    return payload
+
+                if best_rejected is None:
+                    matched_name = next(iter(self._payload_name_candidates(payload)), "?")
+                    best_rejected = (collection, matched_name, score)
+
+        if best_rejected is not None:
+            collection, matched_name, score = best_rejected
+            print(
+                f"[FoodAnalysis] dish-name fallback rejected '{cleaned}' → "
+                f"'{matched_name}' (collection={collection}, score={score:.3f}) "
+                "— no lexical overlap and score below strong threshold."
+            )
+        return None
+
     def _portion_estimate_from_rag(self, vision, retrieved):
         grams = self._estimated_grams_from_vision(vision)
         per_100g = self._payload_nutrition_per_100g(retrieved)
@@ -786,6 +966,83 @@ class FoodAnalysisPipeline:
             estimated, estimate_source = rag_portion_estimate, "rag_portion_estimate"
         else:
             estimated, estimate_source = None, "not_available"
+
+        # STEP 5b: DISH-NAME RAG FALLBACK
+        # Vision recognized the dish but the hybrid search + portion estimator
+        # both failed to surface macros (common for VN dishes when vision
+        # underestimates grams or the best payload is a recipe row without
+        # per_100g fields). Re-search using only the dish_name and synthesize
+        # an estimate from per_100g × default portion for the visual_form.
+        if estimated is None and dish and not self._is_unknown_vision(vision):
+            fallback_payload = self._dish_name_nutrition_lookup(dish)
+            if fallback_payload:
+                fallback_per_100g = self._payload_nutrition_per_100g(fallback_payload)
+                if fallback_per_100g:
+                    grams = self._default_portion_grams(vision)
+                    scale = grams / 100
+                    matched_name = (
+                        fallback_payload.get("food_name")
+                        or fallback_payload.get("name")
+                        or fallback_payload.get("title")
+                        or dish
+                    )
+                    source_label = self._source_label(fallback_payload.get("source_collection"))
+                    visual_form_label = self._visual_form_label(vision)
+                    # Build a transparent, user-facing basis string. Uses
+                    # friendly Vietnamese labels — no Qdrant collection names
+                    # or visual_form enum buckets leak to the end user.
+                    per_100g_parts = []
+                    for label, key, unit in [
+                        ("kcal", "calories", ""),
+                        ("protein", "protein", "g"),
+                        ("carb", "carbs", "g"),
+                        ("fat", "fat", "g"),
+                    ]:
+                        value = fallback_per_100g.get(key)
+                        if value not in (None, ""):
+                            per_100g_parts.append(f"{label} {value}{unit}/100g")
+                    per_100g_text = ", ".join(per_100g_parts) if per_100g_parts else "không có dữ liệu macro"
+                    basis_text = (
+                        f"Tra cứu trong {source_label}, mục '{matched_name}' "
+                        f"có {per_100g_text}. "
+                        f"Áp dụng khẩu phần trung bình {grams} g cho {visual_form_label} "
+                        "vì ảnh không cung cấp đủ thông tin để đo chính xác khối lượng."
+                    )
+                    estimated = {
+                        "calories": (
+                            round(fallback_per_100g["calories"] * scale)
+                            if fallback_per_100g.get("calories") is not None else None
+                        ),
+                        "protein": (
+                            round(fallback_per_100g["protein"] * scale, 1)
+                            if fallback_per_100g.get("protein") is not None else None
+                        ),
+                        "carbs": (
+                            round(fallback_per_100g["carbs"] * scale, 1)
+                            if fallback_per_100g.get("carbs") is not None else None
+                        ),
+                        "fat": (
+                            round(fallback_per_100g["fat"] * scale, 1)
+                            if fallback_per_100g.get("fat") is not None else None
+                        ),
+                        "serving_size": f"khoảng {grams} g ({visual_form_label})",
+                        "basis": basis_text,
+                        "matched_food_name": matched_name,
+                        "source_label": source_label,
+                        "per_100g": fallback_per_100g,
+                        "assumed_grams": grams,
+                        "portion_label": visual_form_label,
+                        "reliability_note": (
+                            "Số liệu /100g có nguồn rõ ràng; khẩu phần là ước tính trung bình "
+                            "vì ảnh không đủ thông tin để cân đo chính xác."
+                        ),
+                    }
+                    estimate_source = "dish_name_rag_fallback"
+                    # Promote the fallback payload so the LLM context sees the
+                    # canonical row instead of a less-nutritious neighbor.
+                    if not self._payload_nutrition_per_100g(best):
+                        best = fallback_payload
+
         summary = self._nutrition_summary(best, estimated)
 
         warnings = []
@@ -829,7 +1086,9 @@ class FoodAnalysisPipeline:
             "retrieved_nutrition": best,
             "nutrition_summary": summary,
             "nutrition_source": (
-                "rag_with_portion_estimate"
+                "dish_name_rag_fallback"
+                if estimate_source == "dish_name_rag_fallback"
+                else "rag_with_portion_estimate"
                 if best and estimate_source == "rag_portion_estimate"
                 else "rag_with_vision_estimate"
                 if best and estimated

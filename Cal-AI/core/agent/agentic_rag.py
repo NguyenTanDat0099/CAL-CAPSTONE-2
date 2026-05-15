@@ -183,11 +183,95 @@ class AgentRouter:
                 return True
         return False
 
+    # Off-topic signals — programming, geography/general knowledge, chitchat.
+    # Detected BEFORE nutrition-style routes so that "Thủ đô Pháp?" doesn't
+    # end up in meal_planning, and "viết hàm fibonacci" doesn't pull a
+    # food-table CONTEXT into the prompt.
+    _OFF_TOPIC_PHRASES = (
+        # programming
+        "fibonacci", "python", "javascript", "typescript", "java ", "c++",
+        "lap trinh", "viet ham", "viet code", "thuat toan", "algorithm",
+        "function", "regex", "sql", "leetcode", "quicksort", "merge sort",
+        # general knowledge / geography
+        "thu do", "capital of", "tong thong", "president", "thu tuong",
+        "dien tich", "dan so", "lich su", "history of", "nam nao",
+        # math (non-nutrition)
+        "phuong trinh", "tich phan", "dao ham", "hinh hoc",
+        # chitchat
+        "xin chao", "chao ban", "hello", "hi ", "how are you", "ban khoe",
+        "ban la ai", "ten ban", "who are you",
+        # weather / sport / entertainment
+        "thoi tiet", "weather", "du bao", "nhiet do",
+        "world cup", "bong da", "champions league", "premier league",
+        "nba", "phim", "movie", "ca si", "bai hat",
+        # politics
+        "bau cu", "election", "chinh tri", "politics", "dang phai",
+    )
+
+    # Phrases that should be refused outright (harm / illegal / sensitive)
+    # before retrieval, so RAG can't pivot "bomb" into "bombe dessert".
+    _HARM_PHRASES = (
+        "make a bomb", "che tao bom", "lam bom", "che bom",
+        "weapon", "vu khi", "sung dan", "thuoc no",
+        "kill ", "giet ", "self harm", "suicide", "tu sat",
+        "ma tuy", "drug recipe", "heroin", "meth",
+    )
+
+    # Personal-preference patterns user-side. If query asks "what do I usually
+    # eat / favorite foods" WITHOUT a real user_profile, refuse deterministically
+    # to avoid the LLM fabricating preferences from random RAG hits.
+    _PROFILE_LOOKUP_PHRASES = (
+        "toi hay an", "minh hay an", "toi thuong an", "minh thuong an",
+        "mon toi hay", "mon minh hay", "mon hay an cua toi",
+        "mon yeu thich cua toi", "mon yeu thich cua minh",
+        "toi thich an gi", "minh thich an gi",
+        "toi hay an mon gi", "minh hay an mon gi",
+        "toi an mon gi nhat", "minh an mon gi nhat",
+        "lich su an uong cua toi", "lich su an uong cua minh",
+        "ho so cua toi", "ho so cua minh", "profile cua toi",
+        "my favorite food", "what do i usually eat", "what i eat",
+        "my eating history", "my profile",
+    )
+
+    # Compiled once: nutrition signal that would override the off-topic
+    # classifier. Word-boundaried so "ban" doesn't trigger "an", etc.
+    _FOOD_SIGNAL_RE = re.compile(
+        r"\b("
+        r"calo|kcal|calories?|protein|carb|fat|"
+        r"dinh duong|nutrition|thuc pham|mon|bua an|"
+        r"giam can|tang can|tang co|muscle|"
+        r"minh an|toi an|i ate|i am eating|vua an|dang an|"
+        r"pho|bun|banh|com tam|com ga|goi cuon|cha gio|"
+        r"nem ran|bo kho|ca kho|thit kho|canh chua"
+        r")\b"
+    )
+
+    def _looks_off_topic(self, q):
+        # Require at least one off-topic phrase AND no nutrition keyword,
+        # so "tính giúp mình calo trong python rolls" isn't misrouted.
+        if self._FOOD_SIGNAL_RE.search(q):
+            return False
+        return any(phrase in q for phrase in self._OFF_TOPIC_PHRASES)
+
+    def looks_harmful(self, query):
+        q = self._normalize(query)
+        return any(phrase in q for phrase in self._HARM_PHRASES)
+
+    def looks_profile_lookup(self, query):
+        q = self._normalize(query)
+        return any(phrase in q for phrase in self._PROFILE_LOOKUP_PHRASES)
+
     def classify(self, query, forced_intent=None):
         if forced_intent:
             return forced_intent
 
         q = self._normalize(query)
+
+        if any(phrase in q for phrase in self._HARM_PHRASES):
+            return "refuse_harm"
+
+        if self._looks_off_topic(q):
+            return "off_topic"
 
         if self._has_phrase(q, [
             "tang bao nhieu kg", "giam bao nhieu kg", "tang can bao nhieu",
@@ -385,7 +469,7 @@ class AgenticResponseGenerator:
         )
 
     async def generate(self, query, intent, context, citations, trace, conversation_context=None, user_profile_text=None):
-        if not context and intent not in ("weight_projection",):
+        if not context and intent not in ("weight_projection", "off_topic"):
             return self._no_context_answer(query)
 
         try:
@@ -428,6 +512,19 @@ class GenericRAGAgent:
         "yen mach": "oats",
         "dau phu": "tofu",
     }
+
+    # Keywords (accent-stripped, lowercase) that signal a Vietnamese-cuisine query.
+    # When matched, the vn_food_* Qdrant collection gets a rerank boost so
+    # multilingual embeddings don't drag Pad Thai / bun cha into "phở" answers.
+    VN_FOOD_KEYWORDS = (
+        "pho", "bun", "banh", "com tam", "com ga", "com suon", "goi cuon",
+        "cha gio", "nem ran", "nem cuon", "mi quang", "hu tieu", "bun bo",
+        "bun cha", "bun rieu", "bun mam", "bun thit", "bun dau",
+        "banh xeo", "banh cuon", "banh canh", "banh mi", "banh khot",
+        "che ", "xoi ", "xeo ", "bo kho", "ca kho", "thit kho", "canh chua",
+        "lau ", "nuoc cham", "nuoc mam", "tom kho", "ga kho",
+    )
+    VN_FOOD_COLLECTION = "vn_food_vectors_768"
 
     def __init__(self, qdrant=None, text_embed=None):
         self.qdrant = qdrant or QdrantService()
@@ -490,6 +587,13 @@ class GenericRAGAgent:
         existing = set(self._text_collections())
         keywords = set(self._query_keywords(query))
         topics = matched_topics(query)
+        normalized_query = self._normalize_query(query)
+        vn_food_first = (
+            [self.VN_FOOD_COLLECTION]
+            if self._is_vn_food_query(normalized_query)
+            and self.VN_FOOD_COLLECTION in existing
+            else []
+        )
 
         topic_collections = []
         any_exclusive = False
@@ -507,6 +611,7 @@ class GenericRAGAgent:
                     "nutrition5k_vectors_768",
                     "food_common_vectors_768",
                 ]
+            preferred = vn_food_first + [c for c in preferred if c != self.VN_FOOD_COLLECTION]
             selected = [c for c in preferred if c in existing]
             return list(dict.fromkeys(selected)) or self._nutrition_collections()
 
@@ -538,9 +643,16 @@ class GenericRAGAgent:
                 "food_recipe_images_text_768",
             ]
         else:
-            return self._nutrition_collections()
+            # No keyword/topic match — fall back to the curated nutrition list,
+            # but still float vn_food to the top when the query mentions a
+            # Vietnamese dish (so "Bò kho có giàu protein không?" still
+            # surfaces curated VN macros instead of going generic).
+            base = self._nutrition_collections()
+            merged = vn_food_first + [c for c in base if c != self.VN_FOOD_COLLECTION]
+            return merged
 
-        selected = [collection for collection in preferred if collection in existing]
+        merged_preferred = vn_food_first + [c for c in preferred if c != self.VN_FOOD_COLLECTION]
+        selected = [collection for collection in merged_preferred if collection in existing]
         return selected or self._nutrition_collections()
 
     def _expand_query(self, query):
@@ -625,6 +737,124 @@ class GenericRAGAgent:
             or ""
         )
 
+    def _is_vn_food_query(self, normalized_query):
+        if not normalized_query:
+            return False
+        return any(kw in normalized_query for kw in self.VN_FOOD_KEYWORDS)
+
+    # Filler tokens that bury the dish phrase when embedding a full
+    # Vietnamese sentence — stripping them before the vn_food search keeps
+    # the vector aligned with curated dish-name entries. Includes
+    # conversation-history scaffolding ("user", "assistant", "ngu canh"...)
+    # that appears in expanded retrieval queries on follow-up turns.
+    _VN_FOOD_FILLER_RE = re.compile(
+        r"\b(co|bao nhieu|la gi|gi|nhu the nao|nhu vay|so sanh|so sanh voi|"
+        r"cua|cho|toi|minh|ban|nguoi|user|assistant|"
+        r"ngu canh|hoi thoai|gan day|gan|day|cau hoi|hien tai|"
+        r"trong|mot|hai|ba|bon|nam|sau|bay|tam|chin|muoi|"
+        r"to|bat|dia|chen|phan|khau phan|mieng|"
+        r"calo|calories?|kcal|protein|carb|carbs|fat|chat beo|chat xo|chat dam|"
+        r"dinh duong|nguyen lieu|thanh phan|"
+        r"nhieu|it|hon|khong|co the|nen|an|uong|"
+        r"hay|giup|tu van|hoi|hen|xin|vui long|"
+        r"chua|kcal/100g|g/100g|tuy nhien|"
+        r"va|voi|hoac|quay lai|lai|chuyen|luc nay|luc nao|"
+        r"giau|nhieu|it|muon|tang co|tang can|giam can|giam beo|tang|giam|"
+        r"phu hop|hop voi|kieng|an kieng|che do|"
+        r"dau mo|chat dam|chat beo|chat xo|"
+        r"cai nao|cai gi|cai do|thi sao|nhu the nao|"
+        r"\d+)\b",
+        re.IGNORECASE
+    )
+
+    def _vn_dish_phrase(self, query, normalized_query=None):
+        """Pull the Vietnamese dish phrase out of a noisy question.
+
+        Returns None when no VN food keyword is detected; otherwise returns
+        a short phrase (accent-stripped) suitable for a targeted
+        vn_food_vectors_768 search. Embedding the full sentence
+        ("Phở bò có bao nhiêu calo trong một tô?") drifts the vector off
+        the curated dish entries — embedding "pho bo" alone surfaces the
+        right row. For follow-up queries with conversation history baked
+        in, we anchor on the CURRENT question only (after "Câu hỏi hiện
+        tại:" / "Cau hoi hien tai:") so the phrase doesn't grab a dish
+        from an earlier turn ("banh mi thit" from history when current
+        question is about "bo kho").
+        """
+        nq = normalized_query if normalized_query is not None else self._normalize_query(query)
+        if not self._is_vn_food_query(nq):
+            return None
+        # When the upstream stitched conversation history in front of the
+        # current question (see _retrieval_query), drop everything before
+        # the explicit anchor so the dish phrase reflects what user just
+        # asked, not what they asked five turns ago.
+        anchor_match = re.search(r"cau hoi hien tai\s*:\s*(.+)$", nq, re.DOTALL)
+        scope = anchor_match.group(1) if anchor_match else nq
+        cleaned = self._VN_FOOD_FILLER_RE.sub(" ", scope)
+        cleaned = re.sub(r"[?!.,;:\n]+", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            return None
+
+        tokens = cleaned.split()
+        # Strip artifacts like "/100g" and leading single-char fragments.
+        tokens = [t for t in tokens if not re.match(r"^[/\-\d].*$", t) and len(t) >= 2]
+        if not tokens:
+            return None
+
+        # Take the first VN-keyword anchor and the next ~3 tokens. Dedupe
+        # consecutive repeats so noisy expansions ("pho bo pho bo pho bo...")
+        # collapse to a clean phrase suitable for embedding.
+        anchor_idx = next(
+            (i for i, _ in enumerate(tokens)
+             if any(kw in " ".join(tokens[i: i + 2]) for kw in self.VN_FOOD_KEYWORDS)),
+            None,
+        )
+        if anchor_idx is None:
+            return None
+        window = tokens[anchor_idx: anchor_idx + 4]
+
+        deduped = []
+        for tok in window:
+            if not deduped or deduped[-1] != tok:
+                deduped.append(tok)
+        return " ".join(deduped)[:80]
+
+    def _vn_dish_phrases(self, query, normalized_query=None, max_phrases=3):
+        """Return up to `max_phrases` distinct dish phrases for queries that
+        compare multiple Vietnamese dishes ("Chả giò và bánh xèo, cái nào
+        nhiều dầu mỡ hơn?"). The single-phrase _vn_dish_phrase only embeds
+        ~4 tokens around the FIRST keyword, so the second dish would never
+        surface in vn_food. Splitting on conjunctions and re-running the
+        extractor on each segment gives every dish its own search vector.
+        """
+        nq = normalized_query if normalized_query is not None else self._normalize_query(query)
+        if not self._is_vn_food_query(nq):
+            return []
+        anchor_match = re.search(r"cau hoi hien tai\s*:\s*(.+)$", nq, re.DOTALL)
+        scope = anchor_match.group(1) if anchor_match else nq
+        # Split on common Vietnamese coordination conjunctions plus
+        # comparison glue. Each segment is a candidate dish chunk.
+        segments = re.split(
+            r"\b(?:va|voi|hoac|hay|vs|versus|so sanh)\b|[,/]+|\bthi cai nao\b|\bcai nao\b",
+            scope,
+        )
+        phrases = []
+        seen = set()
+        for seg in segments:
+            ph = self._vn_dish_phrase(seg, normalized_query=seg.strip())
+            if ph and ph not in seen:
+                seen.add(ph)
+                phrases.append(ph)
+                if len(phrases) >= max_phrases:
+                    break
+        # Fallback: if splitting yielded nothing useful, fall back to single.
+        if not phrases:
+            single = self._vn_dish_phrase(query, normalized_query=nq)
+            if single:
+                phrases.append(single)
+        return phrases
+
     def _rerank_score(self, hit, keywords, normalized_query=""):
         score = float(getattr(hit, "score", 0) or 0)
         payload = hit.payload or {}
@@ -640,8 +870,14 @@ class GenericRAGAgent:
         if name and len(name) >= 5 and normalized_query and name in normalized_query:
             bonus += 0.30
 
+        collection = str(payload.get("source_collection") or "")
+
+        # Vietnamese-cuisine query → prefer the curated vn_food collection
+        # over multilingual matches in recipes_64k that drift to Pad Thai etc.
+        if collection == self.VN_FOOD_COLLECTION and self._is_vn_food_query(normalized_query):
+            bonus += 0.40
+
         if keywords:
-            collection = str(payload.get("source_collection") or "")
             for keyword in keywords:
                 keyword = keyword.lower()
                 if name == keyword:
@@ -716,10 +952,53 @@ class GenericRAGAgent:
             except Exception as exc:
                 print("❌ Parallel collection search error:", exc)
 
+        # Targeted secondary search against vn_food using only the dish
+        # phrase(s) — the full-sentence embedding above misses curated VN
+        # rows. Splitting on conjunctions surfaces every dish in compare
+        # queries ("Chả giò và bánh xèo, cái nào nhiều dầu mỡ hơn?").
+        vn_phrases = self._vn_dish_phrases(query, normalized_query=normalized_query)
+        if vn_phrases and self.VN_FOOD_COLLECTION in collections:
+            seen_ids = {(hit.id, str(hit.payload.get("source_collection") or "")) for hit in hits}
+            for phrase in vn_phrases:
+                vn_vector = self.text_embed.embed(phrase)
+                if vn_vector is None:
+                    continue
+                try:
+                    vn_hits = self.qdrant.search(
+                        collection_name=self.VN_FOOD_COLLECTION,
+                        vector=vn_vector,
+                        top_k=per_collection,
+                    )
+                except Exception as exc:
+                    print(f"❌ vn_food focused search error for {phrase!r}:", exc)
+                    continue
+                for hit in vn_hits:
+                    payload = dict(hit.payload or {})
+                    payload.setdefault("source_collection", self.VN_FOOD_COLLECTION)
+                    hit.payload = payload
+                    key = (hit.id, self.VN_FOOD_COLLECTION)
+                    if key not in seen_ids:
+                        seen_ids.add(key)
+                        hits.append(hit)
+
         hits.sort(
             key=lambda hit: self._rerank_score(hit, keywords, normalized_query),
             reverse=True
         )
+        if not hits:
+            return hits
+        # Drop low-relevance tails: anything below 60% of the top reranked
+        # score is likely noise and bleeds into the table ("Đầu heo" sneaking
+        # into a phở question). Keep at least 1 hit so we always answer.
+        top_score = self._rerank_score(hits[0], keywords, normalized_query)
+        if top_score > 0:
+            min_score = max(top_score * 0.6, 0.25)
+            filtered = [
+                hit for hit in hits
+                if self._rerank_score(hit, keywords, normalized_query) >= min_score
+            ]
+            if filtered:
+                hits = filtered
         return hits[:top_k]
 
     def run(self, query, top_k, trace, collections=None, per_collection=None):
@@ -1674,6 +1953,82 @@ class AgenticRAG:
         user_profile=None
     ):
         trace = AgenticTrace()
+
+        # Pre-classify guards — refuse / clarify before retrieval so we don't
+        # leak RAG context into harmful or empty queries, and don't fabricate
+        # personal data from random vector hits.
+        stripped_query = (query or "").strip()
+        if len(re.sub(r"[\s\.,;:!?\"'`()\[\]{}\-—_]+", "", stripped_query)) < 3:
+            trace.add(
+                "Reject empty/too-short query",
+                "Câu hỏi không đủ nội dung để truy xuất hoặc trả lời.",
+                evidence=[query],
+                status="warning"
+            )
+            return {
+                "type": "agentic_rag",
+                "intent": "clarify",
+                "answer": (
+                    "Mình chưa nhận được câu hỏi rõ ràng. Bạn nhập tên món ăn, "
+                    "câu hỏi về dinh dưỡng, hoặc mục tiêu (giảm cân/tăng cơ...) "
+                    "để mình hỗ trợ chính xác hơn nhé."
+                ),
+                "results": [], "citations": [], "context_used": [],
+                "trace": trace.steps, "session_id": session_id, "cache_hit": False
+            }
+
+        if self.router.looks_harmful(query):
+            trace.add(
+                "Refuse harmful request",
+                "Câu hỏi chứa từ khóa có hại / phi pháp — từ chối thẳng, không retrieve.",
+                evidence=[query],
+                status="warning"
+            )
+            return {
+                "type": "agentic_rag",
+                "intent": "refuse_harm",
+                "answer": (
+                    "Mình không thể hỗ trợ yêu cầu này. CalAI chỉ tư vấn về "
+                    "dinh dưỡng, thực phẩm và sức khỏe. Nếu bạn đang gặp khó "
+                    "khăn về sức khỏe tinh thần, hãy liên hệ đường dây hỗ trợ "
+                    "tâm lý uy tín ở địa phương."
+                ),
+                "results": [], "citations": [], "context_used": [],
+                "trace": trace.steps, "session_id": session_id, "cache_hit": False
+            }
+
+        # Profile lookup without real profile → refuse deterministically.
+        # Avoids the LLM saying "you usually eat fried chicken and Gerolsteiner"
+        # when no preferences are loaded.
+        has_real_profile = bool(
+            user_profile and isinstance(user_profile, dict) and (
+                user_profile.get("foodPreferences")
+                or user_profile.get("dailyCalories")
+                or user_profile.get("goal")
+            )
+        )
+        if self.router.looks_profile_lookup(query) and not has_real_profile:
+            trace.add(
+                "Profile lookup without profile",
+                "User hỏi về sở thích/lịch sử ăn uống nhưng hệ thống chưa có hồ sơ — không bịa.",
+                evidence=[query],
+                status="warning"
+            )
+            return {
+                "type": "agentic_rag",
+                "intent": "profile_missing",
+                "answer": (
+                    "Mình chưa có hồ sơ ăn uống của bạn nên không thể liệt kê "
+                    "các món bạn hay ăn. Bạn có thể:\n"
+                    "- Cập nhật mục **Diet Goals** và **Profile Setup** trong app "
+                    "để mình ghi nhận sở thích, mục tiêu và dị ứng.\n"
+                    "- Hoặc nói trực tiếp một vài món bạn hay ăn để mình tư vấn "
+                    "ngay trong cuộc trò chuyện này."
+                ),
+                "results": [], "citations": [], "context_used": [],
+                "trace": trace.steps, "session_id": session_id, "cache_hit": False
+            }
+
         routed_intent = self.router.classify(query, forced_intent=intent)
         trace.add(
             "Agent Router",
@@ -1913,6 +2268,13 @@ class AgenticRAG:
                 "Weight projection intent",
                 "Câu hỏi là ước tính tăng/giảm cân nên response generator sẽ dùng công thức năng lượng và nêu giả định.",
                 detail="Không truy xuất món ăn ngẫu nhiên; prompt Agentic RAG yêu cầu dùng chênh lệch kcal / 7700 khi có đủ dữ liệu."
+            )
+            results = []
+        elif routed_intent == "off_topic":
+            trace.add(
+                "Off-topic intent",
+                "Câu hỏi không liên quan dinh dưỡng — bỏ qua bước truy xuất, trả lời ngắn rồi gợi ý quay về chủ đề.",
+                detail="Không inject food CONTEXT để tránh lôi món ăn ngẫu nhiên vào câu trả lời chung."
             )
             results = []
         elif routed_intent == "nutrition_qa":

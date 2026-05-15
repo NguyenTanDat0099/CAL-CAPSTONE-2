@@ -258,16 +258,16 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
     : intakeSummary.value.toLocaleString();
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-      <header className="mb-10">
-        <h1 className="text-3xl font-black tracking-tight">Dashboard</h1>
+    <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+      <header className="mb-8 sm:mb-10 lg:pr-44">
+        <h1 className="text-2xl sm:text-3xl font-black tracking-tight">Dashboard</h1>
       </header>
 
-      <section className="mb-12">
-        <div className="bg-gradient-to-r from-[#3D2B1F] to-[#1A1A1A] rounded-[2.5rem] p-10 border border-white/5 relative overflow-hidden flex items-center justify-between">
+      <section className="mb-10 sm:mb-12">
+        <div className="nutrition-review-banner rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 border border-white/5 relative overflow-hidden flex items-center justify-between gap-6">
           <div className="relative z-10 max-w-xl">
-            <h2 className="text-4xl font-black mb-4">Nutrition Log Review</h2>
-            <p className="text-text-muted text-lg mb-8 leading-relaxed">
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black mb-3 sm:mb-4">Nutrition Log Review</h2>
+            <p className="text-text-muted text-sm sm:text-base lg:text-lg mb-6 sm:mb-8 leading-relaxed">
               These estimates are based only on meals you have logged. Missing meals are treated as missing data, not as zero intake.
             </p>
             <div className="inline-flex items-center gap-2 rounded-2xl bg-white/5 border border-white/10 px-4 py-3 text-xs font-black uppercase tracking-widest text-text-muted">
@@ -291,25 +291,25 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
         </div>
       </section>
 
-      <div className="grid grid-cols-12 gap-8 mb-12">
-        <div className="col-span-12 lg:col-span-8 bg-surface-dark/50 rounded-[2.5rem] p-10 border border-white/5">
-          <div className="flex justify-between items-center mb-10">
+      <div className="grid grid-cols-12 gap-6 sm:gap-8 mb-10 sm:mb-12">
+        <div className="col-span-12 lg:col-span-8 bg-surface-dark/50 rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 border border-white/5">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-8 sm:mb-10">
             <div>
-              <h3 className="text-2xl font-black mb-2">Logged Intake</h3>
-              <div className="flex flex-wrap items-center gap-4">
-                <div className="text-text-muted text-sm uppercase tracking-widest font-bold">{intakeSummary.label}</div>
-                <div className="text-3xl font-black">{summaryValue} <span className="text-sm font-medium opacity-40">kcal</span></div>
+              <h3 className="text-xl sm:text-2xl font-black mb-2">Logged Intake</h3>
+              <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+                <div className="text-text-muted text-xs sm:text-sm uppercase tracking-widest font-bold">{intakeSummary.label}</div>
+                <div className="text-2xl sm:text-3xl font-black">{summaryValue} <span className="text-sm font-medium opacity-40">kcal</span></div>
                 <div className="bg-white/5 text-text-muted text-[10px] font-black px-2 py-1 rounded-lg border border-white/10">
                   {intakeSummary.note}
                 </div>
               </div>
             </div>
-            <div className="flex bg-bg-dark/50 p-1 rounded-2xl border border-white/5">
+            <div className="flex bg-bg-dark/50 p-1 rounded-2xl border border-white/5 self-start">
               {(['daily', 'weekly', 'monthly'] as const).map((range) => (
                 <button
                   key={range}
                   onClick={() => setTimeRange(range)}
-                  className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                  className={`px-4 sm:px-6 py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-widest transition-all ${
                     timeRange === range ? 'bg-white/10 text-white' : 'text-text-muted hover:text-white/60'
                   }`}
                 >
@@ -375,25 +375,25 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
             </ResponsiveContainer>
           </div>
 
-          <div className="flex items-center gap-8 mt-6">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mt-6">
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-brand-orange" />
+              <div className="w-3 h-3 rounded-full bg-brand-orange shrink-0" />
               <span className="text-xs font-bold text-text-muted uppercase tracking-widest">Logged calorie intake</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-white/20" />
+              <div className="w-3 h-3 rounded-full bg-white/20 shrink-0" />
               <span className="text-xs font-bold text-text-muted uppercase tracking-widest">Estimated target ({safeDailyTarget} kcal)</span>
             </div>
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-4 bg-surface-dark/50 rounded-[2.5rem] p-10 border border-white/5 flex flex-col">
-          <div className="flex justify-between items-center mb-10">
-            <h3 className="text-2xl font-black">Macros</h3>
+        <div className="col-span-12 lg:col-span-4 bg-surface-dark/50 rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 border border-white/5 flex flex-col">
+          <div className="flex justify-between items-center mb-6 sm:mb-10">
+            <h3 className="text-xl sm:text-2xl font-black">Macros</h3>
             <Info size={20} className="text-text-muted" />
           </div>
 
-          <div className="flex-1 flex flex-col items-center justify-center mb-10">
+          <div className="flex-1 flex flex-col items-center justify-center mb-6 sm:mb-10">
             <div className="relative w-48 h-48">
               <svg className="w-full h-full transform -rotate-90">
                 <circle cx="96" cy="96" r="80" stroke="currentColor" strokeWidth="16" fill="transparent" className="text-white/5" />
@@ -459,9 +459,9 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
         </div>
       </div>
 
-      <section className="bg-surface-dark/50 rounded-[2.5rem] p-10 border border-white/5">
-        <div className="flex justify-between items-center mb-10">
-          <h3 className="text-2xl font-black">Weight Progress</h3>
+      <section className="bg-surface-dark/50 rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 border border-white/5">
+        <div className="flex flex-wrap justify-between items-center gap-3 mb-6 sm:mb-10">
+          <h3 className="text-xl sm:text-2xl font-black">Weight Progress</h3>
           <div className="flex items-center gap-2 text-text-muted text-xs font-bold uppercase tracking-widest">
             Target: {profile.targetWeight || '--'}kg
             <button className="p-1 hover:text-white transition-colors">
@@ -470,9 +470,9 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
           </div>
         </div>
 
-        <div className="flex items-end gap-12 mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-6 sm:gap-12 mb-8">
           <div>
-            <div className="text-5xl font-black mb-2">{profile.weight || '--'} <span className="text-xl font-medium opacity-40">kg</span></div>
+            <div className="text-4xl sm:text-5xl font-black mb-2">{profile.weight || '--'} <span className="text-xl font-medium opacity-40">kg</span></div>
             <div className="flex items-center gap-2 text-text-muted text-sm font-bold">
               <TrendingUp size={16} />
               {weightProgress.changeLabel}
@@ -495,7 +495,7 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-8 pt-8 border-t border-white/5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8 pt-8 border-t border-white/5">
           <div>
             <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-2">Starting Weight</p>
             <p className="text-xl font-black">{profile.startingWeight || '--'} kg</p>

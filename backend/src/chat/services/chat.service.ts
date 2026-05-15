@@ -251,17 +251,20 @@ const getLatestSessionFoodInsight = async (sessionId: number): Promise<FoodImage
 
 const formatFoodInsightContext = (insight: FoodImageInsight): string => {
   const lines = [
-    `[Vision recognition (ảnh gần nhất trong session)]`,
-    insight.dishName ? `Món: ${insight.dishName}` : null,
-    insight.confidence != null ? `Độ tin cậy: ${formatConfidence(insight.confidence)}` : null,
-    insight.portion ? `Khẩu phần: ${insight.portion}` : null,
-    insight.calories != null ? `Calories: ${formatMetric(insight.calories, 'kcal')}` : null,
-    insight.protein != null ? `Protein: ${formatMetric(insight.protein, 'g')}` : null,
-    insight.carbs != null ? `Carb: ${formatMetric(insight.carbs, 'g')}` : null,
-    insight.fat != null ? `Fat: ${formatMetric(insight.fat, 'g')}` : null,
+    `[Ảnh user vừa upload trong session này đã được phân tích — DÙNG kết quả này khi user follow-up về "tô đó", "món đó", "phở", "bún", "món vừa rồi"...]`,
+    insight.dishName ? `Tên món đã xác nhận: ${insight.dishName}` : null,
+    insight.confidence != null ? `Độ tin cậy nhận diện: ${formatConfidence(insight.confidence)}` : null,
+    insight.portion ? `Khẩu phần đã ước tính: ${insight.portion}` : null,
+    insight.calories != null ? `Calories đã chốt: ${formatMetric(insight.calories, 'kcal')}` : null,
+    insight.protein != null ? `Protein đã chốt: ${formatMetric(insight.protein, 'g')}` : null,
+    insight.carbs != null ? `Carb đã chốt: ${formatMetric(insight.carbs, 'g')}` : null,
+    insight.fat != null ? `Fat đã chốt: ${formatMetric(insight.fat, 'g')}` : null,
     insight.fiber != null ? `Chất xơ: ${formatMetric(insight.fiber, 'g')}` : null,
     insight.sodiumMg != null ? `Natri: ${formatMetric(insight.sodiumMg, 'mg')}` : null,
     insight.ingredients?.length ? `Thành phần: ${insight.ingredients.slice(0, 6).join(', ')}` : null,
+    insight.dishName
+      ? `Quy tắc: nếu user dùng từ chung chung khác với tên đã xác nhận (vd ảnh là "${insight.dishName}" nhưng user gọi là "tô phở"), bám SÁT tên đã xác nhận và số đã chốt ở trên; nếu cần có thể nói nhẹ "ảnh nhận diện là ${insight.dishName}".`
+      : null,
   ].filter((line): line is string => Boolean(line));
   return lines.join('\n');
 };
@@ -1484,10 +1487,17 @@ export const sendChatMessageService = async (
     replyImageName = normalizedContextImageName;
   }
 
+  let priorInsight: FoodImageInsight | null = null;
   if (!replyImageUrl && wantsImageContext(trimmed)) {
-    const latestImage = await getLatestSessionImage(targetSessionId);
-    replyImageUrl = latestImage?.image_url ?? null;
-    replyImageName = latestImage?.image_name ?? null;
+    priorInsight = await getLatestSessionFoodInsight(targetSessionId);
+    if (!priorInsight?.dishName) {
+      const latestImage = await getLatestSessionImage(targetSessionId);
+      replyImageUrl = latestImage?.image_url ?? null;
+      replyImageName = latestImage?.image_name ?? null;
+      priorInsight = null;
+    }
+  } else if (!replyImageUrl) {
+    priorInsight = await getLatestSessionFoodInsight(targetSessionId);
   }
 
   const chatHistory = await getRecentChatContext(targetSessionId, 10);
@@ -1497,10 +1507,6 @@ export const sendChatMessageService = async (
     contextText: buildChatContextText(chatHistory, trimmed),
     isFollowUp: isFollowUpMessage(trimmed),
   };
-
-  const priorInsight = !replyImageUrl
-    ? await getLatestSessionFoodInsight(targetSessionId)
-    : null;
 
   const assistantReply = await generateAssistantReply(
     accountId,

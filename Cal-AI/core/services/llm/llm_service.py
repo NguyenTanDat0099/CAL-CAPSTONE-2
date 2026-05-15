@@ -99,6 +99,59 @@ class LLMService:
             text = text.replace("```", "")
         return text.strip()
 
+    # Post-process the model output so internal prompt field names ("CONTEXT",
+    # "Lịch sử", "Phân tích", "Hồ sơ user", "Intent", ...) don't leak into
+    # user-facing copy. The system prompt forbids them, but smaller models
+    # still slip; this is a safety net.
+    _LEAK_REPLACEMENTS = [
+        (re.compile(r"\bDựa\s+(?:trên|vào)\s+CONTEXT\s*:?", re.IGNORECASE), "Dựa trên dữ liệu trong bảng dinh dưỡng:"),
+        (re.compile(r"\bTheo\s+CONTEXT\s*:?", re.IGNORECASE), "Theo dữ liệu trong bảng dinh dưỡng:"),
+        (re.compile(r"\bTrong\s+CONTEXT\s*:?", re.IGNORECASE), "Trong dữ liệu tham chiếu:"),
+        (re.compile(r"\bTừ\s+Lịch\s+sử\s*:?", re.IGNORECASE), "Từ những trao đổi trước:"),
+        (re.compile(r"\bTheo\s+Lịch\s+sử\s*:?", re.IGNORECASE), "Theo những trao đổi trước:"),
+        (re.compile(r"\bDựa\s+(?:trên|vào)\s+Phân\s+tích\s*:?", re.IGNORECASE), "Dựa trên kết quả phân tích ảnh:"),
+        (re.compile(r"\bTheo\s+Phân\s+tích\s*:?", re.IGNORECASE), "Theo kết quả phân tích ảnh:"),
+        (re.compile(r"\bTừ\s+CITATION\s*:?", re.IGNORECASE), "Từ nguồn tham chiếu:"),
+        (re.compile(r"\bHồ\s+sơ\s+user\s*:?", re.IGNORECASE), "Hồ sơ cá nhân của bạn:"),
+        # Bracketed internal labels (in case the model echoes them verbatim).
+        (re.compile(r"\[\s*system\s+intent\s*\]\s*:?", re.IGNORECASE), ""),
+        (re.compile(r"\[\s*system\s+guide\s*\]\s*:?", re.IGNORECASE), ""),
+        (re.compile(r"\[\s*allowed\s+names\s*\]\s*:?", re.IGNORECASE), ""),
+        (re.compile(r"\[\s*user\s+profile\s*\]\s*:?", re.IGNORECASE), "Hồ sơ cá nhân của bạn:"),
+        (re.compile(r"\[\s*conversation\s+memory\s*\]\s*:?", re.IGNORECASE), "Từ những trao đổi trước:"),
+        (re.compile(r"\[\s*reference\s+data\s*\][^:]*:?", re.IGNORECASE), "Dữ liệu tham chiếu:"),
+        (re.compile(r"\[\s*citation\s+refs?\s*\]\s*:?", re.IGNORECASE), "Nguồn tham chiếu:"),
+        (re.compile(r"\[\s*user\s+question\s*\]\s*:?", re.IGNORECASE), ""),
+    ]
+
+    # CJK character classes — Han + Hiragana + Katakana + Hangul. When the
+    # model slips into Chinese/Japanese/Korean (most often during meal-plan
+    # generation), we drop entire lines that contain any CJK so the user
+    # doesn't see "红烧肉配蒸米饭" mid-response.
+    _CJK_RE = re.compile(
+        r"[一-鿿぀-ゟ゠-ヿ가-힯＀-￯]"
+    )
+
+    def _strip_internal_labels(self, text):
+        if not isinstance(text, str):
+            return text
+        cleaned = text
+        for pattern, replacement in self._LEAK_REPLACEMENTS:
+            cleaned = pattern.sub(replacement, cleaned)
+        # Drop any line containing CJK characters.
+        if self._CJK_RE.search(cleaned):
+            kept = [
+                line for line in cleaned.splitlines()
+                if not self._CJK_RE.search(line)
+            ]
+            cleaned = "\n".join(kept).strip()
+        # Collapse the double-spaces / dangling colons that replacements
+        # sometimes leave behind.
+        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
     def _extract_json_object(self, text: str):
         text = self._strip_code_fence(text)
         try:
@@ -494,7 +547,7 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
         )
         if isinstance(text, dict):
             return None
-        return text
+        return self._strip_internal_labels(text)
 
     async def answer_agentic(
         self,
@@ -516,11 +569,13 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
             user_profile_text=user_profile_text
         )
         if intent == "meal_planning":
-            num_predict = max(settings.LLM_NUM_PREDICT, 1100)
+            num_predict = max(settings.LLM_NUM_PREDICT, 1400)
         elif intent == "weight_projection":
             num_predict = max(settings.LLM_NUM_PREDICT, 500)
         elif intent == "nutrition_qa":
-            num_predict = max(settings.LLM_NUM_PREDICT, 600)
+            num_predict = max(settings.LLM_NUM_PREDICT, 900)
+        elif intent == "off_topic":
+            num_predict = max(settings.LLM_NUM_PREDICT, 180)
         else:
             num_predict = max(settings.LLM_NUM_PREDICT, 400)
         text = await self._call_llm(
@@ -538,8 +593,25 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
                 citations=citations
             )
             if retry_text and not self._is_low_value_answer(retry_text):
-                return retry_text
-        return text
+                return self._strip_internal_labels(retry_text)
+        cleaned = self._strip_internal_labels(text)
+        # If the CJK filter gutted more than half the answer, the model
+        # mostly wrote Chinese. Retry once with a stronger language warning.
+        if isinstance(text, str) and len(cleaned) < max(80, len(text) // 2):
+            retry_prompt = (
+                prompt
+                + "\n\nLƯU Ý CỰC QUAN TRỌNG: lần trước bạn xuất ký tự Trung Quốc — "
+                "không được phép. Viết LẠI 100% bằng tiếng Việt thuần, dùng tên món "
+                "Việt cụ thể từ context."
+            )
+            retry_text = await self._call_llm(
+                retry_prompt, temperature=0.2, num_predict=num_predict
+            )
+            if isinstance(retry_text, str):
+                retry_clean = self._strip_internal_labels(retry_text)
+                if len(retry_clean) > len(cleaned):
+                    return retry_clean
+        return cleaned
 
     # =========================
     # TEXT → QA

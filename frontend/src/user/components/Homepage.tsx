@@ -120,15 +120,15 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
   const selectedDayMeals = stats.dayDiets;
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+    <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
 
       {/* Header
-          pr-44 (176 px) ensures the right edge of this row stops ~216 px from the
-          viewport right, leaving ~72 px of breathing room before the fixed
-          Bell + Avatar bar that starts at ~144 px from the right edge.        */}
-      <header className="mb-10 pr-44 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl border border-white/10 overflow-hidden shadow-xl shadow-brand-orange/10">
+          On large screens reserve room (`lg:pr-44`) for the fixed Bell + Avatar
+          bar in the top right; on small screens those controls live closer to
+          the edge and the page header doesn't need the same gutter. */}
+      <header className="mb-10 lg:pr-44 flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+          <div className="hidden sm:block w-14 h-14 rounded-2xl border border-white/10 overflow-hidden shadow-xl shadow-brand-orange/10 shrink-0">
             <img
               src={profile.avatar}
               alt={profile.name}
@@ -136,9 +136,9 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
               referrerPolicy="no-referrer"
             />
           </div>
-          <div>
-            <h1 className="text-3xl font-black tracking-tight">Hello, {(profile.name || 'there').split(' ')[0]}</h1>
-            <p className="text-text-muted font-medium">Track and review your daily nutrition.</p>
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl lg:text-3xl font-black tracking-tight truncate">Hello, {(profile.name || 'there').split(' ')[0]}</h1>
+            <p className="text-text-muted font-medium text-xs sm:text-sm">Track and review your daily nutrition.</p>
           </div>
         </div>
 
@@ -205,12 +205,12 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
         </div>
 
         {/* Day tiles */}
-        <div className="flex justify-between items-stretch gap-2">
+        <div className="flex justify-between items-stretch gap-1 sm:gap-2">
           {weekDays.map((day) => (
             <button
               key={day.key}
               onClick={() => setSelectedDate(new Date(day.fullDate))}
-              className={`flex flex-col items-center gap-2 py-4 px-3 rounded-3xl transition-all flex-1 ${
+              className={`flex flex-col items-center gap-1 sm:gap-2 py-3 px-1 sm:py-4 sm:px-3 rounded-2xl sm:rounded-3xl transition-all flex-1 min-w-0 ${
                 day.isSelected && day.isToday
                   ? 'bg-white text-bg-dark shadow-xl scale-105'
                   : day.isSelected
@@ -220,12 +220,12 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
                       : 'text-text-muted hover:bg-white/5 hover:text-white'
               }`}
             >
-              <span className={`text-[9px] font-black uppercase tracking-widest ${
+              <span className={`text-[8px] sm:text-[9px] font-black uppercase tracking-tight sm:tracking-widest ${
                 day.isSelected || day.isToday ? 'opacity-60' : 'opacity-50'
               }`}>
                 {day.name}
               </span>
-              <span className="text-xl font-black">{day.date}</span>
+              <span className="text-sm sm:text-xl font-black">{day.date}</span>
               {/* Calorie dot indicator */}
               <div className="h-4 flex flex-col items-center justify-center">
                 {day.hasMeals ? (
@@ -260,36 +260,36 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.2 }}
           >
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-2xl font-black">
+            <div className="flex items-start sm:items-center justify-between gap-3 mb-6 sm:mb-8 flex-wrap">
+              <h2 className="text-lg sm:text-2xl font-black">
                 Logged Nutrition
-                <span className="ml-3 text-brand-orange font-black">{selectedDateLabel}</span>
+                <span className="ml-2 sm:ml-3 text-brand-orange font-black">{selectedDateLabel}</span>
               </h2>
               {stats.consumed.calories === 0 && (
-                <span className="text-xs font-bold text-text-muted px-3 py-1.5 rounded-full bg-white/5">
+                <span className="text-xs font-bold text-text-muted px-3 py-1.5 rounded-full bg-white/5 shrink-0">
                   No meals logged
                 </span>
               )}
             </div>
 
-            <div className="grid grid-cols-12 gap-6">
+            <div className="grid grid-cols-12 gap-4 sm:gap-6">
               {/* Calories card */}
-              <div className="col-span-12 lg:col-span-6 bg-[#D4C3F9] rounded-[3rem] p-10 text-bg-dark relative overflow-hidden h-[400px] flex flex-col">
-                <h3 className="text-3xl font-black mb-8">Calories</h3>
+              <div className="col-span-12 lg:col-span-6 bg-[#D4C3F9] rounded-[2.5rem] sm:rounded-[3rem] p-6 sm:p-10 text-bg-dark relative overflow-hidden h-[300px] sm:h-[400px] flex flex-col">
+                <h3 className="text-2xl sm:text-3xl font-black mb-4 sm:mb-8">Calories</h3>
                 <div className="flex-1 flex flex-col items-center justify-center relative">
-                  <div className="relative w-64 h-32 overflow-hidden">
-                    <div className="absolute top-0 left-0 w-64 h-64 border-[24px] border-white/20 rounded-full" />
+                  <div className="relative w-48 h-24 sm:w-64 sm:h-32 overflow-hidden">
+                    <div className="absolute top-0 left-0 w-48 h-48 sm:w-64 sm:h-64 border-[18px] sm:border-[24px] border-white/20 rounded-full" />
                     <motion.div
                       key={selectedKey + '-cal'}
                       initial={{ rotate: -180 }}
                       animate={{ rotate: -180 + (calorieProgress * 1.8) }}
                       transition={{ duration: 1.2, ease: 'easeOut' }}
-                      className="absolute top-0 left-0 w-64 h-64 border-[24px] border-bg-dark rounded-full border-t-transparent border-r-transparent"
+                      className="absolute top-0 left-0 w-48 h-48 sm:w-64 sm:h-64 border-[18px] sm:border-[24px] border-bg-dark rounded-full border-t-transparent border-r-transparent"
                       style={{ transformOrigin: 'center center' }}
                     />
                   </div>
-                  <div className="text-center mt-4">
-                    <div className="text-6xl font-black leading-none">{Math.abs(calorieLeft).toLocaleString()}</div>
+                  <div className="text-center mt-3 sm:mt-4">
+                    <div className="text-4xl sm:text-6xl font-black leading-none">{Math.abs(calorieLeft).toLocaleString()}</div>
                     <div className="text-sm font-bold opacity-60 uppercase tracking-widest mt-2">{calorieStatusLabel}</div>
                     {isViewingToday && carryOver < 0 && (
                       <div className="mt-4 px-4 py-1 bg-bg-dark/10 rounded-full inline-block">
@@ -307,7 +307,7 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
               </div>
 
               {/* Carbs card */}
-              <div className="col-span-12 lg:col-span-3 bg-[#E9F994] rounded-[3rem] p-10 text-bg-dark flex flex-col justify-between h-[400px]">
+              <div className="col-span-12 sm:col-span-6 lg:col-span-3 bg-[#E9F994] rounded-[2.5rem] sm:rounded-[3rem] p-6 sm:p-10 text-bg-dark flex flex-col justify-between h-[320px] sm:h-[400px]">
                 <h3 className="text-2xl font-black">Carbs</h3>
                 <div className="flex flex-col items-center">
                   <div className="w-32 h-32 rounded-full bg-bg-dark/5 flex items-center justify-center mb-8">
@@ -332,7 +332,7 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
               </div>
 
               {/* Protein card */}
-              <div className="col-span-12 lg:col-span-3 bg-[#82F9A1] rounded-[3rem] p-10 text-bg-dark flex flex-col justify-between h-[400px]">
+              <div className="col-span-12 sm:col-span-6 lg:col-span-3 bg-[#82F9A1] rounded-[2.5rem] sm:rounded-[3rem] p-6 sm:p-10 text-bg-dark flex flex-col justify-between h-[320px] sm:h-[400px]">
                 <h3 className="text-2xl font-black">Protein</h3>
                 <div className="flex flex-col items-center">
                   <div className="w-32 h-32 rounded-full bg-bg-dark/5 flex items-center justify-center mb-8">
@@ -362,8 +362,8 @@ export function Homepage({ myDiets, onTabChange, dailyTarget, baseTarget, carryO
 
       {/* Meals of Selected Day */}
       <section className="pb-32">
-        <div className="flex justify-between items-center mb-8">
-          <h2 className="text-2xl font-black">
+        <div className="flex justify-between items-center mb-6 sm:mb-8 gap-3">
+          <h2 className="text-xl sm:text-2xl font-black truncate">
             {isViewingToday ? 'Diet Plan' : `Meals — ${selectedDateLabel}`}
           </h2>
           <button
