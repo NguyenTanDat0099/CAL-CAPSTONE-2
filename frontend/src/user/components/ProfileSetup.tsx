@@ -125,25 +125,25 @@ export function ProfileSetup({ profile, setProfile, onLogout }: ProfileSetupProp
 
   return (
     <div className="min-h-screen bg-bg-dark text-white overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-10 pt-10 pb-20">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-10 pt-6 sm:pt-10 pb-20">
 
         {/* Header */}
-        <header className="mb-12">
-          <div className="flex items-center justify-between mb-4">
-            <div>
+        <header className="mb-8 sm:mb-12">
+          <div className="flex items-start justify-between gap-3 mb-4">
+            <div className="min-w-0">
               <p className="text-brand-orange text-xs font-bold uppercase tracking-[0.2em] mb-2">Welcome to CalAI</p>
-              <h1 className="text-5xl font-black tracking-tight">Profile Setup</h1>
+              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight">Profile Setup</h1>
             </div>
             <button
               type="button"
               onClick={onLogout}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-text-muted hover:text-white transition-colors text-sm font-bold"
+              className="flex items-center gap-2 px-3 sm:px-4 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-text-muted hover:text-white transition-colors text-sm font-bold shrink-0"
             >
               <LogOut size={16} />
-              Sign Out
+              <span className="hidden sm:inline">Sign Out</span>
             </button>
           </div>
-          <p className="text-text-muted text-base mb-6">
+          <p className="text-text-muted text-sm sm:text-base mb-6">
             Tell us about yourself so we can personalize your daily nutrition plan.
           </p>
           <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
@@ -211,7 +211,7 @@ export function ProfileSetup({ profile, setProfile, onLogout }: ProfileSetupProp
         </AnimatePresence>
 
         <form onSubmit={handleSubmit} noValidate>
-          <div className="space-y-16">
+          <div className="space-y-10 sm:space-y-16">
 
             {/* Section 1: Primary Goal */}
             <section>
@@ -240,7 +240,7 @@ export function ProfileSetup({ profile, setProfile, onLogout }: ProfileSetupProp
                 )}
               </AnimatePresence>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                 {goals.map((goal) => {
                   const isSelected = profile.goal === goal.id;
                   const isSuggested = suggested === goal.id && !!errors.goalMismatch;
@@ -376,7 +376,7 @@ export function ProfileSetup({ profile, setProfile, onLogout }: ProfileSetupProp
                 Used to calculate your Basal Metabolic Rate (BMR) and daily calorie target.
               </p>
 
-              <div className="grid grid-cols-2 gap-x-8 gap-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 sm:gap-x-8 gap-y-5 sm:gap-y-6">
 
                 {/* Gender */}
                 <div className="col-span-1">

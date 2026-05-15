@@ -149,8 +149,8 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
 
   if (selectedMeal) {
     return (
-      <div className="flex-1 ml-64 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-        <div className="h-[450px] relative">
+      <div className="flex-1 lg:ml-64 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+        <div className="h-[280px] sm:h-[360px] lg:h-[450px] relative">
           {selectedMeal.image ? (
             <img src={selectedMeal.image} alt={selectedMeal.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           ) : (
@@ -159,42 +159,42 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
             </div>
           )}
           <div className="absolute inset-0 bg-gradient-to-b from-bg-dark/40 via-transparent to-bg-dark" />
-          
-          <button 
+
+          <button
             onClick={() => setSelectedMeal(null)}
-            className="absolute top-8 left-8 flex items-center gap-2 px-4 py-2 rounded-full bg-bg-dark/40 backdrop-blur-md border border-white/10 hover:bg-bg-dark/60 transition-colors z-10"
+            className="absolute top-4 left-4 sm:top-8 sm:left-8 flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-full bg-bg-dark/40 backdrop-blur-md border border-white/10 hover:bg-bg-dark/60 transition-colors z-10"
           >
             <ArrowLeft size={18} />
             <span className="text-sm font-bold">Back</span>
           </button>
 
-          <div className="absolute bottom-12 left-10 right-10">
-            <span className="px-3 py-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black uppercase tracking-widest mb-4 inline-block">
+          <div className="absolute bottom-8 left-4 right-4 sm:bottom-12 sm:left-10 sm:right-10">
+            <span className="px-3 py-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black uppercase tracking-widest mb-3 inline-block">
               {selectedMeal.displayCategory ?? selectedMeal.category}
             </span>
-            <h1 className="text-6xl font-black tracking-tight mb-4">{selectedMeal.name}</h1>
-            <p className="text-white/80 text-lg max-w-2xl leading-relaxed">
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black tracking-tight mb-3 sm:mb-4">{selectedMeal.name}</h1>
+            <p className="text-white/80 text-sm sm:text-lg max-w-2xl leading-relaxed">
               {selectedMeal.description}
             </p>
           </div>
         </div>
 
-        <div className="p-10 space-y-10 pb-32">
+        <div className="px-4 py-8 sm:px-6 sm:py-10 lg:p-10 space-y-8 sm:space-y-10 pb-24 sm:pb-32">
           {/* About Section */}
-          <section className="bg-surface-dark/50 rounded-[2.5rem] p-8 border border-white/5">
+          <section className="bg-surface-dark/50 rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-8 border border-white/5">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
                 <Info size={20} />
               </div>
               <h2 className="text-xl font-bold">About this Meal</h2>
             </div>
-            <p className="text-text-muted leading-relaxed text-lg">
+            <p className="text-text-muted leading-relaxed text-base sm:text-lg">
               {selectedMeal.about}
             </p>
           </section>
 
           {/* Stats Grid */}
-          <div className="grid grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
             {[
               { label: 'Energy', value: `${selectedMeal.calories.toLocaleString()} kcal`, sub: 'Daily Target', color: 'bg-brand-orange', icon: <Flame size={20} /> },
               { label: 'Protein', value: `${selectedMeal.protein}g`, sub: 'Building Blocks', color: 'bg-green-500', icon: <Zap size={20} /> },
@@ -218,14 +218,14 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
           </div>
 
           {/* Action Bar */}
-          <div className="bg-surface-dark rounded-[2.5rem] p-8 border border-white/5 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
+          <div className="bg-surface-dark rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-8 border border-white/5 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+            <div className="flex items-center gap-4 min-w-0">
+              <div className="w-14 h-14 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange shrink-0">
                 <Heart size={28} />
               </div>
-              <div>
+              <div className="min-w-0">
                 <p className="text-[10px] text-text-muted uppercase tracking-widest font-bold mb-1">Goal Focus</p>
-                <p className="text-xl font-bold">Heart Health & Weight Maintenance</p>
+                <p className="text-lg sm:text-xl font-bold">Heart Health & Weight Maintenance</p>
               </div>
             </div>
             <motion.button
@@ -245,7 +245,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
                 }, { mealType: selectedMeal.category === 'Other' ? undefined : selectedMeal.category });
                 setSelectedMeal(null);
               }}
-              className="bg-brand-orange text-bg-dark font-black py-4 px-10 rounded-2xl flex items-center gap-3 shadow-xl shadow-brand-orange/20"
+              className="bg-brand-orange text-bg-dark font-black py-3 sm:py-4 px-6 sm:px-10 rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-brand-orange/20 w-full md:w-auto"
             >
               <PlusCircle size={20} />
               Add to My Diet
@@ -257,29 +257,29 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
   }
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-      <header className="mb-12">
+    <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+      <header className="mb-10 sm:mb-12 lg:pr-44">
         <div className="flex items-center gap-3 text-brand-orange mb-4">
           <Utensils size={20} />
           <span className="text-sm font-bold uppercase tracking-widest">Meal plans</span>
         </div>
-        <h1 className="text-5xl font-black tracking-tight mb-4">Discover New Meals</h1>
-        <p className="text-text-muted text-lg max-w-2xl leading-relaxed">
+        <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight mb-4">Discover New Meals</h1>
+        <p className="text-text-muted text-sm sm:text-base lg:text-lg max-w-2xl leading-relaxed">
           Browse foods curated by admins in Content Manager. Filter by meal type and calories before adding an item to your diet log.
         </p>
       </header>
 
       {communitySchedules.length > 0 && (
         <section className="mb-12">
-          <div className="flex items-end justify-between mb-5">
-            <div>
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-5">
+            <div className="min-w-0">
               <div className="flex items-center gap-2 text-emerald-300 mb-2">
                 <Sparkles size={16} />
                 <span className="text-xs font-black uppercase tracking-widest">From the community</span>
               </div>
-              <h2 className="text-2xl font-black">Meal plans shared by other CalAI users</h2>
+              <h2 className="text-xl sm:text-2xl font-black">Meal plans shared by other CalAI users</h2>
             </div>
-            <p className="text-xs text-text-muted">{communitySchedules.length} shared plan{communitySchedules.length === 1 ? '' : 's'}</p>
+            <p className="text-xs text-text-muted shrink-0">{communitySchedules.length} shared plan{communitySchedules.length === 1 ? '' : 's'}</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {communitySchedules.map(s => {
@@ -335,8 +335,8 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
       </AnimatePresence>
 
       {/* Navigation & Search */}
-      <div className="flex items-center justify-between mb-8 border-b border-white/10">
-        <div className="flex gap-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8 border-b border-white/10">
+        <div className="flex gap-5 sm:gap-8 overflow-x-auto -mx-1 px-1 pb-1">
           {categoryTabs.map((cat) => (
             <button
               key={cat}
@@ -353,42 +353,42 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
           ))}
         </div>
 
-        <div className="relative mb-4">
+        <div className="relative mb-4 sm:mb-0 w-full sm:w-auto">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted" size={18} />
           <input
             type="text"
             placeholder="Search food items..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-surface-dark border border-white/5 rounded-2xl py-3 pl-12 pr-6 w-80 focus:outline-none focus:border-brand-orange transition-colors text-sm"
+            className="bg-surface-dark border border-white/5 rounded-2xl py-3 pl-12 pr-6 w-full sm:w-80 focus:outline-none focus:border-brand-orange transition-colors text-sm"
           />
         </div>
       </div>
 
       {/* Calorie Filter */}
-      <div className="bg-surface-dark/50 rounded-[2rem] p-8 border border-white/5 mb-10 flex items-center gap-8">
-        <div className="flex items-center gap-4">
+      <div className="bg-surface-dark/50 rounded-[2rem] p-5 sm:p-8 border border-white/5 mb-10 flex flex-wrap items-center gap-5 sm:gap-8">
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">Calories (kcal)</span>
           <div className="flex items-center gap-3">
             <input
               type="number"
               value={minKcal}
               onChange={(e) => setMinKcal(e.target.value)}
-              className="bg-bg-dark border border-white/10 rounded-xl px-4 py-2 w-24 text-center focus:outline-none focus:border-brand-orange text-sm"
+              className="bg-bg-dark border border-white/10 rounded-xl px-3 sm:px-4 py-2 w-20 sm:w-24 text-center focus:outline-none focus:border-brand-orange text-sm"
             />
             <span className="text-text-muted text-xs">to</span>
             <input
               type="number"
               value={maxKcal}
               onChange={(e) => setMaxKcal(e.target.value)}
-              className="bg-bg-dark border border-white/10 rounded-xl px-4 py-2 w-24 text-center focus:outline-none focus:border-brand-orange text-sm"
+              className="bg-bg-dark border border-white/10 rounded-xl px-3 sm:px-4 py-2 w-20 sm:w-24 text-center focus:outline-none focus:border-brand-orange text-sm"
             />
           </div>
         </div>
 
         <button
           onClick={handleReset}
-          className="flex items-center gap-2 px-6 py-2 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-sm font-bold text-text-muted hover:text-white"
+          className="flex items-center gap-2 px-4 sm:px-6 py-2 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-sm font-bold text-text-muted hover:text-white"
         >
           <RotateCcw size={16} />
           Reset

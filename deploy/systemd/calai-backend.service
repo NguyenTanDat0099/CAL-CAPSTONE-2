@@ -1,0 +1,28 @@
+# Express backend running under pm2-runtime so systemd is the supervisor of
+# record (pm2's own startup hook is fine but doubling up gets messy).
+#
+# Enable with:  systemctl enable --now calai-backend.service
+
+[Unit]
+Description=CalAI Express backend (pm2 cluster)
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=tarou
+WorkingDirectory=/home/tarou/cap2/backend
+EnvironmentFile=-/home/tarou/cap2/backend/.env
+Environment="NODE_ENV=production"
+
+# pm2-runtime keeps pm2 in the foreground so systemd sees a real long-running
+# process. Cluster fan-out is described in deploy/ecosystem.config.js.
+ExecStart=/usr/bin/npx pm2-runtime start /home/tarou/cap2/deploy/ecosystem.config.js
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

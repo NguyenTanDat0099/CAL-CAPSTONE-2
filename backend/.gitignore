@@ -3,3 +3,4 @@ dist/
 /Database/
 *.log
 .env
+.dataset-reports/

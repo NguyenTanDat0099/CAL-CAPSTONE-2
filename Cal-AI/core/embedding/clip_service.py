@@ -143,7 +143,7 @@ class CLIPService:
 
         key = f"text:{self._hash_text(text)}"
 
-
+    
         cached = self.cache.get(key)
         cached_vector = self._decode_cached_vector(cached)
         if cached_vector:
@@ -153,7 +153,7 @@ class CLIPService:
         with torch.no_grad():
             vector = self.model.get_text_features(**inputs)[0].detach().cpu().numpy().tolist()
 
-
+    
         self.cache.set(key, vector)
 
         return vector

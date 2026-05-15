@@ -104,7 +104,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
   const narrative = `${objectiveLabel} goal with ${(activityLabels[profile.activityLevel] || 'Moderate').toLowerCase()} activity. Current weight is ${profile.weight || '--'}kg${profile.targetWeight ? ` with a ${profile.targetWeight}kg target` : ''}.`;
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+    <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
       <header className="mb-10 flex items-center justify-between">
         <div className="flex items-center gap-2 text-text-muted text-sm font-bold uppercase tracking-widest">
           <span>Setting</span>
@@ -113,15 +113,15 @@ export function Settings({ profile, setProfile }: SettingsProps) {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto space-y-12">
+      <div className="max-w-6xl mx-auto space-y-8 sm:space-y-12">
         {/* Profile Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-8">
-            <div className="relative group">
-              <div className="w-32 h-32 rounded-[2rem] overflow-hidden border-2 border-brand-orange/20 p-1">
-                <img 
-                  src={profile.avatar} 
-                  alt={profile.name} 
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-8 min-w-0">
+            <div className="relative group shrink-0">
+              <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-[2rem] overflow-hidden border-2 border-brand-orange/20 p-1">
+                <img
+                  src={profile.avatar}
+                  alt={profile.name}
                   className="w-full h-full object-cover rounded-[1.8rem]"
                   referrerPolicy="no-referrer"
                 />
@@ -138,9 +138,9 @@ export function Settings({ profile, setProfile }: SettingsProps) {
                 <Camera size={18} />
               </button>
             </div>
-            <div>
-              <h1 className="text-6xl font-black tracking-tighter mb-2">{profile.name}</h1>
-              <span className="px-3 py-1 rounded-full bg-surface-lighter text-brand-orange text-[10px] font-black uppercase tracking-widest">
+            <div className="min-w-0">
+              <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black tracking-tighter mb-2 break-words">{profile.name}</h1>
+              <span className="px-3 py-1 rounded-full bg-surface-lighter text-brand-orange text-[10px] font-black uppercase tracking-widest inline-block">
                 {profile.hasCompletedSetup ? 'Profile Complete' : 'Setup Pending'}
               </span>
             </div>
@@ -152,31 +152,31 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               setEditForm(profile);
               setIsEditing(true);
             }}
-            className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-surface-lighter border border-white/5 text-sm font-bold hover:bg-white/5 transition-colors"
+            className="self-start sm:self-auto flex items-center gap-2 px-6 py-3 rounded-2xl bg-surface-lighter border border-white/5 text-sm font-bold hover:bg-white/5 transition-colors shrink-0"
           >
             <Edit3 size={18} className="text-brand-orange" />
             <span>Edit Profile</span>
           </motion.button>
         </div>
 
-        <div className="grid grid-cols-12 gap-8">
+        <div className="grid grid-cols-12 gap-6 sm:gap-8">
           {/* Left Column */}
-          <div className="col-span-12 lg:col-span-8 space-y-8">
+          <div className="col-span-12 lg:col-span-8 space-y-6 sm:space-y-8">
             {/* Personal Narrative */}
-            <section className="bg-surface-dark/30 rounded-[2.5rem] p-10 border border-white/5 relative overflow-hidden">
-              <Quote className="absolute top-8 right-8 text-white/5 w-24 h-24" />
+            <section className="bg-surface-dark/30 rounded-[2.5rem] p-6 sm:p-10 border border-white/5 relative overflow-hidden">
+              <Quote className="absolute top-6 right-6 sm:top-8 sm:right-8 text-white/5 w-16 h-16 sm:w-24 sm:h-24" />
               <div className="relative z-10">
-                <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-6">Personal Narrative</p>
-                <p className="text-2xl font-medium leading-relaxed italic text-white/90">
+                <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-4 sm:mb-6">Personal Narrative</p>
+                <p className="text-lg sm:text-2xl font-medium leading-relaxed italic text-white/90">
                   "{narrative}"
                 </p>
               </div>
             </section>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
               {/* Age */}
-              <div className="bg-surface-dark/30 rounded-[2.5rem] p-8 border border-white/5 relative group">
+              <div className="bg-surface-dark/30 rounded-[2.5rem] p-6 sm:p-8 border border-white/5 relative group">
                 <div className="flex justify-between items-start mb-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-text-muted">Age</p>
                   <Calendar size={18} className="text-text-muted opacity-30" />
@@ -188,7 +188,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               </div>
 
               {/* Height */}
-              <div className="bg-surface-dark/30 rounded-[2.5rem] p-8 border border-white/5 relative group">
+              <div className="bg-surface-dark/30 rounded-[2.5rem] p-6 sm:p-8 border border-white/5 relative group">
                 <div className="flex justify-between items-start mb-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-text-muted">Height</p>
                   <Ruler size={18} className="text-text-muted opacity-30" />
@@ -200,7 +200,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               </div>
 
               {/* Gender */}
-              <div className="bg-surface-dark/30 rounded-[2.5rem] p-8 border border-white/5 relative group">
+              <div className="bg-surface-dark/30 rounded-[2.5rem] p-6 sm:p-8 border border-white/5 relative group">
                 <div className="flex justify-between items-start mb-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-text-muted">Gender</p>
                   {profile.gender === 'male' ? <Mars size={18} className="text-text-muted opacity-30" /> : <Venus size={18} className="text-text-muted opacity-30" />}
@@ -209,7 +209,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               </div>
 
               {/* Weight */}
-              <div className="bg-surface-dark/30 rounded-[2.5rem] p-8 border border-white/5 relative group">
+              <div className="bg-surface-dark/30 rounded-[2.5rem] p-6 sm:p-8 border border-white/5 relative group">
                 <div className="flex justify-between items-start mb-4">
                   <p className="text-[10px] font-black uppercase tracking-widest text-text-muted">Weight</p>
                   <Weight size={18} className="text-text-muted opacity-30" />
@@ -223,12 +223,12 @@ export function Settings({ profile, setProfile }: SettingsProps) {
           </div>
 
           {/* Right Column */}
-          <div className="col-span-12 lg:col-span-4 space-y-8">
+          <div className="col-span-12 lg:col-span-4 space-y-6 sm:space-y-8">
             {/* Current Objective */}
-            <section className="bg-brand-orange rounded-[2.5rem] p-10 text-bg-dark relative overflow-hidden">
+            <section className="bg-brand-orange rounded-[2.5rem] p-6 sm:p-10 text-bg-dark relative overflow-hidden">
               <div className="relative z-10">
                 <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-4">Current Objective</p>
-                <h3 className="text-4xl font-black mb-12">
+                <h3 className="text-3xl sm:text-4xl font-black mb-8 sm:mb-12">
                   {objectiveLabel}
                 </h3>
 
@@ -254,18 +254,18 @@ export function Settings({ profile, setProfile }: SettingsProps) {
             </section>
 
             {/* Activity Level */}
-            <section className="bg-surface-dark/30 rounded-[2.5rem] p-10 border border-white/5 relative overflow-hidden">
-              <Zap className="absolute -bottom-4 -right-4 text-white/5 w-32 h-32" />
+            <section className="bg-surface-dark/30 rounded-[2.5rem] p-6 sm:p-10 border border-white/5 relative overflow-hidden">
+              <Zap className="absolute -bottom-4 -right-4 text-white/5 w-24 h-24 sm:w-32 sm:h-32" />
               <div className="relative z-10">
                 <p className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-4">Activity Level</p>
-                <h3 className="text-3xl font-black mb-4 capitalize">
+                <h3 className="text-2xl sm:text-3xl font-black mb-4 capitalize">
                   {activityLabels[profile.activityLevel] || 'Moderately Active'}
                 </h3>
                 <p className="text-sm text-text-muted leading-relaxed">
                   {activityDescriptions[profile.activityLevel] || activityDescriptions.moderate}
                 </p>
 
-                <div className="flex gap-2 mt-12">
+                <div className="flex gap-2 mt-8 sm:mt-12">
                   {[1, 2, 3, 4].map((step) => (
                     <div 
                       key={step}
@@ -288,7 +288,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
       {/* Edit Modal */}
       <AnimatePresence>
         {isEditing && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -300,11 +300,11 @@ export function Settings({ profile, setProfile }: SettingsProps) {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-surface-dark border border-white/10 rounded-[3rem] shadow-2xl overflow-hidden"
+              className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-surface-dark border border-white/10 rounded-[2rem] sm:rounded-[3rem] shadow-2xl"
             >
-              <div className="p-10">
-                <div className="flex justify-between items-center mb-10">
-                  <h2 className="text-3xl font-black">Edit Profile</h2>
+              <div className="p-6 sm:p-10">
+                <div className="flex justify-between items-center mb-6 sm:mb-10">
+                  <h2 className="text-2xl sm:text-3xl font-black">Edit Profile</h2>
                   <button onClick={handleCancel} className="text-text-muted hover:text-white transition-colors">
                     <X size={24} />
                   </button>
@@ -343,7 +343,7 @@ export function Settings({ profile, setProfile }: SettingsProps) {
                   </div>
 
                   {/* Stats Grid */}
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                     <div>
                       <label className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-2 block">Age</label>
                       <input 

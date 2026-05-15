@@ -669,14 +669,15 @@ const analyzeImageWithCalAi = async (imageUrl: string, source: AnalysisSource): 
     throw new Error('CAL_AI_UNAVAILABLE');
   }
 
-  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 150000);
-  const image = parseImageDataUrl(imageUrl);
+  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 360000);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const image = parseImageDataUrl(imageUrl);
     const form = new FormData();
-    form.append('file', new Blob([image.bytes], { type: image.mime }), `food-scan.${image.mime.split('/')[1] || 'jpg'}`);
+    const filename = `food-scan.${image.mime.split('/')[1] || 'jpg'}`;
+    form.append('file', new Blob([image.bytes], { type: image.mime }), filename);
 
     const response = await fetch(`${baseUrl}/api/food/analyze`, {
       method: 'POST',
@@ -1574,7 +1575,6 @@ export const analyzeFoodImageService = async (
   const user = await resolveUser(accountId);
   await ensureUserGoal(user.user_id);
 
-  // Save image record
   const [imageResult] = await pool.query(
     'INSERT INTO foodimages (user_id, image_url, source) VALUES (?, ?, ?)',
     [user.user_id, imageUrl, source]

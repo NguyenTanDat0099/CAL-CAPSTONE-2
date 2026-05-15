@@ -1,0 +1,39 @@
+# Templated unit so the FastAPI service can run on multiple ports behind nginx.
+# Enable with:  systemctl enable --now calai-python@8000.service calai-python@8001.service
+#
+# %i = instance name = the port to bind on.
+
+[Unit]
+Description=CalAI FastAPI worker on port %i
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=simple
+User=tarou
+WorkingDirectory=/home/tarou/cap2/Cal-AI
+Environment="PYTHONUNBUFFERED=1"
+EnvironmentFile=-/home/tarou/cap2/Cal-AI/.env
+
+# `uvicorn --workers N` would fork N processes that each load a 768 MB embedding
+# model. We instead run several single-worker uvicorn processes on different
+# ports and let nginx balance them — same throughput, easier to cap RAM.
+ExecStart=/home/tarou/cap2/Cal-AI/venv/bin/uvicorn api.main:app \
+    --host 127.0.0.1 \
+    --port %i \
+    --workers 1 \
+    --proxy-headers \
+    --timeout-keep-alive 75
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+# Hardening / resource limits.
+MemoryMax=4G
+LimitNOFILE=65535
+StandardOutput=append:/home/tarou/cap2/Cal-AI/logs/calai-%i.log
+StandardError=append:/home/tarou/cap2/Cal-AI/logs/calai-%i.err.log
+
+[Install]
+WantedBy=multi-user.target

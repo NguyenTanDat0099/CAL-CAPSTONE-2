@@ -36,7 +36,7 @@ def get_search_services():
     if _qdrant is None:
         _qdrant = QdrantService()
     return _clip, _qdrant
-
+                                                                                                                                                                                                                    
 
 # =========================
 # SEARCH API

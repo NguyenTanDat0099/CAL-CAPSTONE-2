@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertTriangle, RotateCcw, ArrowLeft, PlusCircle, Heart, Droplets, Zap, Flag, Info, X } from 'lucide-react';
-import { DietItem, MealSchedule } from '../types';
+import { AlertTriangle, RotateCcw, ArrowLeft, PlusCircle, Heart, Droplets, Zap, Flag, Info, X, Trash2 } from 'lucide-react';
+import { DietItem, MealSchedule, ScheduleItem } from '../types';
 import { UserProfile } from '../App';
 import { MySchedule } from './MySchedule';
 
@@ -17,7 +17,16 @@ interface DietGoalsProps {
   schedules: MealSchedule[];
   onUpdateSchedule: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>) => Promise<void>;
   onDeleteSchedule: (scheduleId: number) => Promise<void>;
-  onPublishSchedule: (scheduleId: number, publish: boolean) => Promise<void>;
+  onCreateSchedule: (payload: {
+    name: string;
+    description?: string;
+    startDate: string;
+    endDate: string;
+    color?: string;
+    targetCalories?: number;
+    source: 'manual' | 'chat';
+    items?: ScheduleItem[];
+  }) => Promise<MealSchedule>;
 }
 
 export function DietGoals({
@@ -32,7 +41,7 @@ export function DietGoals({
   schedules,
   onUpdateSchedule,
   onDeleteSchedule,
-  onPublishSchedule,
+  onCreateSchedule,
 }: DietGoalsProps) {
   const [activeTab, setActiveTab] = useState<'my' | 'schedule'>('my');
   const [showResetWarning, setShowResetWarning] = useState(false);
@@ -66,40 +75,40 @@ export function DietGoals({
     const about = selectedPlan.about || 'This item was added to your diet log to help you track your nutritional intake. It contributes to your daily energy and macronutrient goals.';
 
     return (
-      <div className="flex-1 ml-64 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-        <div className="h-[450px] relative">
+      <div className="flex-1 lg:ml-64 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+        <div className="h-[280px] sm:h-[360px] lg:h-[450px] relative">
           <img src={selectedPlan.image} alt={selectedPlan.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           <div className="absolute inset-0 bg-gradient-to-b from-bg-dark/40 via-transparent to-bg-dark" />
 
           <button
             onClick={() => setSelectedPlan(null)}
-            className="absolute top-8 left-8 flex items-center gap-2 px-4 py-2 rounded-full bg-bg-dark/40 backdrop-blur-md border border-white/10 hover:bg-bg-dark/60 transition-colors z-10"
+            className="absolute top-4 left-4 sm:top-8 sm:left-8 flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-full bg-bg-dark/40 backdrop-blur-md border border-white/10 hover:bg-bg-dark/60 transition-colors z-10"
           >
             <ArrowLeft size={18} />
             <span className="text-sm font-bold">Back</span>
           </button>
 
-          <div className="absolute bottom-12 left-10 right-10">
-            <span className="px-3 py-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black uppercase tracking-widest mb-4 inline-block">
+          <div className="absolute bottom-8 left-4 right-4 sm:bottom-12 sm:left-10 sm:right-10">
+            <span className="px-3 py-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black uppercase tracking-widest mb-3 inline-block">
               Logged Item
             </span>
-            <h1 className="text-6xl font-black tracking-tight mb-4">{selectedPlan.name}</h1>
-            <p className="text-white/80 text-lg max-w-2xl leading-relaxed">{description}</p>
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black tracking-tight mb-3 sm:mb-4">{selectedPlan.name}</h1>
+            <p className="text-white/80 text-sm sm:text-lg max-w-2xl leading-relaxed">{description}</p>
           </div>
         </div>
 
-        <div className="p-10 space-y-10 pb-32">
-          <section className="bg-surface-dark/50 rounded-[2.5rem] p-8 border border-white/5">
+        <div className="px-4 py-8 sm:px-6 sm:py-10 lg:p-10 space-y-8 sm:space-y-10 pb-24 sm:pb-32">
+          <section className="bg-surface-dark/50 rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-8 border border-white/5">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 rounded-2xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
                 <Info size={20} />
               </div>
               <h2 className="text-xl font-bold">About this Meal</h2>
             </div>
-            <p className="text-text-muted leading-relaxed text-lg">{about}</p>
+            <p className="text-text-muted leading-relaxed text-base sm:text-lg">{about}</p>
           </section>
 
-          <div className="grid grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
             {[
               { label: 'Energy', value: `${selectedPlan.calories.toLocaleString()} kcal`, sub: 'Daily Target', color: 'bg-brand-orange', icon: <Flame size={20} /> },
               { label: 'Protein', value: `${macros.protein}g`, sub: 'Building Blocks', color: 'bg-green-500', icon: <Zap size={20} /> },
@@ -122,14 +131,14 @@ export function DietGoals({
             ))}
           </div>
 
-          <div className="bg-surface-dark rounded-[2.5rem] p-8 border border-white/5 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange">
+          <div className="bg-surface-dark rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-8 border border-white/5 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+            <div className="flex items-center gap-4 min-w-0">
+              <div className="w-14 h-14 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange shrink-0">
                 <Heart size={28} />
               </div>
-              <div>
+              <div className="min-w-0">
                 <p className="text-[10px] text-text-muted uppercase tracking-widest font-bold mb-1">Goal Focus</p>
-                <p className="text-xl font-bold">Heart Health & Weight Maintenance</p>
+                <p className="text-lg sm:text-xl font-bold">Heart Health & Weight Maintenance</p>
               </div>
             </div>
             <motion.button
@@ -139,7 +148,7 @@ export function DietGoals({
                 onRemoveFromMyDiet(selectedPlan.id);
                 setSelectedPlan(null);
               }}
-              className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white font-black py-4 px-10 rounded-2xl flex items-center gap-3 transition-all border border-red-500/20"
+              className="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white font-black py-3 sm:py-4 px-6 sm:px-10 rounded-2xl flex items-center justify-center gap-3 transition-all border border-red-500/20 w-full md:w-auto"
             >
               <X size={20} />
               Remove from My Diet
@@ -154,13 +163,13 @@ export function DietGoals({
   const progressPercentage = Math.min((totalCalories / dailyTarget) * 100, 100);
 
   return (
-    <div className="flex-1 ml-64 p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
-      <header className="mb-8">
+    <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
+      <header className="mb-8 lg:pr-44">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-4xl font-black tracking-tight">My goal</h1>
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-tight">My goal</h1>
         </div>
 
-        <div className="flex gap-8 border-b border-white/10">
+        <div className="flex gap-5 sm:gap-8 border-b border-white/10 overflow-x-auto">
           <button
             onClick={() => setActiveTab('my')}
             className={`pb-4 text-sm font-bold transition-all relative ${activeTab === 'my' ? 'text-brand-orange' : 'text-text-muted hover:text-white'}`}
@@ -184,7 +193,7 @@ export function DietGoals({
             schedules={schedules}
             onUpdate={onUpdateSchedule}
             onDelete={onDeleteSchedule}
-            onPublish={onPublishSchedule}
+            onCreate={onCreateSchedule}
           />
         </div>
       ) : (
@@ -202,6 +211,20 @@ export function DietGoals({
                   <div className="h-48 overflow-hidden relative">
                     <img src={item.image} alt={item.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" referrerPolicy="no-referrer" />
                     <div className="absolute inset-0 bg-gradient-to-t from-bg-dark/80 to-transparent" />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`Remove "${item.name}" from My Diets?`)) {
+                          onRemoveFromMyDiet(item.id);
+                        }
+                      }}
+                      className="absolute top-4 left-4 p-2 rounded-full bg-black/50 hover:bg-red-500/80 backdrop-blur-md border border-white/10 text-white/80 hover:text-white transition-colors"
+                      title="Remove from My Diets"
+                      aria-label={`Remove ${item.name}`}
+                    >
+                      <Trash2 size={14} />
+                    </button>
                     <div className="absolute top-4 right-4 px-2 py-1 rounded-lg bg-black/40 backdrop-blur-md border border-white/10 text-[10px] font-bold">
                       {new Date(item.date).toLocaleDateString()}
                     </div>
@@ -243,7 +266,7 @@ export function DietGoals({
       )}
 
       {/* Goal Overview & Reset */}
-      <div className="fixed bottom-10 right-10 z-40">
+      <div className="hidden xl:block fixed bottom-10 right-10 z-40">
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}

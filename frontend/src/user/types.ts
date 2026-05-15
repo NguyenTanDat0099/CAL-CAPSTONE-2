@@ -39,6 +39,7 @@ export interface ScheduleItem {
   itemId?: number;
   dayOffset?: number;
   mealType: MealType;
+  scheduledTime?: string | null;
   name: string;
   serving?: string | null;
   calories?: number | null;

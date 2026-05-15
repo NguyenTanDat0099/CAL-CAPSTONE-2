@@ -82,6 +82,24 @@ interface CalAiFailure {
 
 type CalAiOutcome = (CalAiQueryResult & { ok: true }) | CalAiFailure;
 
+type CalAiVisionFailureReason =
+  | 'unreachable'
+  | 'timeout'
+  | 'http'
+  | 'parse_null'
+  | 'fetch_image_failed'
+  | 'fetch_error';
+
+interface CalAiVisionFailure {
+  ok: false;
+  reason: CalAiVisionFailureReason;
+  detail?: string;
+}
+
+type CalAiVisionOutcome =
+  | { ok: true; insight: FoodImageInsight }
+  | CalAiVisionFailure;
+
 const MAX_IMAGE_DATA_URL_LENGTH = Number(process.env.MAX_IMAGE_DATA_URL_LENGTH || 3_500_000);
 
 interface ImageData {
@@ -233,17 +251,20 @@ const getLatestSessionFoodInsight = async (sessionId: number): Promise<FoodImage
 
 const formatFoodInsightContext = (insight: FoodImageInsight): string => {
   const lines = [
-    `[Vision recognition (ảnh gần nhất trong session)]`,
-    insight.dishName ? `Món: ${insight.dishName}` : null,
-    insight.confidence != null ? `Độ tin cậy: ${formatConfidence(insight.confidence)}` : null,
-    insight.portion ? `Khẩu phần: ${insight.portion}` : null,
-    insight.calories != null ? `Calories: ${formatMetric(insight.calories, 'kcal')}` : null,
-    insight.protein != null ? `Protein: ${formatMetric(insight.protein, 'g')}` : null,
-    insight.carbs != null ? `Carb: ${formatMetric(insight.carbs, 'g')}` : null,
-    insight.fat != null ? `Fat: ${formatMetric(insight.fat, 'g')}` : null,
+    `[Ảnh user vừa upload trong session này đã được phân tích — DÙNG kết quả này khi user follow-up về "tô đó", "món đó", "phở", "bún", "món vừa rồi"...]`,
+    insight.dishName ? `Tên món đã xác nhận: ${insight.dishName}` : null,
+    insight.confidence != null ? `Độ tin cậy nhận diện: ${formatConfidence(insight.confidence)}` : null,
+    insight.portion ? `Khẩu phần đã ước tính: ${insight.portion}` : null,
+    insight.calories != null ? `Calories đã chốt: ${formatMetric(insight.calories, 'kcal')}` : null,
+    insight.protein != null ? `Protein đã chốt: ${formatMetric(insight.protein, 'g')}` : null,
+    insight.carbs != null ? `Carb đã chốt: ${formatMetric(insight.carbs, 'g')}` : null,
+    insight.fat != null ? `Fat đã chốt: ${formatMetric(insight.fat, 'g')}` : null,
     insight.fiber != null ? `Chất xơ: ${formatMetric(insight.fiber, 'g')}` : null,
     insight.sodiumMg != null ? `Natri: ${formatMetric(insight.sodiumMg, 'mg')}` : null,
     insight.ingredients?.length ? `Thành phần: ${insight.ingredients.slice(0, 6).join(', ')}` : null,
+    insight.dishName
+      ? `Quy tắc: nếu user dùng từ chung chung khác với tên đã xác nhận (vd ảnh là "${insight.dishName}" nhưng user gọi là "tô phở"), bám SÁT tên đã xác nhận và số đã chốt ở trên; nếu cần có thể nói nhẹ "ảnh nhận diện là ${insight.dishName}".`
+      : null,
   ].filter((line): line is string => Boolean(line));
   return lines.join('\n');
 };
@@ -364,13 +385,37 @@ const parseImageDataUrl = (imageUrl: string): ImageData => {
   };
 };
 
+const CJK_RE = /[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+
+const containsCjk = (value?: string | null) => Boolean(value && CJK_RE.test(value));
+
+const sanitizeCalAiAnswer = (value?: string | null) => {
+  const text = value?.trim();
+  if (!text) return null;
+  if (!containsCjk(text)) return text;
+
+  const kept = text
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.trim().length > 0 && !containsCjk(line))
+    .join('\n')
+    .trim();
+
+  const minimumUsefulLength = Math.min(80, Math.floor(text.length * 0.35));
+  // If stripping CJK lines leaves too little to be useful, fall back to the
+  // original answer rather than dropping it. The downstream UX is "Mình
+  // chưa tìm thấy dữ liệu phù hợp" when the answer is null, which masks
+  // a successful retrieval and looks like a regression.
+  return kept.length >= minimumUsefulLength ? kept : text;
+};
+
 const formatCalAiResponse = (data: unknown) => {
   if (!data || typeof data !== 'object') return null;
   const record = data as Record<string, unknown>;
 
-  if (typeof record.answer === 'string' && record.answer.trim()) return record.answer.trim();
-  if (typeof record.content === 'string' && record.content.trim()) return record.content.trim();
-  if (typeof record.explanation === 'string' && record.explanation.trim()) return record.explanation.trim();
+  if (typeof record.answer === 'string' && record.answer.trim()) return sanitizeCalAiAnswer(record.answer);
+  if (typeof record.content === 'string' && record.content.trim()) return sanitizeCalAiAnswer(record.content);
+  if (typeof record.explanation === 'string' && record.explanation.trim()) return sanitizeCalAiAnswer(record.explanation);
 
   if (Array.isArray(record.data) && record.data.length > 0) {
     const preview = record.data
@@ -812,11 +857,14 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   const dishName = cleanDishName(record.dish_name as string | null)
     ?? (vitPredictions.length > 0 ? cleanDishName(String((vitPredictions[0] as Record<string, unknown>)?.name ?? '')) : null);
 
-  const hasAnswer = typeof record.answer === 'string' && record.answer.trim();
+  const safeAnswer = typeof record.answer === 'string'
+    ? sanitizeCalAiAnswer(record.answer)
+    : null;
+  const hasAnswer = Boolean(safeAnswer);
   if (!dishName && !hasAnswer) return null;
 
   return {
-    answer: hasAnswer ? (record.answer as string).trim() : null,
+    answer: safeAnswer,
     dishName: dishName ?? 'Unidentified food',
     confidence: toNumber(record.confidence),
     description: typeof visionDetail.description === 'string' ? visionDetail.description : null,
@@ -844,14 +892,28 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   };
 };
 
-const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null, question?: string) => {
+const askCalAiFoodImage = async (
+  imageUrl: string,
+  imageName?: string | null,
+  question?: string
+): Promise<CalAiVisionOutcome> => {
   const baseUrl = (process.env.CAL_AI_BASE_URL || '').replace(/\/+$/, '');
-  if (!baseUrl) return null;
-  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 150000);
+  if (!baseUrl) {
+    return { ok: false, reason: 'unreachable', detail: 'CAL_AI_BASE_URL chưa được cấu hình.' };
+  }
+  const timeoutMs = Number(process.env.CAL_AI_VISION_TIMEOUT_MS || 360000);
 
   try {
-    const image = parseImageDataUrl(imageUrl);
-    return await withTimeout(async signal => {
+    return await withTimeout<CalAiVisionOutcome>(async signal => {
+      let image: ImageData;
+      try {
+        image = parseImageDataUrl(imageUrl);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[ChatVision] parseImageDataUrl failed:', message);
+        return { ok: false, reason: 'fetch_image_failed', detail: message };
+      }
+
       const form = new FormData();
       const filename = imageName?.trim() || `chat-upload.${image.mime.split('/')[1] || 'jpg'}`;
       form.append('file', new Blob([image.bytes], { type: image.mime }), filename);
@@ -868,21 +930,61 @@ const askCalAiFoodImage = async (imageUrl: string, imageName?: string | null, qu
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');
         console.warn(`[ChatVision] Cal-AI image analyze failed with HTTP ${response.status}: ${errorBody.slice(0, 500)}`);
-        return null;
+        // Forward the response body excerpt so the trace shows the real
+        // reason ("Invalid file type", "File too large", pipeline crash, …)
+        // instead of just "HTTP 400".
+        const bodyExcerpt = errorBody.replace(/\s+/g, ' ').trim().slice(0, 240);
+        const detail = bodyExcerpt
+          ? `HTTP ${response.status} — ${bodyExcerpt}`
+          : `HTTP ${response.status}`;
+        return { ok: false, reason: 'http', detail };
       }
-      return parseCalAiFoodInsight(await response.json());
+
+      const parsed = parseCalAiFoodInsight(await response.json());
+      if (!parsed) {
+        return { ok: false, reason: 'parse_null', detail: 'Cal-AI trả 200 nhưng payload thiếu dish_name/answer.' };
+      }
+      return { ok: true, insight: parsed };
     }, timeoutMs);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     const isTimeout = error instanceof Error && (
-      error.name === 'AbortError' || error.message.includes('aborted')
+      error.name === 'AbortError' || message.includes('aborted')
     );
     if (isTimeout) {
       console.warn(`[ChatVision] Cal-AI image analyze timed out after ${timeoutMs}ms. Consider increasing CAL_AI_VISION_TIMEOUT_MS.`);
-    } else {
-      console.warn('[ChatVision] Cal-AI image analyze unavailable:', error instanceof Error ? error.message : error);
+      return { ok: false, reason: 'timeout', detail: `Quá ${Math.round(timeoutMs / 1000)}s` };
     }
-    return null;
+    console.warn('[ChatVision] Cal-AI image analyze unavailable:', message);
+    return { ok: false, reason: 'fetch_error', detail: message };
   }
+};
+
+const VISION_FAILURE_TRACE: Record<CalAiVisionFailureReason, { trace: string; user: string }> = {
+  unreachable: {
+    trace: 'Backend không gọi được Cal-AI vision vì chưa cấu hình URL hoặc service không chạy.',
+    user: 'Service Cal-AI hiện không khả dụng cho phân tích ảnh.',
+  },
+  timeout: {
+    trace: 'Cal-AI vision không trả lời kịp trong thời gian chờ — Qwen-VL hoặc RAG vẫn đang chạy quá lâu.',
+    user: 'Mình chưa kịp phân tích ảnh vì model vision mất quá lâu. Bạn thử lại hoặc tăng `CAL_AI_VISION_TIMEOUT_MS` ở backend.',
+  },
+  http: {
+    trace: 'Cal-AI vision trả HTTP lỗi; có thể ảnh quá lớn hoặc pipeline crash.',
+    user: 'Cal-AI trả lỗi khi phân tích ảnh. Hãy kiểm tra log của Cal-AI Python server.',
+  },
+  parse_null: {
+    trace: 'Cal-AI trả 200 nhưng payload không có dish_name/answer dùng được — có thể vision không nhận diện được món.',
+    user: 'Mình chưa xác định được món trong ảnh. Bạn thử gửi ảnh rõ hơn hoặc chụp gần phần món chính.',
+  },
+  fetch_image_failed: {
+    trace: 'Backend không đọc được data URL ảnh (định dạng không hợp lệ).',
+    user: 'Mình không tải được ảnh để phân tích. Bạn thử upload lại ảnh nhé.',
+  },
+  fetch_error: {
+    trace: 'Backend gọi Cal-AI vision nhưng gặp lỗi mạng/kết nối.',
+    user: 'Mình không kết nối được Cal-AI service để phân tích ảnh.',
+  },
 };
 
 const wantsIdentity = (message: string) => {
@@ -1085,18 +1187,22 @@ const generateAssistantReply = async (
       evidence: [message || 'Không có ghi chú kèm ảnh'],
     });
 
-    const calAiInsight = await askCalAiFoodImage(imageUrl, imageName, message);
+    const visionOutcome = await askCalAiFoodImage(imageUrl, imageName, message);
+    const calAiInsight = visionOutcome.ok ? visionOutcome.insight : null;
     let insight = calAiInsight;
 
-    if (calAiInsight) {
+    if (visionOutcome.ok) {
       addThinkingStep(trace, 'Chạy Cal-AI vision pipeline', 'Cal-AI đã trả về món ăn, khẩu phần và nutrition estimate.', {
         detail: 'Nguồn gồm vision model, RAG/nutrition estimate và metadata phân tích ảnh.',
         evidence: summarizeNutritionEvidence(calAiInsight).slice(0, 6),
       });
     } else {
-      addThinkingStep(trace, 'Chạy Cal-AI vision pipeline', 'Cal-AI chưa trả về kết quả vision đủ dùng trong thời gian chờ.', {
+      const failure = VISION_FAILURE_TRACE[visionOutcome.reason];
+      addThinkingStep(trace, 'Chạy Cal-AI vision pipeline', failure.trace, {
         status: 'warning',
-        detail: 'Không gọi model vision khác ngoài Cal-AI để giữ một nguồn xử lý thống nhất.',
+        detail: visionOutcome.detail
+          ? `${visionOutcome.reason}: ${visionOutcome.detail}`
+          : visionOutcome.reason,
       });
     }
 
@@ -1119,8 +1225,12 @@ const generateAssistantReply = async (
         detail: insight?.source ? `Nguồn cuối cùng: ${insight.source}` : 'Không có nguồn vision đủ chắc.',
     });
 
+    const fallbackText = !visionOutcome.ok
+      ? VISION_FAILURE_TRACE[visionOutcome.reason].user
+      : formatImageQuestionReply(insight, message);
+
     return {
-      text: insight?.answer ?? formatImageQuestionReply(insight, message),
+      text: insight?.answer ?? fallbackText,
       thinkingSteps: trace,
       foodInsight: insight ?? null,
     };
@@ -1369,7 +1479,7 @@ export const sendChatMessageService = async (
     [targetSessionId, 'user', messageText, normalizedImageUrl, normalizedImageName]
   );
 
-  let replyImageUrl = normalizedImageUrl;
+  let replyImageUrl: string | null = normalizedImageUrl;
   let replyImageName = normalizedImageName;
 
   if (!replyImageUrl && normalizedContextImageUrl) {
@@ -1377,10 +1487,17 @@ export const sendChatMessageService = async (
     replyImageName = normalizedContextImageName;
   }
 
+  let priorInsight: FoodImageInsight | null = null;
   if (!replyImageUrl && wantsImageContext(trimmed)) {
-    const latestImage = await getLatestSessionImage(targetSessionId);
-    replyImageUrl = latestImage?.image_url ?? null;
-    replyImageName = latestImage?.image_name ?? null;
+    priorInsight = await getLatestSessionFoodInsight(targetSessionId);
+    if (!priorInsight?.dishName) {
+      const latestImage = await getLatestSessionImage(targetSessionId);
+      replyImageUrl = latestImage?.image_url ?? null;
+      replyImageName = latestImage?.image_name ?? null;
+      priorInsight = null;
+    }
+  } else if (!replyImageUrl) {
+    priorInsight = await getLatestSessionFoodInsight(targetSessionId);
   }
 
   const chatHistory = await getRecentChatContext(targetSessionId, 10);
@@ -1390,10 +1507,6 @@ export const sendChatMessageService = async (
     contextText: buildChatContextText(chatHistory, trimmed),
     isFollowUp: isFollowUpMessage(trimmed),
   };
-
-  const priorInsight = !replyImageUrl
-    ? await getLatestSessionFoodInsight(targetSessionId)
-    : null;
 
   const assistantReply = await generateAssistantReply(
     accountId,

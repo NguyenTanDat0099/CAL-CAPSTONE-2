@@ -2,8 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Plus,
   Send,
-  Trash2,
-  MessageSquare,
   Bot,
   User,
   ChevronDown,
@@ -278,31 +276,60 @@ const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
     if (!line.includes('|')) continue;
     if (!isTableDivider(lines[i + 1])) continue;
 
-    const headers = splitTableRow(line).map(h => stripAccents(h));
+    const headers = splitTableRow(line).map(h => stripAccents(h).replace(/\*\*/g, '').trim());
     const findCol = (...needles: string[]) =>
       headers.findIndex(h => needles.some(n => h.includes(n)));
-    const monIdx = findCol('mon', 'meal', 'food', 'dish');
-    const kcalIdx = findCol('kcal', 'calo');
+    const findColExact = (...needles: string[]) =>
+      headers.findIndex(h => needles.some(n => h === n));
+    const monIdx = findCol('mon', 'meal', 'food', 'dish', 'item');
+    const kcalIdx = findCol('kcal', 'calo', 'energy', 'nang luong');
     if (monIdx < 0 || kcalIdx < 0) continue;
-    const servingIdx = findCol('khau phan', 'phan', 'serving', 'portion');
-    const proteinIdx = findCol('p(g)', 'protein', 'p ');
-    const carbsIdx = findCol('c(g)', 'carb', 'c ');
-    const fatIdx = findCol('f(g)', 'fat', 'beo', 'f ');
+    const buaIdx = findCol('bua', 'meal type', 'thoi diem');
+    const servingIdx = findCol('khau phan', 'phan an', 'serving', 'portion', 'so luong');
+    const proteinIdx = (() => {
+      const fuzzy = findCol('protein', 'chat dam', 'dam (g)');
+      if (fuzzy >= 0) return fuzzy;
+      return findColExact('p(g)', 'p', 'p (g)', 'pro', 'pr');
+    })();
+    const carbsIdx = (() => {
+      const fuzzy = findCol('carbs', 'carb', 'tinh bot', 'duong bot');
+      if (fuzzy >= 0) return fuzzy;
+      return findColExact('c(g)', 'c', 'c (g)');
+    })();
+    const fatIdx = (() => {
+      const fuzzy = findCol('fat', 'chat beo', 'beo (g)');
+      if (fuzzy >= 0) return fuzzy;
+      return findColExact('f(g)', 'f', 'f (g)');
+    })();
 
-    const matchedSignals = [proteinIdx, carbsIdx, fatIdx].filter(idx => idx >= 0).length;
+    // Count any signal that indicates this really is a meal table (not a
+    // random data table with a kcal column). Macros are the strongest signal,
+    // but "Bữa" or "Khẩu phần" columns are also reliable meal-plan markers,
+    // and the LLM sometimes drops macros when generating a full-day plan to
+    // save tokens.
+    const matchedSignals = [proteinIdx, carbsIdx, fatIdx, servingIdx, buaIdx]
+      .filter(idx => idx >= 0).length;
     if (matchedSignals < 1) continue;
 
     const tableLines: string[] = [lineRaw, lines[i + 1]];
     let cursor = i + 2;
+    let rowMealType: MealType | null = currentMealType;
     while (cursor < lines.length && lines[cursor].trim().includes('|')) {
       tableLines.push(lines[cursor]);
       const cells = splitTableRow(lines[cursor]);
       const name = cells[monIdx]?.replace(/\*\*/g, '').trim();
       if (name && !/^total|^tong|^tổng/i.test(stripAccents(name))) {
         const kcal = numFromCell(cells[kcalIdx]);
+        const buaCell = buaIdx >= 0 ? (cells[buaIdx] ?? '').replace(/\*\*/g, '').trim() : '';
+        // "↳" / "—" / empty Bữa cell → continuation row, inherit previous meal.
+        const isContinuation = /^[↳\-—–]?$/.test(buaCell);
+        const buaMeal = buaIdx >= 0 && !isContinuation
+          ? detectMealTypeFromHeading(buaCell) ?? detectMealType(buaCell)
+          : null;
+        if (buaMeal) rowMealType = buaMeal;
         const inferredFromCell = detectMealTypeFromHeading(cells[monIdx] ?? '');
         allItems.push({
-          mealType: currentMealType ?? inferredFromCell ?? detectMealType(cells[monIdx]),
+          mealType: rowMealType ?? currentMealType ?? inferredFromCell ?? detectMealType(cells[monIdx]),
           name,
           serving: servingIdx >= 0 ? cells[servingIdx] || null : null,
           calories: kcal,
@@ -630,6 +657,13 @@ interface SavePlanPayload {
 
 interface ChatboxProps {
   onSavePlanToSchedule?: (payload: SavePlanPayload) => Promise<MealSchedule>;
+  pendingChatId?: string | null;
+  onPendingChatResolved?: () => void;
+  onConversationsChange?: (summaries: { id: string; title: string; lastMessage: string; timestamp: string }[]) => void;
+  onActiveChatChange?: (id: string | null) => void;
+  pendingDeleteChatId?: string | null;
+  onPendingDeleteChatResolved?: () => void;
+  pendingNewChat?: number;
 }
 
 interface PendingSave {
@@ -638,7 +672,7 @@ interface PendingSave {
   defaultName: string;
 }
 
-export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
+export function Chatbox({ onSavePlanToSchedule, pendingChatId, onPendingChatResolved, onConversationsChange, onActiveChatChange, pendingDeleteChatId, onPendingDeleteChatResolved, pendingNewChat }: ChatboxProps) {
   const storedActiveChatId = (() => {
     try { return sessionStorage.getItem('calai_active_chat'); } catch { return null; }
   })();
@@ -723,7 +757,48 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
         sessionStorage.setItem('calai_conversations', JSON.stringify(conversations));
       }
     } catch { /* ignore */ }
+    onConversationsChange?.(conversations.map(c => ({ id: c.id, title: c.title, lastMessage: c.lastMessage, timestamp: c.timestamp })));
   }, [conversations]);
+
+  useEffect(() => {
+    if (!pendingChatId) return;
+    if (conversations.some(c => c.id === pendingChatId)) {
+      setActiveChatId(pendingChatId);
+      onPendingChatResolved?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingChatId]);
+
+  useEffect(() => {
+    onActiveChatChange?.(activeChatId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatId]);
+
+  useEffect(() => {
+    if (!pendingDeleteChatId) return;
+    const id = pendingDeleteChatId;
+    (async () => {
+      try {
+        const r = await fetch(buildApiUrl(`/chat/sessions/${id}`), { method: 'DELETE', headers: getAuthHeaders() });
+        const result = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(result?.message || 'Failed to delete chat');
+        const nextSessions = conversations.filter(c => c.id !== id);
+        setConversations(nextSessions);
+        if (activeChatId === id) setActiveChatId(nextSessions[0]?.id ?? null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to delete chat');
+      } finally {
+        onPendingDeleteChatResolved?.();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDeleteChatId]);
+
+  useEffect(() => {
+    if (!pendingNewChat) return;
+    createNewChat();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingNewChat]);
 
   const activeChat = conversations.find(c => c.id === activeChatId);
   const displayMessages = (activeChat?.messages ?? []).filter(Boolean);
@@ -901,11 +976,6 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
     try { sessionStorage.removeItem('calai_active_chat'); } catch { /* ignore */ }
   };
 
-  const handleSelectChat = (chatId: string) => {
-    setActiveChatId(chatId);
-    setError('');
-  };
-
   const toggleThinking = (msgId: string) => {
     setExpandedThinking(prev => {
       const next = new Set(prev);
@@ -916,27 +986,6 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
       }
       return next;
     });
-  };
-
-  const deleteChat = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      const response = await fetch(buildApiUrl(`/chat/sessions/${id}`), {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result?.message || 'Failed to delete chat');
-      }
-      const nextSessions = conversations.filter(c => c.id !== id);
-      setConversations(nextSessions);
-      if (activeChatId === id) {
-        setActiveChatId(nextSessions[0]?.id ?? null);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete chat');
-    }
   };
 
   const handleImageChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1228,6 +1277,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
   const handleConfirmSavePlan = async () => {
     if (!pendingSave || !onSavePlanToSchedule) return;
     if (!saveForm.name.trim()) { setSaveError('Please enter a name.'); return; }
+    if (saveForm.startDate < todayISO()) { setSaveError('Start date cannot be in the past.'); return; }
     if (saveForm.startDate > saveForm.endDate) { setSaveError('End date must be on or after start date.'); return; }
     const startMs = new Date(`${saveForm.startDate}T00:00:00`).getTime();
     const endMs = new Date(`${saveForm.endDate}T00:00:00`).getTime();
@@ -1368,85 +1418,12 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
   };
 
   return (
-    <div className="flex h-screen bg-bg-dark ml-64 overflow-hidden">
-      {/* Recent Chats Sidebar */}
-      <div className="w-80 border-r border-white/5 flex flex-col bg-surface-dark/30">
-        <div className="p-6 flex items-center justify-between">
-          <h2 className="text-xl font-black tracking-tight">Recent Chats</h2>
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={createNewChat}
-            className="w-10 h-10 rounded-xl bg-surface-lighter border border-white/5 flex items-center justify-center text-brand-orange hover:bg-white/5 transition-colors"
-          >
-            <Plus size={20} />
-          </motion.button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-4 space-y-2">
-          {conversations.map((chat) => {
-            const isCurrent = activeChatId === chat.id;
-            const isGenerating = !!isTypingMap[chat.id];
-
-            return (
-              <motion.div
-                key={chat.id}
-                onClick={() => handleSelectChat(chat.id)}
-                className={`p-4 rounded-2xl cursor-pointer transition-all relative group ${
-                  isCurrent
-                    ? 'bg-surface-lighter border border-white/10'
-                    : 'hover:bg-white/5 border border-transparent'
-                }`}
-              >
-                <div className="flex justify-between items-start mb-1">
-                  {isCurrent && (
-                    <span className="text-[10px] font-black text-brand-orange uppercase tracking-widest">Current</span>
-                  )}
-                  {isGenerating && !isCurrent && (
-                    <span className="text-[10px] font-black text-brand-orange uppercase tracking-widest flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-brand-orange animate-pulse" />
-                      Generating
-                    </span>
-                  )}
-                  <span className="text-[10px] text-text-muted font-medium ml-auto">{chat.timestamp}</span>
-                </div>
-                <h3 className={`font-bold text-sm mb-1 truncate pr-6 ${isCurrent ? 'text-white' : 'text-text-muted'}`}>
-                  {chat.title || 'New Conversation'}
-                </h3>
-                <p className="text-xs text-text-muted truncate opacity-60 flex items-center gap-2">
-                  {isGenerating && (
-                    <span className="inline-flex shrink-0 gap-0.5">
-                      <span className="w-1 h-1 rounded-full bg-brand-orange animate-bounce [animation-delay:0ms]" />
-                      <span className="w-1 h-1 rounded-full bg-brand-orange animate-bounce [animation-delay:120ms]" />
-                      <span className="w-1 h-1 rounded-full bg-brand-orange animate-bounce [animation-delay:240ms]" />
-                    </span>
-                  )}
-                  <span className="truncate">{chat.lastMessage || 'No messages yet'}</span>
-                </p>
-
-                <button
-                  onClick={(e) => deleteChat(chat.id, e)}
-                  className="absolute top-4 right-4 text-text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </motion.div>
-            );
-          })}
-          {conversations.length === 0 && (
-            <div className="text-center py-10 text-text-muted">
-              <MessageSquare size={32} className="mx-auto mb-4 opacity-20" />
-              <p className="text-sm">No conversations yet</p>
-            </div>
-          )}
-        </div>
-      </div>
-
+    <div className="fixed inset-0 lg:left-64 flex bg-bg-dark overflow-hidden">
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col relative">
+      <div className="flex-1 min-w-0 flex flex-col relative">
         {/* Header */}
-        <div className="p-6 border-b border-white/5 flex items-center gap-3">
-          <span className="text-sm font-black uppercase tracking-widest text-brand-orange">
+        <div className="p-4 sm:p-6 pl-16 lg:pl-6 border-b border-white/5 flex items-center gap-3">
+          <span className="text-sm font-black uppercase tracking-widest text-brand-orange truncate">
             Nutrition AI
           </span>
         </div>
@@ -1454,7 +1431,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
         {/* Messages */}
         <div
           ref={messagesContainerRef}
-          className="flex-1 overflow-y-auto p-8 space-y-8"
+          className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8"
         >
           {saveSuccess && (
             <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200 mb-4">
@@ -1510,12 +1487,12 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                       {isAi ? <Bot size={20} /> : <User size={20} />}
                     </div>
 
-                    <div className={`${isAi ? 'max-w-[82%]' : 'max-w-[70%] text-right'} min-w-0 space-y-3`}>
-                      <div className={`flex items-center gap-2 ${isAi ? '' : 'justify-end'}`}>
-                        <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">
+                    <div className={`${isAi ? 'max-w-[88%] sm:max-w-[82%]' : 'max-w-[85%] sm:max-w-[70%] text-right'} min-w-0 space-y-3`}>
+                      <div className={`flex items-center gap-2 flex-wrap ${isAi ? '' : 'justify-end'}`}>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-text-muted truncate min-w-0">
                           {isAi ? 'CalAI Nutrition Assistant' : 'You'}
                         </span>
-                        <span className="text-[10px] text-text-muted opacity-50">{msg.timestamp}</span>
+                        <span className="text-[10px] text-text-muted opacity-50 shrink-0">{msg.timestamp}</span>
                       </div>
 
                       {isAi && msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
@@ -1653,7 +1630,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <div className="rounded-3xl rounded-tr-none bg-brand-orange p-5 text-left text-sm font-medium leading-relaxed text-bg-dark break-words [overflow-wrap:anywhere]">
+                          <div className="rounded-3xl rounded-tr-none bg-brand-orange p-5 text-left text-sm font-medium leading-relaxed text-bg-dark [overflow-wrap:anywhere]">
                             {msg.imageUrl && (
                               <img
                                 src={msg.imageUrl}
@@ -1661,7 +1638,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                                 className={`max-h-64 w-full max-w-sm rounded-2xl object-cover ${msg.text ? 'mb-4' : ''}`}
                               />
                             )}
-                            {msg.text && <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.text}</p>}
+                            {msg.text && <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{msg.text}</p>}
                           </div>
                           <div className="flex justify-end gap-2">
                             <motion.button
@@ -1774,7 +1751,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
         </div>
 
         {/* Input Area */}
-        <div className="p-8 pt-0">
+        <div className="p-4 sm:p-6 lg:p-8 pt-0">
           <div className="max-w-4xl mx-auto space-y-4">
             {/* Quick Actions */}
             <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
@@ -1940,7 +1917,17 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                     <input
                       type="date"
                       value={saveForm.startDate}
-                      onChange={(e) => setSaveForm(prev => ({ ...prev, startDate: e.target.value }))}
+                      min={todayISO()}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        const minISO = todayISO();
+                        const clamped = next && next < minISO ? minISO : next;
+                        setSaveForm(prev => ({
+                          ...prev,
+                          startDate: clamped,
+                          endDate: prev.endDate && prev.endDate < clamped ? clamped : prev.endDate,
+                        }));
+                      }}
                       className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
                     />
                   </div>
@@ -1949,6 +1936,7 @@ export function Chatbox({ onSavePlanToSchedule }: ChatboxProps) {
                     <input
                       type="date"
                       value={saveForm.endDate}
+                      min={saveForm.startDate || todayISO()}
                       onChange={(e) => setSaveForm(prev => ({ ...prev, endDate: e.target.value }))}
                       className="w-full bg-bg-dark border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-orange transition-colors"
                     />
