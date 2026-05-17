@@ -38,6 +38,17 @@ interface ChartPoint {
 const dateKey = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
+const WEEKDAY_VI = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+
+const formatDateLabelVi = (key: string): string => {
+  const d = new Date(`${key}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return key;
+  const weekday = WEEKDAY_VI[d.getDay()];
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${weekday}, ${dd}/${mm}/${d.getFullYear()}`;
+};
+
 const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
 const addDays = (date: Date, days: number) => {
@@ -68,6 +79,30 @@ const getLoggedDayAverage = (items: DietItem[], start: Date, days: number) => {
 export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>('weekly');
   const safeDailyTarget = Math.max(0, dailyTarget);
+
+  // Meal-history date range — default to last 7 days (incl. today).
+  const today = startOfDay(new Date());
+  const sevenAgo = addDays(today, -6);
+  const [historyFrom, setHistoryFrom] = useState<string>(dateKey(sevenAgo));
+  const [historyTo, setHistoryTo] = useState<string>(dateKey(today));
+
+  // Group myDiets within [historyFrom, historyTo] by date, newest first.
+  const historyGroups = useMemo(() => {
+    if (!historyFrom || !historyTo) return [] as Array<{ key: string; total: number; items: DietItem[] }>;
+    const fromKey = historyFrom;
+    const toKey = historyTo;
+    const groups = new Map<string, DietItem[]>();
+    for (const item of myDiets) {
+      const key = dateKey(new Date(item.date));
+      if (key < fromKey || key > toKey) continue;
+      const arr = groups.get(key) ?? [];
+      arr.push(item);
+      groups.set(key, arr);
+    }
+    return Array.from(groups.entries())
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1)) // newest first
+      .map(([key, items]) => ({ key, total: sumCalories(items), items }));
+  }, [myDiets, historyFrom, historyTo]);
 
   const macroTargets = useMemo(() => {
     if (safeDailyTarget <= 0) return { protein: 0, carbs: 0, fats: 0 };
@@ -511,6 +546,65 @@ export function Dashboard({ myDiets, profile, dailyTarget }: DashboardProps) {
             Currently <span className="text-white font-bold">{weightProgress.awayFromGoal}kg</span> away from your goal
           </p>
         </div>
+      </section>
+
+      <section className="mt-10 sm:mt-12 bg-surface-dark/50 rounded-[2rem] sm:rounded-[2.5rem] p-6 sm:p-10 border border-white/5">
+        <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-5 mb-8">
+          <div>
+            <p className="text-[10px] text-brand-orange uppercase tracking-widest font-black mb-2">Lịch sử</p>
+            <h2 className="text-2xl sm:text-3xl font-black tracking-tight">Bữa ăn theo ngày</h2>
+            <p className="text-text-muted text-sm mt-2">Chọn khoảng ngày để xem các bữa đã log.</p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="history-from" className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Từ ngày</label>
+              <input
+                id="history-from"
+                type="date"
+                value={historyFrom}
+                max={historyTo || undefined}
+                onChange={(e) => setHistoryFrom(e.target.value)}
+                className="bg-bg-dark border border-white/10 rounded-2xl py-2.5 px-4 text-sm font-bold text-white focus:outline-none focus:border-brand-orange"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="history-to" className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Đến ngày</label>
+              <input
+                id="history-to"
+                type="date"
+                value={historyTo}
+                min={historyFrom || undefined}
+                onChange={(e) => setHistoryTo(e.target.value)}
+                className="bg-bg-dark border border-white/10 rounded-2xl py-2.5 px-4 text-sm font-bold text-white focus:outline-none focus:border-brand-orange"
+              />
+            </div>
+          </div>
+        </header>
+
+        {historyGroups.length === 0 ? (
+          <div className="text-center py-12 text-text-muted">
+            <p className="text-sm font-medium">Không có bữa ăn nào trong khoảng này.</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {historyGroups.map(({ key, total, items }) => (
+              <div key={key} className="bg-bg-dark/40 rounded-2xl border border-white/5 overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-4 border-b border-white/5 bg-white/[0.02]">
+                  <span className="text-sm font-bold">{formatDateLabelVi(key)}</span>
+                  <span className="text-xs font-black text-brand-orange">{total.toLocaleString()} kcal</span>
+                </div>
+                <ul className="divide-y divide-white/5">
+                  {items.map((m) => (
+                    <li key={m.id} className="flex items-center justify-between px-5 py-3 text-sm">
+                      <span className="font-medium truncate pr-3">{m.name}</span>
+                      <span className="text-text-muted font-bold shrink-0">{m.calories.toLocaleString()} kcal</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

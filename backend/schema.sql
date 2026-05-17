@@ -339,3 +339,40 @@ BEGIN
         total_fat = VALUES(total_fat);
 END //
 DELIMITER ;
+
+-- =====================================================
+-- Notifications (Sprint 4 - in-app bell notifications)
+-- Filled by scheduled jobs (meal reminder, daily summary, goal achievement)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS notifications (
+    notification_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    type ENUM('meal_reminder','daily_summary','goal_achievement','system') NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    data JSON NULL,
+    dedupe_key VARCHAR(255) NULL,
+    is_read TINYINT NOT NULL DEFAULT 0,
+    sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    read_at TIMESTAMP NULL,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    UNIQUE KEY uk_user_dedupe (user_id, dedupe_key),
+    INDEX idx_notifications_user (user_id),
+    INDEX idx_notifications_user_read (user_id, is_read),
+    INDEX idx_notifications_user_sent (user_id, sent_at)
+);
+
+-- =====================================================
+-- Notification Job Runs (observability for scheduler)
+-- One row per job execution; lets ops verify cron fired and trace errors.
+-- =====================================================
+CREATE TABLE IF NOT EXISTS notificationjobruns (
+    run_id INT AUTO_INCREMENT PRIMARY KEY,
+    job_name VARCHAR(100) NOT NULL,
+    started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at TIMESTAMP NULL,
+    status ENUM('running','success','failed') NOT NULL DEFAULT 'running',
+    notifications_created INT NOT NULL DEFAULT 0,
+    error_message TEXT NULL,
+    INDEX idx_jobruns_name_time (job_name, started_at)
+);

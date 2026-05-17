@@ -64,9 +64,16 @@ const mapFoodToMeal = (food: FoodCatalogItem): Meal => ({
 interface MealPlansProps {
   onAddToMyDiet: (
     item: Omit<DietItem, 'id' | 'date'>,
-    options?: { alreadyPersisted?: boolean; mealType?: string }
+    options?: { alreadyPersisted?: boolean; mealType?: string; quantity?: number }
   ) => void | Promise<void>;
 }
+
+const PORTION_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 0.5, label: '½ phần' },
+  { value: 1, label: '1 phần' },
+  { value: 1.5, label: '1½ phần' },
+  { value: 2, label: '2 phần' },
+];
 
 const AUTH_TOKEN_KEY = 'calai_token';
 const getAuthHeaders = (): Record<string, string> => {
@@ -83,8 +90,14 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
   const [mealsLoading, setMealsLoading] = useState(true);
   const [mealsError, setMealsError] = useState('');
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
+  const [portionMultiplier, setPortionMultiplier] = useState<number>(1);
   const [communitySchedules, setCommunitySchedules] = useState<MealSchedule[]>([]);
   const [communitySelected, setCommunitySelected] = useState<MealSchedule | null>(null);
+
+  // Reset portion picker each time the user opens a different meal detail.
+  useEffect(() => {
+    if (selectedMeal) setPortionMultiplier(1);
+  }, [selectedMeal?.id]);
 
   const loadMeals = async () => {
     setMealsLoading(true);
@@ -228,28 +241,56 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
                 <p className="text-lg sm:text-xl font-bold">Heart Health & Weight Maintenance</p>
               </div>
             </div>
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => {
-                onAddToMyDiet({
-                  name: selectedMeal.name,
-                  foodId: selectedMeal.sourceFoodId,
-                  calories: selectedMeal.calories,
-                  protein: selectedMeal.protein,
-                  carbs: selectedMeal.carbs,
-                  fats: selectedMeal.fats,
-                  image: selectedMeal.image,
-                  description: selectedMeal.description,
-                  about: selectedMeal.about
-                }, { mealType: selectedMeal.category === 'Other' ? undefined : selectedMeal.category });
-                setSelectedMeal(null);
-              }}
-              className="bg-brand-orange text-bg-dark font-black py-3 sm:py-4 px-6 sm:px-10 rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-brand-orange/20 w-full md:w-auto"
-            >
-              <PlusCircle size={20} />
-              Add to My Diet
-            </motion.button>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
+              {/* Portion selector — multiplies stored serving size. Backend
+                  persists this in mealitems.quantity so daily totals scale. */}
+              <div className="flex flex-col gap-1.5 min-w-[140px]">
+                <label
+                  htmlFor="portion-select"
+                  className="text-[10px] uppercase tracking-widest text-text-muted font-bold"
+                >
+                  Khẩu phần
+                </label>
+                <select
+                  id="portion-select"
+                  value={portionMultiplier}
+                  onChange={(e) => setPortionMultiplier(Number(e.target.value))}
+                  className="bg-bg-dark border border-white/10 rounded-2xl py-3 px-4 text-sm font-bold text-white focus:outline-none focus:border-brand-orange transition-colors"
+                >
+                  {PORTION_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label} · {Math.round(selectedMeal.calories * opt.value)} kcal
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  onAddToMyDiet({
+                    name: selectedMeal.name,
+                    foodId: selectedMeal.sourceFoodId,
+                    calories: selectedMeal.calories,
+                    protein: selectedMeal.protein,
+                    carbs: selectedMeal.carbs,
+                    fats: selectedMeal.fats,
+                    image: selectedMeal.image,
+                    description: selectedMeal.description,
+                    about: selectedMeal.about
+                  }, {
+                    mealType: selectedMeal.category === 'Other' ? undefined : selectedMeal.category,
+                    quantity: portionMultiplier,
+                  });
+                  setSelectedMeal(null);
+                }}
+                className="bg-brand-orange text-bg-dark font-black py-3 sm:py-4 px-6 sm:px-10 rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-brand-orange/20 w-full sm:w-auto self-end"
+              >
+                <PlusCircle size={20} />
+                Add to My Diet
+              </motion.button>
+            </div>
           </div>
         </div>
       </div>

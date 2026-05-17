@@ -43,9 +43,22 @@ interface UserAppProps {
   onLogout: () => void;
 }
 
+export interface BellNotification {
+  id: number;
+  type: 'meal_reminder' | 'daily_summary' | 'goal_achievement' | 'system';
+  title: string;
+  message: string;
+  data: unknown;
+  isRead: boolean;
+  sentAt: string;
+}
+
 type AddToDietOptions = {
   alreadyPersisted?: boolean;
   mealType?: string;
+  // Portion multiplier — defaults to 1. Backend stores this in
+  // mealitems.quantity and totals are computed as f.calories * mi.quantity.
+  quantity?: number;
 };
 
 type DietToastKind = 'success' | 'error';
@@ -79,6 +92,21 @@ const MEAL_HISTORY_LIMIT = 400;
 const MAX_CARRY_OVER_DEBT = 300;
 
 const getMinimumDailyTarget = (gender: Gender) => (gender === 'female' ? 1200 : 1500);
+
+const formatNotificationTime = (iso: string): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const diffMs = Date.now() - d.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'Vừa xong';
+  if (diffMin < 60) return `${diffMin} phút trước`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} giờ trước`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 7) return `${diffDay} ngày trước`;
+  return d.toLocaleDateString('vi-VN');
+};
 
 const getAuthHeaders = (includeJson = false) => {
   let token = '';
@@ -141,8 +169,12 @@ export default function App({ onLogout }: UserAppProps) {
   const [schedules, setSchedules] = useState<MealSchedule[]>([]);
   const [profile, setProfileState] = useState<UserProfile>(createDefaultProfile);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [notifications, setNotifications] = useState<{ id: string; message: string; time: string }[]>([]);
+  const [notifications, setNotifications] = useState<BellNotification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const unreadNotificationCount = useMemo(
+    () => notifications.filter(n => !n.isRead).length,
+    [notifications]
+  );
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [chatSummaries, setChatSummaries] = useState<{ id: string; title: string; lastMessage: string; timestamp: string }[]>([]);
   const [pendingChatId, setPendingChatId] = useState<string | null>(null);
@@ -153,15 +185,6 @@ export default function App({ onLogout }: UserAppProps) {
   const profileSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dietToastsRef = useRef<DietToast[]>([]);
   const dietToastTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const firedScheduleAlertsRef = useRef<Set<string>>(new Set(
-    (() => {
-      try {
-        const raw = localStorage.getItem('calai_schedule_notif_fired') || '[]';
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed as string[] : [];
-      } catch { return []; }
-    })()
-  ));
 
   // Calculate Base Daily Target (without carry-over)
   const baseTarget = useMemo(() => {
@@ -243,6 +266,7 @@ export default function App({ onLogout }: UserAppProps) {
     carbs?: number;
     fats?: number;
     mealTime?: string;
+    imagePath?: string | null;
     createdAt: string;
   }): DietItem => ({
     id: String(meal.id),
@@ -252,7 +276,9 @@ export default function App({ onLogout }: UserAppProps) {
     carbs: meal.carbs ?? 0,
     fats: meal.fats ?? 0,
     date: meal.createdAt,
-    image: getMealImage(meal.mealTime),
+    // Prefer the real food image stored in the DB; fall back to a meal-time
+    // placeholder only when the food row has no image.
+    image: meal.imagePath?.trim() || getMealImage(meal.mealTime),
     description: `${meal.mealTime || 'Meal'} entry saved from your nutrition log.`,
     about: 'This meal is loaded from your backend meal history and contributes to your diet tracking progress.',
   });
@@ -504,43 +530,10 @@ export default function App({ onLogout }: UserAppProps) {
     };
   }, [profile, baseTarget, isBootstrapping, profile.hasCompletedSetup]);
 
-  // Notification Logic
-  useEffect(() => {
-    const checkNotifications = () => {
-      const now = new Date();
-      const hours = now.getHours();
-      const minutes = now.getMinutes();
-      const currentTimeStr = `${hours}:${minutes.toString().padStart(2, '0')}`;
-
-      const schedule = [
-        { time: '09:00', message: 'Time to log your Breakfast! 🍳' },
-        { time: '12:30', message: 'Time to log your Lunch! 🥗' },
-        { time: '19:00', message: 'Time to log your Dinner! 🍽️' },
-      ];
-
-      schedule.forEach(item => {
-        if (currentTimeStr === item.time) {
-          // Check if already notified in the last minute to avoid duplicates
-          const alreadyNotified = notifications.some(n => n.time === item.time && n.message === item.message);
-          if (!alreadyNotified) {
-            setNotifications(prev => [
-              { id: Math.random().toString(36).substr(2, 9), ...item },
-              ...prev
-            ]);
-          }
-        }
-      });
-    };
-
-    const interval = setInterval(checkNotifications, 60000); // Check every minute
-    checkNotifications(); // Initial check
-    return () => clearInterval(interval);
-  }, [notifications]);
-
-  // Schedule-aware meal reminders: notify the user when each item in their
-  // saved schedules hits its scheduled time on its planned day. Persists
-  // fired keys in localStorage so a page reload doesn't re-fire the same
-  // reminder later in the same minute.
+  // Poll backend notifications every 30s. Backend cron jobs (meal_reminder,
+  // daily_summary, goal_achievement) write to the notifications table with a
+  // unique dedupe_key, so we just render whatever the server hands back. New
+  // unread items also trigger an OS-level browser notification on first sight.
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -550,70 +543,40 @@ export default function App({ onLogout }: UserAppProps) {
       }
     } catch { /* ignore */ }
 
-    const persist = () => {
+    const seenIds = new Set<number>();
+
+    const fetchNotifications = async () => {
       try {
-        const arr = Array.from(firedScheduleAlertsRef.current).slice(-200);
-        localStorage.setItem('calai_schedule_notif_fired', JSON.stringify(arr));
-      } catch { /* ignore */ }
-    };
+        const res = await fetch(buildApiUrl('/users/notifications?limit=50'), {
+          headers: getAuthHeaders(),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const items: BellNotification[] = Array.isArray(data?.notifications)
+          ? data.notifications
+          : [];
 
-    const FIRE_WINDOW_MS = 90_000; // accept up to 90s late so we don't miss a tick
-    const MEAL_EMOJI: Record<string, string> = {
-      breakfast: '🍳',
-      lunch: '🥗',
-      dinner: '🍽️',
-      snack: '🍎',
-    };
-
-    const check = () => {
-      const now = Date.now();
-      for (const schedule of schedules) {
-        const startMs = new Date(`${schedule.startDate}T00:00:00`).getTime();
-        if (!Number.isFinite(startMs)) continue;
-        for (const item of schedule.items) {
-          if (!item.scheduledTime || item.itemId == null) continue;
-          const offsetDays = item.dayOffset ?? 0;
-          const itemDate = new Date(startMs + offsetDays * 86400000);
-          const isoDay = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}-${String(itemDate.getDate()).padStart(2, '0')}`;
-          const [hhStr, mmStr] = item.scheduledTime.split(':');
-          const hh = Number(hhStr);
-          const mm = Number(mmStr);
-          if (!Number.isFinite(hh) || !Number.isFinite(mm)) continue;
-          const triggerMs = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate(), hh, mm, 0).getTime();
-          const elapsed = now - triggerMs;
-          if (elapsed < 0 || elapsed > FIRE_WINDOW_MS) continue;
-          const key = `${item.itemId}-${isoDay}`;
-          if (firedScheduleAlertsRef.current.has(key)) continue;
-          firedScheduleAlertsRef.current.add(key);
-          persist();
-
-          const timeLabel = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-          const emoji = MEAL_EMOJI[item.mealType] ?? '🔔';
-          const title = `${emoji} ${item.name}`;
-          const detail = `${item.mealType.charAt(0).toUpperCase() + item.mealType.slice(1)} · ${timeLabel} · ${schedule.name}`;
-
-          setNotifications(prev => [
-            { id: `sched-${key}`, message: `${title} — ${detail}`, time: timeLabel },
-            ...prev,
-          ]);
-          showDietToast({
-            kind: 'success',
-            title,
-            message: detail,
-          });
+        // Fire OS notification + in-app toast for items we haven't seen yet.
+        for (const n of items) {
+          if (seenIds.has(n.id)) continue;
+          seenIds.add(n.id);
+          if (n.isRead) continue; // already read — don't re-notify
           try {
             if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification(title, { body: detail, tag: key });
+              new Notification(n.title, { body: n.message, tag: `notif-${n.id}` });
             }
           } catch { /* ignore */ }
+          showDietToast({ kind: 'success', title: n.title, message: n.message });
         }
-      }
+
+        setNotifications(items);
+      } catch { /* network error, ignore — next tick will retry */ }
     };
 
-    const interval = setInterval(check, 30_000);
-    check();
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 30_000);
     return () => clearInterval(interval);
-  }, [schedules]);
+  }, []);
 
   const handleAddToMyDiet = async (item: Omit<DietItem, 'id' | 'date'>, options?: AddToDietOptions) => {
     try {
@@ -640,6 +603,7 @@ export default function App({ onLogout }: UserAppProps) {
           protein: item.protein,
           carbs: item.carbs,
           fats: item.fats,
+          quantity: options?.quantity,
         }),
       });
       const result = await response.json().catch(() => ({ message: 'Failed to save meal' }));
@@ -682,8 +646,26 @@ export default function App({ onLogout }: UserAppProps) {
     }
   };
 
-  const removeNotification = (id: string) => {
+  // Optimistic UI: drop the row locally first, then mark-read on the backend.
+  // If the network call fails the next poll will re-add the item.
+  const removeNotification = async (id: number) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      await fetch(buildApiUrl(`/users/notifications/${id}/read`), {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+      });
+    } catch { /* ignore — next poll will reconcile */ }
+  };
+
+  const markAllNotificationsRead = async () => {
+    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    try {
+      await fetch(buildApiUrl('/users/notifications/mark-all-read'), {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+    } catch { /* ignore */ }
   };
 
   if (isBootstrapping) {
@@ -787,9 +769,9 @@ export default function App({ onLogout }: UserAppProps) {
             className="w-12 h-12 rounded-2xl bg-surface-dark border border-white/5 flex items-center justify-center text-text-muted hover:text-white transition-colors relative"
           >
             <Bell size={20} />
-            {notifications.length > 0 && (
+            {unreadNotificationCount > 0 && (
               <span className="absolute -top-1 -right-1 w-5 h-5 bg-brand-orange text-bg-dark text-[10px] font-black rounded-full flex items-center justify-center border-2 border-bg-dark">
-                {notifications.length}
+                {unreadNotificationCount}
               </span>
             )}
           </motion.button>
@@ -802,26 +784,46 @@ export default function App({ onLogout }: UserAppProps) {
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 className="absolute top-16 right-0 w-80 max-w-[calc(100vw-2rem)] bg-surface-dark border border-white/10 rounded-[2rem] shadow-2xl overflow-hidden"
               >
-                <div className="p-6 border-b border-white/5 flex justify-between items-center">
-                  <h3 className="font-black text-sm uppercase tracking-widest">Notifications</h3>
-                  <button onClick={() => setShowNotifications(false)} className="text-text-muted hover:text-white">
-                    <X size={16} />
-                  </button>
+                <div className="p-6 border-b border-white/5 flex justify-between items-center gap-3">
+                  <h3 className="font-black text-sm uppercase tracking-widest">Thông báo</h3>
+                  <div className="flex items-center gap-2">
+                    {unreadNotificationCount > 0 && (
+                      <button
+                        onClick={markAllNotificationsRead}
+                        className="text-[10px] font-bold uppercase tracking-widest text-brand-orange hover:text-brand-orange/80"
+                      >
+                        Đã đọc hết
+                      </button>
+                    )}
+                    <button onClick={() => setShowNotifications(false)} className="text-text-muted hover:text-white">
+                      <X size={16} />
+                    </button>
+                  </div>
                 </div>
                 <div className="max-h-96 overflow-y-auto">
                   {notifications.length === 0 ? (
                     <div className="p-10 text-center text-text-muted">
                       <Bell size={32} className="mx-auto mb-4 opacity-20" />
-                      <p className="text-sm font-medium">No new notifications</p>
+                      <p className="text-sm font-medium">Chưa có thông báo</p>
                     </div>
                   ) : (
                     notifications.map(n => (
-                      <div key={n.id} className="p-6 border-b border-white/5 hover:bg-white/5 transition-colors relative group">
-                        <p className="text-sm font-medium pr-6">{n.message}</p>
-                        <p className="text-[10px] text-text-muted mt-2 font-bold uppercase tracking-widest">{n.time}</p>
-                        <button 
+                      <div
+                        key={n.id}
+                        className={`p-6 border-b border-white/5 hover:bg-white/5 transition-colors relative group ${n.isRead ? 'opacity-60' : ''}`}
+                      >
+                        {!n.isRead && (
+                          <span className="absolute top-7 left-2 w-1.5 h-1.5 rounded-full bg-brand-orange" aria-hidden />
+                        )}
+                        <p className="text-sm font-bold pr-6">{n.title}</p>
+                        <p className="text-xs text-text-muted mt-1 pr-6">{n.message}</p>
+                        <p className="text-[10px] text-text-muted mt-2 font-bold uppercase tracking-widest">
+                          {formatNotificationTime(n.sentAt)}
+                        </p>
+                        <button
                           onClick={() => removeNotification(n.id)}
                           className="absolute top-6 right-6 text-text-muted hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Đánh dấu đã đọc"
                         >
                           <X size={14} />
                         </button>

@@ -610,6 +610,8 @@ class FoodAnalysisPipeline:
         "food_fruit_vectors_768": "Bảng dinh dưỡng trái cây",
         "beverage_vectors_768": "Bảng dinh dưỡng đồ uống",
         "beverage_text_vectors_768": "Bảng dinh dưỡng đồ uống",
+        "cooky_recipes_768": "Công thức nấu ăn Cooky.vn",
+        "mnmn_recipes_768": "Công thức Món Ngon Mỗi Ngày",
     }
 
     def _default_portion_grams(self, vision):

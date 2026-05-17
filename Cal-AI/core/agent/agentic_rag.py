@@ -1223,6 +1223,8 @@ class RecipeAgent:
         "food_recipes_vectors_768",
         "recipes_64k_vectors_768",
         "food_recipe_images_text_768",
+        "cooky_recipes_768",
+        "mnmn_recipes_768",
     )
 
     def _parse_ingredient_list(self, value):

@@ -1,3 +1,7 @@
+import asyncio
+import time
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query
 from api.routes.food_analysis import router as food_router
 from api.routes.qa import router as qa_router
@@ -10,17 +14,7 @@ from api.routes.agentic_rag import (
 from typing import Optional
 from core.embedding.clip_service import CLIPService
 from core.services.retrieval.qdrant_service import QdrantService
-
-app = FastAPI()
-app.include_router(food_router)
-app.include_router(qa_router)
-app.include_router(recipe_dataset_router)
-app.include_router(agentic_rag_router)
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+from core.services.llm.llm_service import LLMService
 
 
 _clip = None
@@ -36,6 +30,59 @@ def get_search_services():
     if _qdrant is None:
         _qdrant = QdrantService()
     return _clip, _qdrant
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Pre-load heavy artefacts so the first user request doesn't pay
+    # the ~60s lazy-load cost (mpnet ~20-30s + ollama model load ~20-30s).
+    print("⏳ [startup] warming up models...")
+    t0 = time.time()
+
+    try:
+        rag = get_agentic_rag()
+        # Force lazy generic agent — owns the mpnet TextEmbeddingService used
+        # by the main chat path. Without this the first /query pays ~25s
+        # SentenceTransformer load cost.
+        generic = rag._generic_agent()
+        generic.text_embed.embed("khởi động hệ thống")
+        generic.qdrant.available_collections()
+        # Touch the recipe-side embedder too (used when intent = recipe).
+        rag.recipe_agent.rag.text_embed.embed("khởi động công thức")
+        print(f"   ✅ AgenticRAG + embeddings ready  ({time.time() - t0:.1f}s)")
+    except Exception as e:
+        print(f"   ⚠️ AgenticRAG warmup failed: {e}")
+
+    try:
+        get_search_services()
+        print(f"   ✅ CLIP + Qdrant ready  ({time.time() - t0:.1f}s)")
+    except Exception as e:
+        print(f"   ⚠️ CLIP/Qdrant warmup failed: {e}")
+
+    async def _warm_llm():
+        try:
+            await LLMService()._call_llm("hi", temperature=0.0, num_predict=1)
+            print(f"   ✅ LLM (ollama) warm  ({time.time() - t0:.1f}s)")
+        except Exception as e:
+            print(f"   ⚠️ LLM warmup failed: {e}")
+
+    asyncio.create_task(_warm_llm())
+
+    print(f"🚀 [startup] handlers registered (cold-start cost paid in {time.time() - t0:.1f}s)")
+    yield
+    print("🛑 [shutdown]")
+
+
+app = FastAPI(lifespan=lifespan)
+app.include_router(food_router)
+app.include_router(qa_router)
+app.include_router(recipe_dataset_router)
+app.include_router(agentic_rag_router)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
                                                                                                                                                                                                                     
 
 # =========================

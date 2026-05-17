@@ -6,6 +6,10 @@ import { requireRole } from './shared/middleware/role.middleware';
 import userRouter from './user/routes/user.routes';
 import adminRouter from './admin/routes/admin.routes';
 import chatRouter from './chat/routes/chat.routes';
+import {
+  notificationAdminRouter,
+  notificationUserRouter,
+} from './notifications/routes/notification.routes';
 
 const app = express();
 
@@ -35,7 +39,19 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use(
+  '/api/users/notifications',
+  requireAuth,
+  requireRole('user'),
+  notificationUserRouter
+);
 app.use('/api/users', requireAuth, requireRole('user'), userRouter);
+app.use(
+  '/api/admin/notifications',
+  requireAuth,
+  requireRole('admin'),
+  notificationAdminRouter
+);
 app.use('/api/admin', requireAuth, requireRole('admin'), adminRouter);
 app.use('/api/chat', requireAuth, requireRole('user'), chatRouter);
 

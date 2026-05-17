@@ -1158,6 +1158,7 @@ export const getUserMealsService = async (accountId?: number | null, options: Me
           m.meal_date,
           m.created_at,
           f.food_name,
+          f.image_path,
           mi.quantity,
           f.calories,
           f.protein,
@@ -1179,6 +1180,7 @@ export const getUserMealsService = async (accountId?: number | null, options: Me
       meal_date: string;
       created_at: string;
       food_name: string;
+      image_path: string | null;
       quantity: number;
       calories: number;
       protein: number;
@@ -1192,6 +1194,7 @@ export const getUserMealsService = async (accountId?: number | null, options: Me
       protein: Math.round((row.protein ?? 0) * row.quantity),
       carbs: Math.round((row.carbs ?? 0) * row.quantity),
       fats: Math.round((row.fat ?? 0) * row.quantity),
+      imagePath: row.image_path,
       createdAt: row.created_at,
       mealDate: row.meal_date,
     }));
@@ -1449,7 +1452,7 @@ export const createMealService = async (accountId: number | null | undefined, pa
 
   const [rows] = await pool.query(
     `
-      SELECT m.meal_id, m.meal_type, m.created_at, f.food_name, mi.quantity, f.calories, f.protein, f.carbs, f.fat
+      SELECT m.meal_id, m.meal_type, m.created_at, f.food_name, f.image_path, mi.quantity, f.calories, f.protein, f.carbs, f.fat
       FROM meals m
       INNER JOIN mealitems mi ON mi.meal_id = m.meal_id
       INNER JOIN foods f ON f.food_id = mi.food_id
@@ -1464,6 +1467,7 @@ export const createMealService = async (accountId: number | null | undefined, pa
     meal_type: string;
     created_at: string;
     food_name: string;
+    image_path: string | null;
     quantity: number;
     calories: number;
     protein: number;
@@ -1479,6 +1483,7 @@ export const createMealService = async (accountId: number | null | undefined, pa
     protein: Math.round((row.protein ?? 0) * row.quantity),
     carbs: Math.round((row.carbs ?? 0) * row.quantity),
     fats: Math.round((row.fat ?? 0) * row.quantity),
+    imagePath: row.image_path,
     createdAt: row.created_at,
   };
 };

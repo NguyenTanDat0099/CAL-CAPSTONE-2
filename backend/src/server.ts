@@ -3,6 +3,7 @@ dotenv.config();
 
 import app from './app';
 import { initializeAuthData } from './auth/services/auth.service';
+import { startNotificationScheduler } from './notifications/jobs';
 import { testDatabaseConnection } from './shared/database/db';
 import { initializeUserServices } from './user/services/user.service';
 
@@ -13,6 +14,7 @@ const startServer = async () => {
     await testDatabaseConnection();
     await initializeAuthData();
     await initializeUserServices();
+    startNotificationScheduler();
 
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);

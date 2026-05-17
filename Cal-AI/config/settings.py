@@ -45,6 +45,8 @@ class Settings(BaseSettings):
         "food_recipe_images_text_768",
         "meta_vectors",
         "vn_food_vectors_768",
+        "cooky_recipes_768",
+        "mnmn_recipes_768",
     ]
 
     FOOD_RAG_COLLECTIONS: List[str] = [
@@ -62,6 +64,8 @@ class Settings(BaseSettings):
         "food_vectors_768",
         "food_fruit_vectors_768",
         "vn_food_vectors_768",
+        "cooky_recipes_768",
+        "mnmn_recipes_768",
     ]
 
     RECIPES_64K_COLLECTION: str = "recipes_64k_vectors_768"
