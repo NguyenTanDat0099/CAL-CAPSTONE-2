@@ -1,0 +1,106 @@
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# =========================
+# VIRTUAL ENV
+# =========================
+venv/
+venv-train/
+.venv/
+env/
+ENV/
+
+# =========================
+# ENV / SECRETS
+# =========================
+.env
+.env.*
+*.env
+
+# =========================
+# LOGS
+# =========================
+logs/
+*.log
+
+# =========================
+# DATA (RAG STORAGE)
+# =========================
+data/storage/
+data/cache/
+data/tmp/
+
+# vector DB local (nếu dùng local)
+qdrant_storage/
+
+# =========================
+# MODEL CACHE
+# =========================
+.cache/
+.huggingface/
+huggingface/
+HF_HOME/
+
+# =========================
+# MODEL FILES (AI)
+# =========================
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+
+models/
+weights/
+
+# =========================
+# NOTEBOOK
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# BUILD
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# TEST
+# =========================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# =========================
+# TEMP
+# =========================
+tmp/
+temp/
+*.tmp
+
+# =========================
+# API KEYS (backup leak prevention)
+# =========================
+secrets/
+config/secrets.py

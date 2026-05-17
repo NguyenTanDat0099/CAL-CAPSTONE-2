@@ -1,0 +1,32 @@
+# Templated Ollama instance so we can run several side-by-side and let nginx
+# load-balance LLM traffic across them.
+#
+# %i = port to bind on.
+# Enable with:
+#   systemctl enable --now calai-ollama@11434.service calai-ollama@11435.service
+#
+# Memory & GPU note: each instance loads its own copy of the model into VRAM,
+# so only spin up as many as the GPU can fit. On a single-GPU box, two
+# instances + careful OLLAMA_KEEP_ALIVE often gives more headroom than one
+# instance under contention.
+
+[Unit]
+Description=Ollama LLM instance on port %i
+After=network.target
+
+[Service]
+Type=simple
+User=tarou
+Environment="OLLAMA_HOST=0.0.0.0:%i"
+Environment="OLLAMA_KEEP_ALIVE=30m"
+Environment="OLLAMA_NUM_PARALLEL=2"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+ExecStart=/usr/local/bin/ollama serve
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
