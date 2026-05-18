@@ -838,6 +838,46 @@ const extractNutrition = (value: unknown) => {
   };
 };
 
+const extractNutritionFromText = (text?: string | null) => {
+  const out: { calories: number | null; protein: number | null; carbs: number | null; fat: number | null } = {
+    calories: null, protein: null, carbs: null, fat: null,
+  };
+  if (!text) return out;
+  const norm = text.toLowerCase();
+  const pickNum = (m: RegExpMatchArray | null) => {
+    if (!m) return null;
+    const raw = (m[1] ?? '').replace(',', '.').replace(/^~/, '');
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  // Prefer the structured summary line the vision prompt mandates:
+  //   "Tóm tắt dinh dưỡng: ~430 kcal | Protein ~32g | Carb ~18g | Fat ~26g"
+  const summaryLine = norm.match(/tóm tắt dinh dưỡng[^\n]{0,400}/i);
+  const scope = summaryLine ? summaryLine[0] : norm;
+
+  out.calories = pickNum(scope.match(/~?\s*(\d{2,4}(?:[.,]\d+)?)\s*(?:kcal|calo(?:rie)?s?)/));
+  out.protein = pickNum(
+    scope.match(/protein[^\d~]{0,15}~?\s*(\d{1,3}(?:[.,]\d+)?)\s*g/)
+    ?? scope.match(/~?\s*(\d{1,3}(?:[.,]\d+)?)\s*g(?:ram)?\s*protein/)
+  );
+  out.carbs = pickNum(
+    scope.match(/(?:carb(?:s|ohydrate)?|tinh bột|tinh bot)[^\d~]{0,15}~?\s*(\d{1,3}(?:[.,]\d+)?)\s*g/)
+    ?? scope.match(/~?\s*(\d{1,3}(?:[.,]\d+)?)\s*g(?:ram)?\s*(?:carb|carbohydrate|tinh bột|tinh bot)/)
+  );
+  out.fat = pickNum(
+    scope.match(/(?:fat|chất béo|chat beo)[^\d~]{0,15}~?\s*(\d{1,3}(?:[.,]\d+)?)\s*g/)
+    ?? scope.match(/~?\s*(\d{1,3}(?:[.,]\d+)?)\s*g(?:ram)?\s*(?:fat|chất béo|chat beo)/)
+  );
+  return out;
+};
+
+const mergeNutrition = (primary: ReturnType<typeof extractNutrition>, fallback: ReturnType<typeof extractNutrition>) => ({
+  calories: primary.calories ?? fallback.calories,
+  protein: primary.protein ?? fallback.protein,
+  carbs: primary.carbs ?? fallback.carbs,
+  fat: primary.fat ?? fallback.fat,
+});
+
 const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   if (!data || typeof data !== 'object') return null;
   const record = data as Record<string, unknown>;
@@ -863,6 +903,14 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
   const hasAnswer = Boolean(safeAnswer);
   if (!dishName && !hasAnswer) return null;
 
+  // Cal-AI vision pipeline often leaves structured nutrition fields null
+  // while the natural-language answer still contains "450 kcal, 32g protein".
+  // Backfill from the answer so the UI card matches what the user reads.
+  const fallbackFromAnswer = !estimated.calories && safeAnswer
+    ? extractNutritionFromText(safeAnswer)
+    : { calories: null, protein: null, carbs: null, fat: null };
+  const merged = mergeNutrition(estimated, fallbackFromAnswer);
+
   return {
     answer: safeAnswer,
     dishName: dishName ?? 'Unidentified food',
@@ -887,7 +935,7 @@ const parseCalAiFoodInsight = (data: unknown): FoodImageInsight | null => {
     followUpQuestions: toStringArray(uncertainty.needs_user_input),
     tableRows: toRecordArray(visionDetail.table_rows),
     imageQuality: toRecord(visionDetail.image_quality),
-    ...estimated,
+    ...merged,
     source: 'cal-ai',
   };
 };

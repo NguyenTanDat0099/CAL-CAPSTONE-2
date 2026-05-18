@@ -147,6 +147,7 @@ class Settings(BaseSettings):
     LLM_BACKEND: str = "ollama"  # ollama | openai
     LLM_TIMEOUT_SECONDS: float = 240.0
     LLM_NUM_PREDICT: int = 384
+    LLM_NUM_CTX: int = 2048
 
 
 settings = Settings()

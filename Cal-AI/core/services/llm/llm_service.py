@@ -35,7 +35,10 @@ class LLMService:
             "prompt": prompt,
             "system": AGENTIC_SYSTEM_PROMPT,
             "stream": False,
-            "options": {"temperature": temperature}
+            "options": {
+                "temperature": temperature,
+                "num_ctx": settings.LLM_NUM_CTX,
+            }
         }
         if num_predict is not None:
             payload["options"]["num_predict"] = num_predict
@@ -93,11 +96,16 @@ class LLMService:
             return {"error": str(e)}
 
     def _strip_code_fence(self, text: str) -> str:
-        text = text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```[a-zA-Z0-9_-]*", "", text)
-            text = text.replace("```", "")
-        return text.strip()
+        original = text.strip()
+        if not original.startswith("```"):
+            return original
+        stripped = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", original)
+        stripped = re.sub(r"```\s*$", "", stripped).strip()
+        # If stripping the fence left nothing useful, fall back to the
+        # original so the response generator doesn't ship an empty answer.
+        if len(stripped) < 12:
+            return original
+        return stripped
 
     # Post-process the model output so internal prompt field names ("CONTEXT",
     # "Lịch sử", "Phân tích", "Hồ sơ user", "Intent", ...) don't leak into
@@ -569,11 +577,11 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
             user_profile_text=user_profile_text
         )
         if intent == "meal_planning":
-            num_predict = max(settings.LLM_NUM_PREDICT, 1400)
+            num_predict = max(settings.LLM_NUM_PREDICT, 700)
         elif intent == "weight_projection":
             num_predict = max(settings.LLM_NUM_PREDICT, 500)
         elif intent == "nutrition_qa":
-            num_predict = max(settings.LLM_NUM_PREDICT, 900)
+            num_predict = max(settings.LLM_NUM_PREDICT, 500)
         elif intent == "off_topic":
             num_predict = max(settings.LLM_NUM_PREDICT, 180)
         else:

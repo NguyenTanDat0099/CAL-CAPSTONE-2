@@ -59,14 +59,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"   ⚠️ CLIP/Qdrant warmup failed: {e}")
 
-    async def _warm_llm():
-        try:
-            await LLMService()._call_llm("hi", temperature=0.0, num_predict=1)
-            print(f"   ✅ LLM (ollama) warm  ({time.time() - t0:.1f}s)")
-        except Exception as e:
-            print(f"   ⚠️ LLM warmup failed: {e}")
-
-    asyncio.create_task(_warm_llm())
+    try:
+        await LLMService()._call_llm("hi", temperature=0.0, num_predict=1)
+        print(f"   ✅ LLM (ollama) warm  ({time.time() - t0:.1f}s)")
+    except Exception as e:
+        print(f"   ⚠️ LLM warmup failed: {e}")
 
     print(f"🚀 [startup] handlers registered (cold-start cost paid in {time.time() - t0:.1f}s)")
     yield

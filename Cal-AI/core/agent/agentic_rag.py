@@ -481,10 +481,25 @@ class AgenticResponseGenerator:
                 conversation_context=conversation_context,
                 user_profile_text=user_profile_text
             )
-        except Exception:
+        except Exception as e:
+            self._mark_llm_failure(trace, f"LLM exception: {type(e).__name__}: {e}")
             return self._model_unavailable_answer()
 
-        return answer or self._model_unavailable_answer()
+        if not answer:
+            self._mark_llm_failure(trace, "LLM trả về rỗng/None — không có nội dung để hiển thị.")
+            return self._model_unavailable_answer()
+
+        return answer
+
+    @staticmethod
+    def _mark_llm_failure(trace, detail):
+        if not isinstance(trace, list):
+            return
+        for step in reversed(trace):
+            if isinstance(step, dict) and step.get("title") == "Response Generator":
+                step["status"] = "warning"
+                step["detail"] = detail
+                break
 
 
 class GenericRAGAgent:
