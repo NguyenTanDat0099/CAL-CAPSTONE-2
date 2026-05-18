@@ -60,7 +60,10 @@ TOPIC_REGISTRY = {
     "exercise": {
         "phrases": (
             "bai tap", "bai the duc", "tap luyen", "the duc", "the thao",
-            "van dong", "hoat dong the chat", "tap gym", "tap aerobic",
+            "van dong", "hoat dong the chat", "hoat dong ngoai troi",
+            "hoat dong the thao", "hoat dong van dong", "di bo", "di dao",
+            "leo nui", "trekking", "outdoor activity", "outdoor activities",
+            "tap gym", "tap aerobic",
             "tap yoga", "chay bo", "boi loi", "dap xe", "nang ta",
             "exercise", "exercises", "workout", "workouts", "training",
             "fitness", "gym", "sport", "sports", "physical activity",
@@ -70,6 +73,7 @@ TOPIC_REGISTRY = {
         "keywords": (
             "exercise", "workout", "training", "fitness", "gym",
             "sport", "activity", "cardio", "running", "yoga",
+            "outdoor", "walking", "hiking",
         ),
         "collections": (
             "exercise_text_vectors_768",
@@ -316,6 +320,8 @@ class AgentRouter:
             return "image_retrieval"
 
         topics = matched_topics(query)
+        if topics and "exercise" in topics:
+            return "exercise_qa"
         if topics and any(TOPIC_REGISTRY[topic].get("exclusive") for topic in topics):
             return "nutrition_qa"
 
@@ -327,7 +333,13 @@ class AgentRouter:
             "ke hoach an uong", "bua an hom nay", "hom nay an gi",
             "an gi hom nay", "daily meal plan", "plan my meals",
             "bua trua", "bua toi", "bua sang", "an trua", "an toi",
-            "an sang", "menu", "meal prep"
+            "an sang", "menu", "meal prep",
+            "lich trinh an", "lich trinh an uong", "lich trinh bua",
+            "lich an", "lich an uong", "len lich an", "len lich bua",
+            "tao lich an", "tao lich trinh", "lap lich an",
+            "plan my schedule", "meal schedule", "eating schedule",
+            "food schedule", "schedule my meals", "schedule meal",
+            "weekly meal plan", "meal plan for the week"
         ]):
             return "meal_planning"
 
@@ -337,8 +349,12 @@ class AgentRouter:
         ):
             return "meal_planning"
 
-        plan_anchor_vi = self._has_phrase(q, ["ke hoach", "thuc don", "lo trinh", "lap ra", "len ra"])
-        plan_anchor_en = self._has_phrase(q, ["plan", "schedule", "meal plan", "menu"])
+        plan_anchor_vi = self._has_phrase(q, [
+            "ke hoach", "thuc don", "lo trinh", "lap ra", "len ra",
+            "lich trinh", "lich an", "len lich", "tao lich", "lap lich",
+            "sap xep bua", "sap xep an"
+        ])
+        plan_anchor_en = self._has_phrase(q, ["plan", "schedule", "meal plan", "menu", "timetable"])
         food_or_horizon = self._has_phrase(q, [
             "thuc pham", "do an", "bua an", "an uong", "mon an", "mon",
             "bua sang", "bua trua", "bua toi", "an sang", "an trua", "an toi",
@@ -695,7 +711,82 @@ class GenericRAGAgent:
 
         return list(dict.fromkeys(keywords))
 
-    def _comparison_terms(self, query):
+    # Stopwords that surface when the user defers comparison targets to the
+    # previous turn ("so sánh cho tôi", "so sánh giúp mình"...). When the
+    # extracted segment is only these, embedding them produces garbage —
+    # we have to look in the conversation context instead.
+    _COMPARISON_STOPWORDS = {
+        "cho toi", "cho minh", "giup toi", "giup minh", "ho toi", "ho minh",
+        "lam on", "please", "minh", "toi", "ho", "voi", "cho",
+    }
+
+    @staticmethod
+    def _comparison_terms_from_context(context_text):
+        if not context_text:
+            return []
+        normalized = unicodedata.normalize("NFKD", str(context_text))
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = normalized.replace("đ", "d").replace("Đ", "D").lower()
+
+        # Drop the trailing "Câu hỏi hiện tại: ..." segment that the
+        # retrieval-query wrapper appends — the comparison targets live
+        # in the assistant/user turns BEFORE it.
+        current_q_marker = normalized.rfind("cau hoi hien tai:")
+        if current_q_marker > 0:
+            snippet = normalized[:current_q_marker]
+        else:
+            # Cut off the last user line — the user's "so sánh ..." prompt
+            # is the question, not the source of comparison targets.
+            last_user_pos = normalized.rfind("user:")
+            snippet = normalized[:last_user_pos] if last_user_pos > 0 else normalized
+        snippet = snippet[-1600:]
+
+        terms = []
+
+        # Country/cuisine adjectives the user might reference with
+        # phrases like "2 nước trên".
+        cuisine_words = (
+            "my", "phap", "y", "nhat", "han", "trung", "viet", "thai",
+            "an do", "tay ban nha", "duc",
+            "american", "french", "italian", "japanese", "korean",
+            "chinese", "vietnamese", "indian", "spanish", "german",
+        )
+        for word in cuisine_words:
+            pattern = r"(?<![a-z])" + re.escape(word) + r"(?![a-z])"
+            if re.search(pattern, snippet) and word not in terms:
+                terms.append(word)
+            if len(terms) >= 4:
+                return terms[:4]
+
+        # Fallback: grab capitalized noun phrases from the original
+        # (un-lowercased) context — typical dish names like "Coq au Vin",
+        # "Apple Pie", "Hamburger". Use [^\S\n] so phrases don't span
+        # newlines (avoids "Phap\nAssistant" being captured as one term).
+        # Strip the retrieval-query wrapper's heading lines so they don't
+        # appear as capitalized noun phrases (e.g. "Ngữ cảnh hội thoại").
+        original_full = str(context_text)
+        wrapper_marker = original_full.find("Câu hỏi hiện tại:")
+        if wrapper_marker > 0:
+            original_full = original_full[:wrapper_marker]
+        wrapper_header = "Ngữ cảnh hội thoại"
+        original_full = original_full.replace(wrapper_header, " ")
+        original = original_full[-1600:]
+        ignore = {"user", "assistant", "context", "session", "intent"}
+        for match in re.finditer(
+            r"\b([A-Z][a-zA-Z]{2,}(?:[^\S\n]+[A-Za-z][a-zA-Z]{2,}){0,3})\b",
+            original,
+        ):
+            candidate = match.group(1).strip()
+            if candidate.lower() in ignore:
+                continue
+            if candidate not in terms:
+                terms.append(candidate)
+            if len(terms) >= 4:
+                break
+
+        return terms[:4]
+
+    def _comparison_terms(self, query, conversation_context=None):
         normalized = unicodedata.normalize("NFKD", str(query or ""))
         normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
         normalized = normalized.replace("đ", "d").replace("Đ", "D").lower()
@@ -732,8 +823,19 @@ class GenericRAGAgent:
             term = re.sub(r"\s+", " ", part).strip(" .:;!?-")
             if len(term) < 2:
                 continue
+            if term in self._COMPARISON_STOPWORDS:
+                continue
             if term not in terms:
                 terms.append(term[:80])
+
+        # If the user deferred comparison targets to the previous turn
+        # ("so sánh cho tôi"), the segment collapses to stopwords-only.
+        # Fall back to nouns extracted from conversation context so we
+        # don't embed "cho toi" as a sub-query.
+        if not terms:
+            fallback = self._comparison_terms_from_context(conversation_context)
+            if fallback:
+                terms = fallback
         return terms[:4]
 
     def _display_name(self, payload):
@@ -1051,8 +1153,8 @@ class GenericRAGAgent:
             for hit in selected
         ]
 
-    def ingredient_comparison(self, query, top_k, trace):
-        terms = self._comparison_terms(query)
+    def ingredient_comparison(self, query, top_k, trace, conversation_context=None):
+        terms = self._comparison_terms(query, conversation_context=conversation_context)
         trace.add(
             "Ingredient comparison retrieval",
             "Tách từng thực phẩm/nguyên liệu rồi truy vấn các collection dinh dưỡng và text 768 chiều.",
@@ -1736,6 +1838,13 @@ class AgenticRAG:
                 return meal_type
         return None
 
+    SCHEDULE_DEFAULT_WEEK_PHRASES = (
+        "lich trinh", "lich an", "len lich", "tao lich", "lap lich",
+        "sap xep bua", "ke hoach an uong", "ke hoach bua an",
+        "meal schedule", "eating schedule", "food schedule",
+        "weekly meal plan", "meal plan for the week", "plan my schedule",
+    )
+
     def _plan_horizon_days(self, query):
         normalized = _normalize_for_topic(query)
         max_days = 1
@@ -1752,6 +1861,13 @@ class AgenticRAG:
                 if re.search(pattern, normalized):
                     if days > max_days:
                         max_days = days
+        # "lịch trình ăn uống" / "schedule" mà không nêu số ngày → mặc định 1 tuần
+        # để output có khung đủ để lưu vào My schedule.
+        if max_days == 1:
+            for phrase in self.SCHEDULE_DEFAULT_WEEK_PHRASES:
+                if phrase in normalized:
+                    max_days = 7
+                    break
         return min(max_days, 90)
 
     def _numeric_metric(self, payload, keys):
@@ -2157,7 +2273,12 @@ class AgenticRAG:
         elif routed_intent == "recipe_reasoning":
             results = self.recipe_agent.recipe_reasoning(retrieval_query, top_k, trace)
         elif routed_intent == "ingredient_comparison":
-            results = self._generic_agent().ingredient_comparison(retrieval_query, top_k, trace)
+            results = self._generic_agent().ingredient_comparison(
+                retrieval_query,
+                top_k,
+                trace,
+                conversation_context=conversation_context,
+            )
         elif routed_intent == "multi_hop":
             results = self.recipe_agent.multi_hop(retrieval_query, top_k, trace)
         elif routed_intent == "meal_planning":
@@ -2296,6 +2417,19 @@ class AgenticRAG:
             results = []
         elif routed_intent == "nutrition_qa":
             generic_agent = self._generic_agent()
+            results = generic_agent.run(
+                retrieval_query,
+                top_k,
+                trace,
+                collections=generic_agent._focused_nutrition_collections(retrieval_query)
+            )
+        elif routed_intent == "exercise_qa":
+            generic_agent = self._generic_agent()
+            trace.add(
+                "Exercise intent",
+                "Câu hỏi về vận động/hoạt động thể chất — chỉ truy xuất các collection exercise/lifestyle, không trộn dữ liệu món ăn.",
+                detail="Tránh retrieval pull các món ăn ngẫu nhiên (vd 'Apple') khi user hỏi hoạt động ngoài trời."
+            )
             results = generic_agent.run(
                 retrieval_query,
                 top_k,

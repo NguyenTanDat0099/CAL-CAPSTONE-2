@@ -553,9 +553,17 @@ Nguon: {json.dumps((citations or [])[:3], ensure_ascii=False, separators=(",", "
             temperature=0.2,
             num_predict=max(settings.LLM_NUM_PREDICT, 800)
         )
+        # LLM unavailable (Ollama down/timeout) or post-processing wiped the
+        # body — fall back to a grounded NL sentence built from the analysis
+        # so the backend doesn't drop into its templated "Quan sát từ ảnh / Lý
+        # do nhận diện / Độ bất định …" rendering path.
         if isinstance(text, dict):
-            return None
-        return self._strip_internal_labels(text)
+            print("[LLM] answer_food_image fallback (LLM error):", text)
+            return self._grounded_food_image_answer(question, analysis)
+        cleaned = self._strip_internal_labels(text)
+        if not cleaned or not cleaned.strip():
+            return self._grounded_food_image_answer(question, analysis)
+        return cleaned
 
     async def answer_agentic(
         self,

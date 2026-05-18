@@ -140,6 +140,18 @@ class Settings(BaseSettings):
     ]
     VISION_QDRANT_TOP_K: int = 8
     VISION_QDRANT_MIN_SCORE: float = 0.18
+    # Stricter cutoff for COMMITTING a Qdrant nearest-neighbor title as the
+    # dish name (vs. just showing it as a "possible_dish"). At 0.18 the top
+    # neighbor is essentially "vaguely similar pixels" — e.g. a Bò xào cần
+    # tây plate scored close to a Beef Chow Mein recipe row purely because
+    # both have sliced beef + green herbs on a white plate. Below 0.55 we
+    # refuse to use the neighbor's name as the dish name.
+    VISION_QDRANT_DISH_COMMIT_SCORE: float = 0.55
+    # Stricter cutoff for COMMITTING a classifier top-1 candidate as the
+    # dish name when Qwen-VL returned "unknown". 0.08 (MIN_CONFIDENCE) is
+    # fine for gating "should we use any classifier output at all", but at
+    # that level top-1 is barely more than uniform across 17 candidates.
+    IMAGE_CLASSIFIER_DISH_COMMIT_CONFIDENCE: float = 0.35
     VISION_QDRANT_SCORE_WEIGHT: float = 0.35
 
     LLM_MODEL: str = "qcwind/qwen2.5-7B-instruct-Q4_K_M:latest"

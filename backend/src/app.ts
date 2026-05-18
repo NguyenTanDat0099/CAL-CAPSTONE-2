@@ -13,6 +13,10 @@ import {
 
 const app = express();
 
+// Trust the first proxy hop so express-rate-limit reads the real client IP from
+// X-Forwarded-For when running behind ngrok/Cloudflare. Required by express-rate-limit v7.
+app.set('trust proxy', 1);
+
 const corsOptions = {
   origin: [
     'http://localhost:3001',

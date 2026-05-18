@@ -25,3 +25,12 @@ __pycache__/
 *.py[cod]
 .cache/
 node_modules
+
+# Python virtual environments
+.venv/
+.venv*/
+venv/
+env/
+**/.venv/
+**/.venv*/
+**/venv/

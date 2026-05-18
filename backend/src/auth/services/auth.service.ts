@@ -1,7 +1,8 @@
 import crypto from 'crypto';
-import jwt, { SignOptions } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import pool from '../../shared/database/db';
 import { emailSenderConfigured, sendOtpEmail } from '../../shared/email/mailer';
+import { jwtSecret, jwtExpiresIn } from '../../shared/config/jwt';
 
 interface AccountRow {
   account_id: number;
@@ -47,8 +48,6 @@ const registerOtps = new Map<string, { code: string; expiresAt: number; password
 
 const USER_ROLE = 'user';
 const ADMIN_ROLE = 'admin';
-const jwtSecret = process.env.JWT_SECRET || 'calai-dev-secret';
-const jwtExpiresIn = (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'];
 let authSchemaInitPromise: Promise<void> | null = null;
 
 const hashPassword = (password: string) => {
@@ -200,7 +199,9 @@ const ensureDemoAccounts = async () => {
 
 export const initializeAuthData = async () => {
   await ensureAuthSchema();
-  await ensureDemoAccounts();
+  if (process.env.NODE_ENV !== 'production' && process.env.SEED_DEMO_ACCOUNTS !== 'false') {
+    await ensureDemoAccounts();
+  }
 };
 
 export const requestRegisterOtpService = async ({ email, password, username }: RegisterOtpPayload) => {
@@ -271,8 +272,6 @@ export const verifyRegisterOtpService = async ({ email, code }: VerifyRegisterOt
 };
 
 export const loginService = async ({ email, password }: LoginPayload) => {
-  await ensureDemoAccounts();
-
   const account = await getAccountWithRole(email);
   if (!account || !verifyPassword(password, account.password_hash)) {
     throw new Error('INVALID_CREDENTIALS');

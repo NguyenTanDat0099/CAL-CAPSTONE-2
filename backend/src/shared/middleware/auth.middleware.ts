@@ -1,7 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-
-const jwtSecret = process.env.JWT_SECRET || 'calai-dev-secret';
+import { jwtSecret } from '../config/jwt';
 
 interface AuthTokenPayload {
   accountId: number;

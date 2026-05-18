@@ -9,8 +9,7 @@ import {
   verifyRegisterOtpService,
   verifyResetCodeService,
 } from '../services/auth.service';
-
-const jwtSecret = process.env.JWT_SECRET || 'calai-dev-secret';
+import { jwtSecret } from '../../shared/config/jwt';
 
 interface AuthTokenPayload {
   accountId: number;

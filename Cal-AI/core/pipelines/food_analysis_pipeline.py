@@ -105,11 +105,18 @@ class FoodAnalysisPipeline:
         question_digest = hashlib.sha1(
             question_norm.encode("utf-8")
         ).hexdigest()[:16]
-        # v5: bumped 2026-05-09 — filename match moved BEFORE Qwen-VL so
-        # dataset uploads skip the 60-100s vision call entirely. Also
-        # restored Qdrant keyword indexes on image_file/image_name (got
-        # dropped during the --recreate ingest).
-        return f"food_analysis:v5:{self._image_key(image)}:{question_digest}"
+        # v8: bumped 2026-05-18 — filename-match path no longer leaks the
+        # English debug fields `description="Recipe row matched by filename"`
+        # and `identification_evidence=["filename_match:..."]` into the
+        # user-facing payload, and `result["answer"]` is now always set so
+        # the backend never falls into its English-leaky template renderer.
+        # v7: to_vision_seed no longer commits a Qdrant visual-neighbor title
+        # unless score ≥ 0.55.
+        # v6: answer_food_image falls back to grounded NL when LLM errors.
+        # v5: filename match moved BEFORE Qwen-VL so dataset uploads skip the
+        # 60-100s vision call entirely. Also restored Qdrant keyword indexes
+        # on image_file/image_name (got dropped during the --recreate ingest).
+        return f"food_analysis:v8:{self._image_key(image)}:{question_digest}"
 
     def _response_cache_get(self, key):
         raw = self.response_cache.get(key)
@@ -269,10 +276,14 @@ class FoodAnalysisPipeline:
             "category": self._category_from_title(title),
             "ingredients": ingredients,
             "instructions": str(instructions) if instructions else "",
-            "description": f"Recipe row matched by filename: {title}",
-            "identification_evidence": [
-                f"filename_match:{os.path.basename(str(filename or ''))}"
-            ],
+            # description/identification_evidence are debug metadata for logs,
+            # not user-facing copy. The backend used to render them directly
+            # into the chat reply, which leaked English recipe titles and a
+            # raw "filename_match:..." token. Keep them empty here so the
+            # only English the LLM has to translate is the structured
+            # ingredients list.
+            "description": None,
+            "identification_evidence": [],
             "image_quality": {},
             "possible_dishes": [],
             "image_observations": [],
@@ -1103,12 +1114,16 @@ class FoodAnalysisPipeline:
             )
         }
 
-        answer = await self.llm.answer_food_image(
+        # `answer_food_image` is guaranteed to return a non-empty Vietnamese
+        # string (it has a grounded-from-analysis fallback when the LLM
+        # errors). We deliberately drop the previous `if answer:` guard
+        # because a falsy slip would silently cache a result without
+        # `answer`, and the backend would then render its English-leaky
+        # template path instead of the LLM/grounded reply.
+        result["answer"] = await self.llm.answer_food_image(
             question=question or "Đây là món gì? Hãy phân tích dinh dưỡng và tư vấn.",
             analysis=result
         )
-        if answer:
-            result["answer"] = answer
 
         result["cache_hit"] = False
 

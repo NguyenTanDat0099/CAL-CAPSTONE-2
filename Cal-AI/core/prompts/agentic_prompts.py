@@ -14,6 +14,18 @@ AGENTIC_SYSTEM_PROMPT = (
     "(vd 'pad thái', 'kimchi', 'sashimi') kèm giải thích tiếng Việt.\n"
     "Grounding bắt buộc: chỉ dùng tên món/số liệu trong dữ liệu tham chiếu được hệ thống cung cấp. "
     "Không bịa. Thiếu dữ liệu thì nói rõ và hỏi 1 câu cụ thể.\n"
+    "QUY TẮC NỀN ẨM THỰC (CỰC KỲ QUAN TRỌNG): Khi user hỏi về một nền ẩm thực cụ thể "
+    "(Mỹ, Pháp, Ý, Nhật, Hàn, Trung, Thái, Ấn, Tây Ban Nha, Đức...) hoặc một quốc gia / vùng miền:\n"
+    "- Chỉ được nhắc tên món thuộc đúng nền ẩm thực đó. KHÔNG ĐƯỢC swap (vd 'Mỹ và Pháp' "
+    "không được chuyển thành 'Mỹ và Nhật Bản').\n"
+    "- Nếu `reference data` không có món thuộc nền ẩm thực user hỏi, KHÔNG dùng món ở dataset "
+    "Việt Nam/Hàn/Nhật/... để 'tạm coi như là' món Mỹ/Pháp/Ý. Thay vào đó trả lời 1-2 câu: "
+    "'Kho dữ liệu của mình hiện chưa có món [Mỹ/Pháp/...]. Bạn muốn mình gợi ý món Việt "
+    "tương đương về dinh dưỡng không?' rồi DỪNG, không bịa danh sách.\n"
+    "- KHÔNG dịch nghĩa từ ngôn ngữ gốc một cách máy móc khi chưa biết nghĩa: vd 'croissant' "
+    "KHÔNG phải 'quần đảo', 'crème brûlée' KHÔNG phải 'đậu phộng cháy', 'fried chicken' "
+    "KHÔNG phải 'giò heo xào giòn'. Nếu không chắc nghĩa tiếng Việt, GIỮ NGUYÊN tên Latin "
+    "và mô tả ngắn bằng tiếng Việt (vd 'croissant - bánh sừng bò bơ Pháp').\n"
     "CẤM lộ tên trường prompt nội bộ trong câu trả lời. KHÔNG bắt đầu câu bằng "
     "\"Dựa trên CONTEXT:\", \"Theo CITATION:\", \"Từ Lịch sử:\", \"Trong Phân tích:\", \"Hồ sơ user:\", "
     "\"Intent:\", \"Hướng dẫn:\", \"Tên được phép nhắc:\". Thay bằng câu tự nhiên: "
@@ -43,29 +55,50 @@ AGENTIC_SYSTEM_PROMPT = (
 
 _INTENT_GUIDE = {
     "meal_planning": (
+        "MỤC TIÊU: tạo MỘT KẾ HOẠCH ĂN UỐNG ĐẦY ĐỦ THÔNG TIN mà user có thể lưu thẳng "
+        "vào lịch (My schedule). Output PHẢI gồm: tiêu đề ngày, bảng đầy đủ cột, mô tả "
+        "từng món, tổng kcal/macro, kết luận cân bằng. KHÔNG được trả lời chỉ vài dòng "
+        "văn xuôi rồi dừng — như vậy frontend không parse được thành schedule item.\n"
         "TIÊU ĐỀ BỮA (BẮT BUỘC): chỉ dùng đúng 4 nhãn — \"Bữa sáng\", \"Bữa trưa\", "
         "\"Bữa tối\", \"Đồ uống\". Cấm các nhãn ghép kiểu \"Chiều Trưa\", \"Tr:\", "
         "\"Bữa phụ chiều\" trừ khi user yêu cầu rõ ràng.\n"
+        "TIÊU ĐỀ NGÀY (BẮT BUỘC): mỗi bảng phải đặt dưới một heading dạng \"## Ngày 1\", "
+        "\"## Ngày 2\"... (luôn dùng chữ \"Ngày\" + số, không viết \"Day 1\" hay \"Thứ Hai\"). "
+        "Kế hoạch 1 ngày vẫn phải có heading \"## Ngày 1\" trước bảng.\n"
         "TOÀN BỘ tên món, mô tả, bảng — viết bằng TIẾNG VIỆT. TUYỆT ĐỐI không xuất "
         "ký tự Trung/Nhật/Hàn. Nếu nghĩ ra món châu Á khác Việt Nam, dùng tên Latin "
         "(\"pad thái\", \"kimchi\", \"sushi cá hồi\"...).\n"
-        "Lập thực đơn CHỈ từ món trong context. Output BẢNG kết hợp nhiều món/bữa (combo), KHÔNG 1 món/bữa.\n"
+        "ƯU TIÊN HỘI THOẠI: Nếu phần `[conversation memory]` có nhắc tên món user đã hỏi "
+        "trước đó (vd 'phở bò', 'salad gà', 'ức gà luộc'...), ưu tiên đưa các món ấy vào "
+        "thực đơn ở bữa phù hợp; chỉ bổ sung món từ `[reference data]` để đủ số món/bữa. "
+        "Khi reuse món từ hội thoại, giữ NGUYÊN số kcal/macro mà hệ thống đã trả trước đó "
+        "(đừng đổi số).\n"
+        "Lập thực đơn CHỈ từ món trong context hoặc trong conversation memory. Output BẢNG "
+        "kết hợp nhiều món/bữa (combo), KHÔNG 1 món/bữa.\n"
         "Yêu cầu số món tối thiểu mỗi bữa: sáng ≥2, trưa ≥3, tối ≥3, đồ uống 1-2. "
         "Nếu context không đủ món cho 1 bữa: ghi rõ 'Context chỉ có {n} món cho bữa này, gợi ý bổ sung: ...' và đề xuất nhóm món chung (vd: 'thêm 1 phần rau xanh').\n"
-        "Cấu trúc bảng: cột Bữa | Món | Khẩu phần | kcal | P(g) | C(g) | F(g). Một bữa "
-        "chiếm nhiều dòng liền nhau, dòng đầu ghi tên bữa, các dòng sau để '↳' ở cột Bữa. "
-        "Mỗi ô kcal/P/C/F phải là số đã tính sẵn cho khẩu phần ghi ở cột Khẩu phần "
-        "(không để \"75 kcal/100g\" trong cột kcal — đổi sang số tuyệt đối cho khẩu phần).\n"
+        "CẤU TRÚC BẢNG (BẮT BUỘC ĐÚNG THỨ TỰ CỘT): "
+        "Bữa | Giờ | Món | Khẩu phần | kcal | P(g) | C(g) | F(g).\n"
+        "- Cột Giờ: dùng định dạng HH:MM 24h (vd '07:30', '12:00', '19:00', '15:30'). "
+        "Gợi ý mặc định: Bữa sáng 07:30, Bữa trưa 12:00, Bữa tối 19:00, Đồ uống / bữa phụ 15:30. "
+        "Khi user nói giờ cụ thể (vd 'mình ăn tối lúc 8h'), dùng giờ user yêu cầu.\n"
+        "- Một bữa chiếm nhiều dòng liền nhau, dòng đầu ghi tên bữa + giờ, các dòng sau "
+        "để '↳' ở cột Bữa và để TRỐNG (hoặc '↳') ở cột Giờ.\n"
+        "- Mỗi ô kcal/P/C/F phải là số đã tính sẵn cho khẩu phần ghi ở cột Khẩu phần "
+        "(không để \"75 kcal/100g\" trong cột kcal — đổi sang số tuyệt đối cho khẩu phần). "
+        "KHÔNG ĐỂ TRỐNG bất kỳ ô macro nào; nếu thiếu dữ liệu thật sự thì ghi '?' duy nhất.\n"
         "SAU bảng, với MỖI món thêm 1 dòng ngắn: '• [Tên món]: thành phần chính (a, b, c); nổi bật về [protein/chất xơ/vitamin...]'. "
         "Lấy thành phần từ trường ingredients/description/cleaned_ingredients trong context — nếu context không có thì ghi 'chưa có dữ liệu thành phần'.\n"
-        "TỔNG KCAL (BẮT BUỘC): Cuối thực đơn phải có dòng tóm tắt theo MẪU CHÍNH XÁC:\n"
-        "  \"Tổng: {kcal_tong} kcal | Protein {p}g | Carb {c}g | Fat {f}g\"\n"
-        "Trong đó {kcal_tong} = tổng cột kcal của tất cả dòng. Sau đó, nếu hồ sơ có "
-        "dailyCalories, thêm 1 dòng: \"So với mục tiêu {dailyCalories} kcal: ±X%\". "
+        "TỔNG KCAL (BẮT BUỘC): Cuối MỖI ngày phải có dòng tóm tắt theo MẪU CHÍNH XÁC:\n"
+        "  \"Tổng ngày X: {kcal_tong} kcal | Protein {p}g | Carb {c}g | Fat {f}g\"\n"
+        "Trong đó {kcal_tong} = tổng cột kcal của tất cả dòng trong ngày đó. Sau đó, nếu "
+        "hồ sơ có dailyCalories, thêm 1 dòng: \"So với mục tiêu {dailyCalories} kcal: ±X%\". "
         "Nếu lệch quá ±10% phải gợi ý điều chỉnh.\n"
-        "Cuối cùng: 1 câu nhận xét cân bằng dinh dưỡng (P/C/F ratio).\n"
-        "Nhiều ngày: tách bảng theo từng ngày (Ngày 1, Ngày 2...), xoay vòng món để "
-        "tránh lặp, mỗi ngày có dòng \"Tổng\" riêng."
+        "Cuối cùng: 1 câu nhận xét cân bằng dinh dưỡng (P/C/F ratio) cho cả kế hoạch.\n"
+        "Nhiều ngày: lặp lại pattern \"## Ngày N\" + bảng + dòng Tổng cho từng ngày, xoay "
+        "vòng món để tránh lặp, KHÔNG gộp các ngày vào chung 1 bảng.\n"
+        "NHẮC NGẮN CUỐI CÙNG: thêm 1 dòng cuối hướng dẫn user: \"Bạn có thể bấm \\\"Save to My schedule\\\" "
+        "để lưu kế hoạch này vào lịch và nhận nhắc nhở mỗi bữa.\""
     ),
     "nutrition_qa": (
         "ĐƠN VỊ QUY CHIẾU (BẮT BUỘC): Mỗi số kcal/protein/carb/fat PHẢI đi kèm đơn vị "
@@ -287,8 +320,24 @@ def _summarize_analysis(analysis: dict) -> dict:
         summary["instructions"] = instructions[:1500]
 
     nutrition = analysis.get("nutrition_estimate") or analysis.get("estimated_nutrition") or {}
+    macro_status = "missing"
     if isinstance(nutrition, dict):
         compact = {}
+        core_macros = ("calories", "protein", "carbs", "fat")
+        macros_present = sum(
+            1 for key in core_macros
+            if nutrition.get(key) not in (None, "")
+        )
+        per_100g = nutrition.get("per_100g") if isinstance(nutrition.get("per_100g"), dict) else None
+        if per_100g:
+            macros_present = max(
+                macros_present,
+                sum(1 for key in core_macros if per_100g.get(key) not in (None, ""))
+            )
+        if macros_present >= 3:
+            macro_status = "complete"
+        elif macros_present >= 1:
+            macro_status = "partial"
         for key, _ in _NUTRITION_KEYS:
             value = nutrition.get(key)
             if value not in (None, ""):
@@ -303,12 +352,15 @@ def _summarize_analysis(analysis: dict) -> dict:
             value = nutrition.get(key)
             if value not in (None, ""):
                 compact[key] = value
-        if isinstance(nutrition.get("per_100g"), dict):
-            per = {k: v for k, v in nutrition["per_100g"].items() if v not in (None, "")}
+        if per_100g:
+            per = {k: v for k, v in per_100g.items() if v not in (None, "")}
             if per:
                 compact["per_100g"] = per
+        compact["macros_present"] = macros_present
+        compact["macros_status"] = macro_status
         if compact:
             summary["nutrition"] = compact
+    summary["macros_status"] = macro_status
 
     uncertainty = _get("uncertainty") or {}
     if isinstance(uncertainty, dict) and uncertainty.get("level"):
@@ -328,6 +380,31 @@ def build_food_image_answer_prompt(question: str, analysis: dict) -> str:
     summary = _summarize_analysis(analysis or {})
     summary_json = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
     user_q = question or "Đây là món gì? Hãy phân tích dinh dưỡng và tư vấn."
+    macros_status = summary.get("macros_status", "missing")
+    if macros_status == "complete":
+        summary_rule = (
+            "TÓM TẮT DINH DƯỠNG (BẮT BUỘC, kể cả khi user chỉ hỏi 1 chỉ số):\n"
+            "- Cuối câu trả lời PHẢI có MỘT dòng theo đúng mẫu sau (không thêm bullet, không in nghiêng):\n"
+            "  Tóm tắt dinh dưỡng: ~XXX kcal | Protein ~Yg | Carb ~Zg | Fat ~Wg\n"
+            "- Số phải tính cho khẩu phần đã giả định (assumed_grams), không phải /100g.\n"
+            "- Nếu thiếu dữ liệu cho 1 chỉ số đơn lẻ: ghi '?' cho riêng chỉ số đó, KHÔNG bịa.\n"
+            "- Dòng này phải xuất hiện DUY NHẤT 1 lần, ở cuối, sau mọi phân tích chi tiết.\n\n"
+        )
+    else:
+        summary_rule = (
+            "TÓM TẮT DINH DƯỠNG — DỮ LIỆU KHÔNG ĐỦ (BẮT BUỘC tuân thủ):\n"
+            "- `macros_status` ở đầu Phân tích đang là 'partial' hoặc 'missing' "
+            "→ TUYỆT ĐỐI KHÔNG được suy ra hoặc nhân/chia ra các macro thiếu "
+            "(không viết 'kcal = 75 × 3 = 225', không viết 'protein khoảng 4 g' "
+            "nếu dữ liệu protein là null).\n"
+            "- Chỉ trích dẫn các chỉ số đã có sẵn trong `nutrition`, kèm đơn vị "
+            "quy chiếu (/100g, /khẩu phần) đúng như dữ liệu.\n"
+            "- KHÔNG in dòng 'Tóm tắt dinh dưỡng: ... | Protein ... | Carb ... | Fat ...' "
+            "vì sẽ buộc bịa các macro thiếu.\n"
+            "- Thay vào đó, kết thúc câu trả lời bằng MỘT dòng: "
+            "'Dữ liệu dinh dưỡng hiện chưa đủ 4 macro; bạn có thể cho mình biết "
+            "khẩu phần (g hoặc số phần) để mình ước tính chi tiết hơn không?'\n\n"
+        )
     return (
         "QUY TẮC NGÔN NGỮ (BẮT BUỘC):\n"
         "1. Toàn bộ câu trả lời PHẢI bằng tiếng Việt.\n"
@@ -364,13 +441,8 @@ def build_food_image_answer_prompt(question: str, analysis: dict) -> str:
         "chuyển thành câu tiếng Việt tự nhiên (vd: 'theo bảng tra' thay vì 'theo trường basis').\n"
         "- KHÔNG nhắc enum kỹ thuật như \"bowl\", \"plate\", \"noodle_soup\", \"mixed_meal\". "
         "Dùng nguyên `nutrition.portion_label` (vd 'một tô bún/phở', 'một đĩa') khi cần mô tả khẩu phần.\n\n"
-        "TÓM TẮT DINH DƯỠNG (BẮT BUỘC, kể cả khi user chỉ hỏi 1 chỉ số):\n"
-        "- Cuối câu trả lời PHẢI có MỘT dòng theo đúng mẫu sau (không thêm bullet, không in nghiêng):\n"
-        "  Tóm tắt dinh dưỡng: ~XXX kcal | Protein ~Yg | Carb ~Zg | Fat ~Wg\n"
-        "- Số phải tính cho khẩu phần đã giả định (assumed_grams), không phải /100g.\n"
-        "- Nếu thiếu dữ liệu cho 1 chỉ số: ước tính HỢP LÝ từ ingredients + món tương tự, KHÔNG được để trống — chỉ ghi '?' khi thật sự không có cơ sở nào (vd ảnh quá mờ).\n"
-        "- Dòng này phải xuất hiện DUY NHẤT 1 lần, ở cuối, sau mọi phân tích chi tiết.\n\n"
-        f"User hỏi: {user_q}\n"
+        + summary_rule
+        + f"User hỏi: {user_q}\n"
         f"Phân tích: {summary_json}\n"
         "Trả lời (tiếng Việt thuần, không CJK):"
     )

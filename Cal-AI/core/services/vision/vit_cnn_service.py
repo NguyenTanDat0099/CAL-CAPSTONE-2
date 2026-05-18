@@ -869,6 +869,17 @@ class ViTCNNFoodClassifier:
             ),
             None
         )
+        # Separately, gate whether we are CONFIDENT enough to commit
+        # qdrant_top.name as the actual dish_name. Below DISH_COMMIT_SCORE
+        # the neighbor is "vaguely similar pixels" (e.g. Bò xào cần tây vs
+        # Beef Chow Mein both have sliced beef + green herbs on white plate),
+        # so its title is unreliable as a label and we must not propagate it.
+        qdrant_commit = (
+            qdrant_top
+            if qdrant_top
+            and float(qdrant_top.get("score") or 0) >= settings.VISION_QDRANT_DISH_COMMIT_SCORE
+            else None
+        )
         if not predictions and not qdrant_top:
             return {
                 "dish_name": "unknown",
@@ -877,16 +888,25 @@ class ViTCNNFoodClassifier:
             }
 
         top = predictions[0] if predictions else {}
-        dish_name = qdrant_top.get("name") if qdrant_top else top["name"]
+        top_probability = float(top.get("probability") or 0) if top else 0
+        # Decide dish_name with strict commit gates. We only label the dish if
+        # something is genuinely confident; otherwise we leave it "chưa xác
+        # định rõ" and let possible_dishes carry the hypotheses. This stops
+        # the pipeline from confidently asserting wrong VN dishes when the
+        # CANDIDATES list and Qdrant index lack good coverage for them.
+        if qdrant_commit:
+            dish_name = qdrant_commit.get("name")
+            confidence = min(0.95, float(qdrant_commit.get("score") or 0))
+        elif top and top_probability >= settings.IMAGE_CLASSIFIER_DISH_COMMIT_CONFIDENCE:
+            dish_name = top["name"]
+            confidence = top_probability
+        else:
+            dish_name = "Món chưa xác định rõ"
+            confidence = max(top_probability, float(qdrant_top.get("score") or 0) if qdrant_top else 0)
         ingredients = (
-            qdrant_top.get("ingredients")
-            if qdrant_top and qdrant_top.get("ingredients")
+            qdrant_commit.get("ingredients")
+            if qdrant_commit and qdrant_commit.get("ingredients")
             else top.get("ingredients", [])
-        )
-        confidence = (
-            min(0.95, float(qdrant_top.get("score") or 0))
-            if qdrant_top
-            else top["probability"]
         )
         possible_dishes = []
         if qdrant_top:
@@ -911,10 +931,16 @@ class ViTCNNFoodClassifier:
             if item.get("label")
         ]
 
+        committed = dish_name != "Món chưa xác định rõ"
+        description = (
+            f"YOLOv8s/UNet/ResNet50/CLIP-Qdrant nhận diện ảnh giống {dish_name} nhất."
+            if committed
+            else "Hệ thống chưa đủ tự tin để khẳng định món; các khả năng được liệt kê bên dưới."
+        )
         return {
             "dish_name": dish_name,
             "possible_dishes": possible_dishes[:6],
-            "description": f"YOLOv8s/UNet/ResNet50/CLIP-Qdrant nhận diện ảnh giống {dish_name} nhất.",
+            "description": description,
             "image_observations": [
                 (
                     f"YOLOv8s phát hiện vùng chính bằng {crop.get('source')} tại bbox {crop.get('bbox')}."

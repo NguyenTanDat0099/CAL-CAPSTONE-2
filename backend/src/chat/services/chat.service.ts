@@ -101,6 +101,31 @@ type CalAiVisionOutcome =
   | CalAiVisionFailure;
 
 const MAX_IMAGE_DATA_URL_LENGTH = Number(process.env.MAX_IMAGE_DATA_URL_LENGTH || 3_500_000);
+const MAX_JSON_FIELD_BYTES = Number(process.env.CHAT_MAX_JSON_FIELD_BYTES || 60_000);
+
+const clampJsonField = (value: unknown, maxBytes: number = MAX_JSON_FIELD_BYTES): string | null => {
+  if (value == null) return null;
+  let json = JSON.stringify(value);
+  if (json.length <= maxBytes) return json;
+  if (Array.isArray(value)) {
+    const trimmed = value.slice(0, Math.max(1, Math.floor(value.length / 2)));
+    json = JSON.stringify(trimmed);
+    if (json.length <= maxBytes) return json;
+  } else if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const trimmed: Record<string, unknown> = {};
+    for (const [k, v] of entries) {
+      trimmed[k] = v;
+      if (JSON.stringify(trimmed).length > maxBytes) {
+        trimmed[k] = '[truncated]';
+        break;
+      }
+    }
+    json = JSON.stringify(trimmed);
+    if (json.length <= maxBytes) return json;
+  }
+  return JSON.stringify({ truncated: true, original_bytes: json.length });
+};
 
 interface ImageData {
   mime: string;
@@ -1072,10 +1097,50 @@ const wantsImageContext = (message: string) => {
     || normalized.includes('photo');
 };
 
+// Cal-AI's filename-match path historically stuffed two debug fields into
+// the user-facing payload — `description = "Recipe row matched by filename: ..."`
+// and `evidence = ["filename_match:..."]`. Cal-AI now nulls them out at the
+// source, but old Redis cache entries (and any future regression) would
+// still leak them straight into the chat reply. Drop both here too.
+const DEBUG_DESCRIPTION_RE = /^Recipe row matched by filename/i;
+const DEBUG_EVIDENCE_RE = /^[a-z_]+_match:/i;
+const VIETNAMESE_DIACRITIC_RE = /[ăâđêôơưĂÂĐÊÔƠƯáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵÁÀẢÃẠẮẰẲẴẶẤẦẨẪẬÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴ]/;
+
+const cleanedDescription = (value?: string | null) => {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (DEBUG_DESCRIPTION_RE.test(trimmed)) return null;
+  return trimmed;
+};
+
+const cleanedEvidence = (items?: string[]) =>
+  (items ?? [])
+    .map(item => item.trim())
+    .filter(item => item.length > 0 && !DEBUG_EVIDENCE_RE.test(item));
+
+// Heuristic: when the filename-match path bypasses the LLM, `ingredients`
+// is the raw English recipe ingredient line ("2 1/2 pounds green beans,
+// preferably haricot verts, trimmed"). Keep items that either already
+// carry a Vietnamese diacritic or are short labels (≤ 40 chars without
+// recipe-instruction noise). Anything long & purely Latin is recipe
+// English we don't want to paste into a Vietnamese reply.
+const cleanedIngredients = (items?: string[]) =>
+  (items ?? [])
+    .map(item => item.trim())
+    .filter(item => {
+      if (!item) return false;
+      if (VIETNAMESE_DIACRITIC_RE.test(item)) return true;
+      return item.length <= 40 && !/\d.*(?:pound|ounce|teaspoon|tablespoon|cup\b|cups\b)/i.test(item);
+    });
+
 const formatImageQuestionReply = (insight: FoodImageInsight | null, message: string) => {
   if (!insight?.dishName) {
     return 'Mình đã nhận được ảnh, nhưng model vision chưa xác định đủ chắc món trong ảnh. Bạn có thể gửi ảnh rõ hơn hoặc chụp gần phần món ăn chính để mình ước tính dinh dưỡng chính xác hơn.';
   }
+
+  const safeDescription = cleanedDescription(insight.description);
+  const safeEvidence = cleanedEvidence(insight.evidence);
+  const safeIngredients = cleanedIngredients(insight.ingredients);
 
   const confidence = formatConfidence(insight.confidence);
   const compact = (items?: string[], limit = 3) =>
@@ -1088,7 +1153,7 @@ const formatImageQuestionReply = (insight: FoodImageInsight | null, message: str
   if (shouldUseTable) {
     const summaryRows: Array<Array<unknown>> = [
       ['Món nhận diện', insight.dishName, confidence ? `Độ tin cậy khoảng ${confidence}` : 'Độ tin cậy chưa rõ'],
-      ['Mô tả', insight.description ?? 'Chưa có mô tả chi tiết', 'Dựa trên ảnh đã gửi'],
+      ['Mô tả', safeDescription ?? 'Chưa có mô tả chi tiết', 'Dựa trên ảnh đã gửi'],
       ['Khẩu phần', insight.portion ?? 'Chưa đủ dữ liệu', 'Ước tính theo phần nhìn thấy'],
       ['Calories', formatMetric(insight.calories, 'kcal'), 'Tổng năng lượng ước tính'],
       ['Protein', formatMetric(insight.protein, 'g'), 'Có thể lệch theo lượng thịt/cá/trứng/đậu'],
@@ -1101,8 +1166,8 @@ const formatImageQuestionReply = (insight: FoodImageInsight | null, message: str
 
     const assessmentRows: Array<Array<unknown>> = [
       ['Quan sát từ ảnh', compact(insight.imageObservations, 4)],
-      ['Lý do nhận diện', compact(insight.evidence, 4)],
-      ['Thành phần thấy/khả năng có', insight.ingredients.length ? insight.ingredients.slice(0, 8).join(', ') : 'Chưa đủ dữ liệu'],
+      ['Lý do nhận diện', compact(safeEvidence, 4)],
+      ['Thành phần thấy/khả năng có', safeIngredients.length ? safeIngredients.slice(0, 8).join(', ') : 'Chưa đủ dữ liệu'],
       ['Điểm tốt', compact(insight.dietaryStrengths, 3)],
       ['Cần lưu ý', compact([...(insight.dietaryConcerns ?? []), ...(insight.riskFlags ?? [])], 4)],
       ['Gợi ý cải thiện', compact(insight.recommendations, 4)],
@@ -1133,14 +1198,14 @@ const formatImageQuestionReply = (insight: FoodImageInsight | null, message: str
     lines.push(`Mình nhận diện món này là ${insight.dishName}.`);
   }
 
-  if (insight.description) lines.push(insight.description);
+  if (safeDescription) lines.push(safeDescription);
   if (insight.imageObservations?.length) {
     lines.push(`Quan sát từ ảnh: ${insight.imageObservations.slice(0, 3).join('; ')}.`);
   }
-  if (insight.evidence?.length) {
-    lines.push(`Lý do nhận diện: ${insight.evidence.slice(0, 3).join('; ')}.`);
+  if (safeEvidence.length) {
+    lines.push(`Lý do nhận diện: ${safeEvidence.slice(0, 3).join('; ')}.`);
   }
-  if (insight.ingredients.length > 0) lines.push(`Thành phần thấy được: ${insight.ingredients.slice(0, 6).join(', ')}.`);
+  if (safeIngredients.length > 0) lines.push(`Thành phần thấy được: ${safeIngredients.slice(0, 6).join(', ')}.`);
   if (insight.portion) lines.push(`Khẩu phần ước tính: ${insight.portion}.`);
 
   if (wantsCalories(message) || insight.calories != null) {
@@ -1522,30 +1587,43 @@ export const sendChatMessageService = async (
     targetSessionId = await createSession(user.user_id);
   }
 
-  await pool.query(
+  const [userInsertResult] = await pool.query(
     'INSERT INTO chatmessages (session_id, sender, message_text, image_url, image_name) VALUES (?, ?, ?, ?, ?)',
     [targetSessionId, 'user', messageText, normalizedImageUrl, normalizedImageName]
   );
+  const userMessageId = (userInsertResult as { insertId: number }).insertId;
 
   let replyImageUrl: string | null = normalizedImageUrl;
   let replyImageName = normalizedImageName;
+  let priorInsight: FoodImageInsight | null = null;
 
   if (!replyImageUrl && normalizedContextImageUrl) {
-    replyImageUrl = normalizedContextImageUrl;
-    replyImageName = normalizedContextImageName;
+    // Auto-attached previous image: re-running vision on it wastes 60-100s
+    // and produces a fresh (sometimes drifting) result for an image whose
+    // analysis is already persisted. Prefer the stored insight when the
+    // last analyzed image in this session matches; only fall through to
+    // vision if no usable insight exists.
+    const reusableInsight = await getLatestSessionFoodInsight(targetSessionId);
+    if (reusableInsight?.dishName) {
+      priorInsight = reusableInsight;
+    } else {
+      replyImageUrl = normalizedContextImageUrl;
+      replyImageName = normalizedContextImageName;
+    }
   }
 
-  let priorInsight: FoodImageInsight | null = null;
-  if (!replyImageUrl && wantsImageContext(trimmed)) {
-    priorInsight = await getLatestSessionFoodInsight(targetSessionId);
-    if (!priorInsight?.dishName) {
-      const latestImage = await getLatestSessionImage(targetSessionId);
-      replyImageUrl = latestImage?.image_url ?? null;
-      replyImageName = latestImage?.image_name ?? null;
-      priorInsight = null;
+  if (!replyImageUrl && !priorInsight) {
+    if (wantsImageContext(trimmed)) {
+      priorInsight = await getLatestSessionFoodInsight(targetSessionId);
+      if (!priorInsight?.dishName) {
+        const latestImage = await getLatestSessionImage(targetSessionId);
+        replyImageUrl = latestImage?.image_url ?? null;
+        replyImageName = latestImage?.image_name ?? null;
+        priorInsight = null;
+      }
+    } else {
+      priorInsight = await getLatestSessionFoodInsight(targetSessionId);
     }
-  } else if (!replyImageUrl) {
-    priorInsight = await getLatestSessionFoodInsight(targetSessionId);
   }
 
   const chatHistory = await getRecentChatContext(targetSessionId, 10);
@@ -1564,16 +1642,26 @@ export const sendChatMessageService = async (
     runtimeContext,
     priorInsight
   );
-  await pool.query(
-    'INSERT INTO chatmessages (session_id, sender, message_text, thinking_steps, food_insight) VALUES (?, ?, ?, ?, ?)',
-    [
-      targetSessionId,
-      'ai',
-      assistantReply.text,
-      JSON.stringify(assistantReply.thinkingSteps),
-      assistantReply.foodInsight ? JSON.stringify(assistantReply.foodInsight) : null,
-    ]
-  );
+  const thinkingStepsJson = clampJsonField(assistantReply.thinkingSteps);
+  const foodInsightJson = clampJsonField(assistantReply.foodInsight);
+  try {
+    await pool.query(
+      'INSERT INTO chatmessages (session_id, sender, message_text, thinking_steps, food_insight) VALUES (?, ?, ?, ?, ?)',
+      [targetSessionId, 'ai', assistantReply.text, thinkingStepsJson, foodInsightJson]
+    );
+  } catch (aiInsertError) {
+    console.warn('[Chat] INSERT AI message failed, retrying without JSON payload:', aiInsertError);
+    try {
+      await pool.query(
+        'INSERT INTO chatmessages (session_id, sender, message_text, thinking_steps, food_insight) VALUES (?, ?, ?, ?, ?)',
+        [targetSessionId, 'ai', assistantReply.text, null, null]
+      );
+    } catch (fallbackInsertError) {
+      console.error('[Chat] INSERT AI message failed even without payload, rolling back user message:', fallbackInsertError);
+      await pool.query('DELETE FROM chatmessages WHERE message_id = ?', [userMessageId]);
+      throw new Error('AI_REPLY_PERSIST_FAILED');
+    }
+  }
 
   const messages = await getChatMessagesService(accountId, targetSessionId);
   return {

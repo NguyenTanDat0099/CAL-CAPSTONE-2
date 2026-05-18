@@ -153,8 +153,34 @@ const detectMealType = (cell?: string): MealType => {
   const norm = stripAccents(cell ?? '');
   if (/sang|breakfast/.test(norm)) return 'breakfast';
   if (/toi|dinner/.test(norm)) return 'dinner';
-  if (/snack|phu|nhe/.test(norm)) return 'snack';
+  if (/snack|phu|nhe|do\s*uong|drink|beverage/.test(norm)) return 'snack';
   return 'lunch';
+};
+
+const DEFAULT_TIME_BY_MEAL_TYPE: Record<MealType, string> = {
+  breakfast: '07:30',
+  lunch: '12:00',
+  dinner: '19:00',
+  snack: '15:30',
+};
+
+const parseTimeCell = (cell?: string | null): string | null => {
+  if (!cell) return null;
+  const cleaned = cell.replace(/\*\*/g, '').trim();
+  if (!cleaned || cleaned === '↳' || cleaned === '—' || cleaned === '-') return null;
+  // Match patterns like "07:30", "7h30", "7:30 AM", "19h00", "8h", "08h"
+  const colonMatch = cleaned.match(/(\d{1,2})\s*[:hH]\s*(\d{2})/);
+  if (colonMatch) {
+    const h = Math.min(23, Math.max(0, Number(colonMatch[1])));
+    const m = Math.min(59, Math.max(0, Number(colonMatch[2])));
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+  const hourOnly = cleaned.match(/(\d{1,2})\s*h(?!\d)/i);
+  if (hourOnly) {
+    const h = Math.min(23, Math.max(0, Number(hourOnly[1])));
+    return `${String(h).padStart(2, '0')}:00`;
+  }
+  return null;
 };
 
 interface ParsedPlan {
@@ -285,6 +311,11 @@ const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
     const kcalIdx = findCol('kcal', 'calo', 'energy', 'nang luong');
     if (monIdx < 0 || kcalIdx < 0) continue;
     const buaIdx = findCol('bua', 'meal type', 'thoi diem');
+    const timeIdx = (() => {
+      const fuzzy = findCol('gio', 'thoi gian', 'time', 'when', 'at');
+      if (fuzzy >= 0) return fuzzy;
+      return findColExact('gio', 'time', 'h');
+    })();
     const servingIdx = findCol('khau phan', 'phan an', 'serving', 'portion', 'so luong');
     const proteinIdx = (() => {
       const fuzzy = findCol('protein', 'chat dam', 'dam (g)');
@@ -314,6 +345,7 @@ const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
     const tableLines: string[] = [lineRaw, lines[i + 1]];
     let cursor = i + 2;
     let rowMealType: MealType | null = currentMealType;
+    let rowMealTime: string | null = null;
     while (cursor < lines.length && lines[cursor].trim().includes('|')) {
       tableLines.push(lines[cursor]);
       const cells = splitTableRow(lines[cursor]);
@@ -326,10 +358,25 @@ const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
         const buaMeal = buaIdx >= 0 && !isContinuation
           ? detectMealTypeFromHeading(buaCell) ?? detectMealType(buaCell)
           : null;
-        if (buaMeal) rowMealType = buaMeal;
+        if (buaMeal && buaMeal !== rowMealType) {
+          // New meal slot starts → forget the previous slot's time.
+          rowMealTime = null;
+          rowMealType = buaMeal;
+        } else if (buaMeal) {
+          rowMealType = buaMeal;
+        }
         const inferredFromCell = detectMealTypeFromHeading(cells[monIdx] ?? '');
+        const finalMealType: MealType =
+          rowMealType ?? currentMealType ?? inferredFromCell ?? detectMealType(cells[monIdx]);
+        const parsedTimeForRow = timeIdx >= 0 ? parseTimeCell(cells[timeIdx]) : null;
+        if (parsedTimeForRow) rowMealTime = parsedTimeForRow;
+        const scheduledTime =
+          parsedTimeForRow
+          ?? rowMealTime
+          ?? DEFAULT_TIME_BY_MEAL_TYPE[finalMealType];
         allItems.push({
-          mealType: rowMealType ?? currentMealType ?? inferredFromCell ?? detectMealType(cells[monIdx]),
+          mealType: finalMealType,
+          scheduledTime,
           name,
           serving: servingIdx >= 0 ? cells[servingIdx] || null : null,
           calories: kcal,
@@ -339,6 +386,10 @@ const parsePlanFromMarkdown = (text: string): ParsedPlan | null => {
           dayOffset: currentDayOffset,
         });
         if (kcal != null) totalKcal += kcal;
+      } else if (!name && buaIdx >= 0) {
+        // header-only row with meal name → may still carry a time we should remember
+        const parsedTimeForRow = timeIdx >= 0 ? parseTimeCell(cells[timeIdx]) : null;
+        if (parsedTimeForRow) rowMealTime = parsedTimeForRow;
       }
       cursor += 1;
     }
@@ -1186,6 +1237,7 @@ export function Chatbox({ onSavePlanToSchedule, pendingChatId, onPendingChatReso
   const quickActions = [
     "How many calories in an apple?",
     "Plan my lunch",
+    "Lên lịch ăn uống 7 ngày dựa trên các món mình đã hỏi",
     "Recalculate macros"
   ];
 
