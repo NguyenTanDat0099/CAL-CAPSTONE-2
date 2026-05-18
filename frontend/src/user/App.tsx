@@ -380,7 +380,7 @@ export default function App({ onLogout }: UserAppProps) {
 
   const updateScheduleHandler = async (
     scheduleId: number,
-    patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>
+    patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>> & { items?: ScheduleItem[] }
   ) => {
     const response = await fetch(buildApiUrl(`/users/schedules/${scheduleId}`), {
       method: 'PATCH',
@@ -646,13 +646,14 @@ export default function App({ onLogout }: UserAppProps) {
     }
   };
 
-  // Optimistic UI: drop the row locally first, then mark-read on the backend.
-  // If the network call fails the next poll will re-add the item.
+  // Optimistic UI: drop the row locally first, then hard-delete on the
+  // backend. We must DELETE (not mark-read) because the poll fetches read +
+  // unread items, so a mark-read row would reappear on the next tick.
   const removeNotification = async (id: number) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
     try {
-      await fetch(buildApiUrl(`/users/notifications/${id}/read`), {
-        method: 'PATCH',
+      await fetch(buildApiUrl(`/users/notifications/${id}`), {
+        method: 'DELETE',
         headers: getAuthHeaders(),
       });
     } catch { /* ignore — next poll will reconcile */ }

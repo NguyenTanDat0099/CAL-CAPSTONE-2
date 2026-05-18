@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import {
   countUnread,
+  deleteUserNotification,
   getUserIdByAccountId,
   listRecentJobRuns,
   listUserNotifications,
@@ -61,6 +62,18 @@ export const markOneRead = async (req: Request, res: Response) => {
   }
   const ok = await markAsRead(id, userId);
   res.json({ updated: ok });
+};
+
+export const deleteOne = async (req: Request, res: Response) => {
+  const userId = await resolveUserId(req);
+  if (!userId) return res.status(404).json({ message: 'USER_NOT_FOUND' });
+
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ message: 'INVALID_ID' });
+  }
+  const ok = await deleteUserNotification(id, userId);
+  res.json({ deleted: ok });
 };
 
 export const markAllRead = async (req: Request, res: Response) => {

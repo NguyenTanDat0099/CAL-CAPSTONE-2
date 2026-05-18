@@ -3,13 +3,30 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   CalendarDays, Trophy, Trash2, X, ChevronLeft, ChevronRight,
   ListTree, GanttChart, Flame, Zap, Droplets, Heart, MessageSquareText,
-  ZoomIn, ZoomOut, Plus, Bell,
+  ZoomIn, ZoomOut, Plus, Bell, Pencil,
 } from 'lucide-react';
 import { MealSchedule, ScheduleItem, MealType } from '../types';
+import { buildApiUrl } from '../../config/api';
+
+interface CatalogFood {
+  id: number;
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  servingSize: string | null;
+}
+
+const SCHED_AUTH_TOKEN_KEY = 'calai_token';
+const schedGetAuthHeaders = (): Record<string, string> => {
+  const token = sessionStorage.getItem(SCHED_AUTH_TOKEN_KEY) || localStorage.getItem(SCHED_AUTH_TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
 
 interface MyScheduleProps {
   schedules: MealSchedule[];
-  onUpdate: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>) => Promise<void>;
+  onUpdate: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>> & { items?: ScheduleItem[] }) => Promise<void>;
   onDelete: (scheduleId: number) => Promise<void>;
   onCreate: (payload: {
     name: string;
@@ -68,6 +85,7 @@ export function MySchedule({ schedules, onUpdate, onDelete, onCreate }: MySchedu
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const selected = useMemo(
     () => (selectedId == null ? null : schedules.find(s => s.scheduleId === selectedId) ?? null),
@@ -76,6 +94,10 @@ export function MySchedule({ schedules, onUpdate, onDelete, onCreate }: MySchedu
   const confirmDelete = useMemo(
     () => (confirmDeleteId == null ? null : schedules.find(s => s.scheduleId === confirmDeleteId) ?? null),
     [confirmDeleteId, schedules]
+  );
+  const editing = useMemo(
+    () => (editingId == null ? null : schedules.find(s => s.scheduleId === editingId) ?? null),
+    [editingId, schedules]
   );
 
   const today = useMemo(() => {
@@ -195,6 +217,23 @@ export function MySchedule({ schedules, onUpdate, onDelete, onCreate }: MySchedu
             onClose={() => setSelectedId(null)}
             onAchieved={() => handleAchieved(selected)}
             onDelete={() => setConfirmDeleteId(selected.scheduleId)}
+            onEdit={() => { setEditingId(selected.scheduleId); setSelectedId(null); }}
+          />
+        )}
+        {editing && (
+          <CreateScheduleModal
+            editingSchedule={editing}
+            onClose={() => setEditingId(null)}
+            onCreate={onCreate}
+            onUpdate={async (id, patch) => {
+              setBusyId(id);
+              try {
+                await onUpdate(id, patch);
+                setEditingId(null);
+              } finally {
+                setBusyId(null);
+              }
+            }}
           />
         )}
         {confirmDelete && (
@@ -590,9 +629,10 @@ interface ScheduleDetailProps {
   onClose: () => void;
   onAchieved: () => void;
   onDelete: () => void;
+  onEdit: () => void;
 }
 
-function ScheduleDetailModal({ schedule, today, onClose, onAchieved, onDelete }: ScheduleDetailProps) {
+function ScheduleDetailModal({ schedule, today, onClose, onAchieved, onDelete, onEdit }: ScheduleDetailProps) {
   const start = parseDate(schedule.startDate);
   const end = parseDate(schedule.endDate);
   const totalDays = Math.max(1, dayDelta(end, start) + 1);
@@ -706,6 +746,13 @@ function ScheduleDetailModal({ schedule, today, onClose, onAchieved, onDelete }:
           </button>
           <div className="flex items-center gap-2">
             <button
+              onClick={onEdit}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-white/5 hover:bg-white/10 text-white transition-colors"
+            >
+              <Pencil size={14} />
+              Edit
+            </button>
+            <button
               onClick={onAchieved}
               className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-bold transition-colors ${
                 schedule.achieved
@@ -794,6 +841,9 @@ function ConfirmModal({ title, description, confirmLabel, confirmStyle, onCancel
 interface CreateScheduleModalProps {
   onClose: () => void;
   onCreate: MyScheduleProps['onCreate'];
+  // Khi truyền → modal hoạt động ở chế độ Edit, prefill từ schedule này.
+  editingSchedule?: MealSchedule;
+  onUpdate?: MyScheduleProps['onUpdate'];
 }
 
 interface DraftItem {
@@ -804,6 +854,12 @@ interface DraftItem {
   name: string;
   serving: string;
   calories: string;
+  // Macros được lưu dạng string để dùng <input type="number"> như calories.
+  // Catalog autocomplete fill số → chuyển sang String khi set state.
+  // Empty string = không có giá trị (gửi null lên backend).
+  protein: string;
+  carbs: string;
+  fat: string;
 }
 
 const newDraftItem = (dayOffset = 0, mealType: MealType = 'breakfast'): DraftItem => ({
@@ -814,18 +870,74 @@ const newDraftItem = (dayOffset = 0, mealType: MealType = 'breakfast'): DraftIte
   name: '',
   serving: '',
   calories: '',
+  protein: '',
+  carbs: '',
+  fat: '',
 });
 
-function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
-  const minDate = todayISO();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [startDate, setStartDate] = useState(minDate);
-  const [endDate, setEndDate] = useState(minDate);
-  const [color, setColor] = useState(SCHEDULE_PALETTE[0]);
-  const [items, setItems] = useState<DraftItem[]>([newDraftItem()]);
+function CreateScheduleModal({ onClose, onCreate, editingSchedule, onUpdate }: CreateScheduleModalProps) {
+  const isEdit = Boolean(editingSchedule);
+  // Trong edit mode cho phép giữ ngày cũ kể cả khi đã qua. Trong create mode
+  // mới chặn không cho chọn quá khứ.
+  const minDate = isEdit ? '' : todayISO();
+  const [name, setName] = useState(editingSchedule?.name ?? '');
+  const [description, setDescription] = useState(editingSchedule?.description ?? '');
+  const [startDate, setStartDate] = useState(editingSchedule?.startDate ?? todayISO());
+  const [endDate, setEndDate] = useState(editingSchedule?.endDate ?? todayISO());
+  const [color, setColor] = useState(editingSchedule?.color ?? SCHEDULE_PALETTE[0]);
+  const [items, setItems] = useState<DraftItem[]>(() => {
+    if (!editingSchedule || editingSchedule.items.length === 0) return [newDraftItem()];
+    return editingSchedule.items.map((it, i) => ({
+      key: `existing-${it.itemId ?? i}-${i}`,
+      dayOffset: it.dayOffset ?? 0,
+      mealType: it.mealType,
+      scheduledTime: (it.scheduledTime ?? '').slice(0, 5) || DEFAULT_TIME_BY_MEAL[it.mealType],
+      name: it.name,
+      serving: it.serving ?? '',
+      calories: it.calories != null ? String(it.calories) : '',
+      protein: it.protein != null ? String(it.protein) : '',
+      carbs: it.carbs != null ? String(it.carbs) : '',
+      fat: it.fat != null ? String(it.fat) : '',
+    }));
+  });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // Food catalog cho autocomplete Dish Name. Load 1 lần khi modal mở.
+  const [catalog, setCatalog] = useState<CatalogFood[]>([]);
+  const [openDropdownKey, setOpenDropdownKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(buildApiUrl('/users/foods/search?limit=20000'), {
+          headers: schedGetAuthHeaders(),
+        });
+        if (!res.ok) return;
+        const result = await res.json();
+        if (cancelled) return;
+        const rows = (result.data ?? []) as Array<{
+          id: number; name: string;
+          calories?: number; protein?: number; carbs?: number; fats?: number;
+          servingSize?: string | null;
+        }>;
+        setCatalog(rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          calories: Math.round(Number(r.calories ?? 0)),
+          protein: Math.round(Number(r.protein ?? 0)),
+          carbs: Math.round(Number(r.carbs ?? 0)),
+          fat: Math.round(Number(r.fats ?? 0)),  // API trả 'fats' plural, ScheduleItem dùng 'fat'
+          servingSize: r.servingSize ?? null,
+        })));
+      } catch {
+        // autocomplete là optional, lỗi thì user vẫn gõ tay được
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const totalDays = useMemo(() => {
     const startMs = new Date(`${startDate}T00:00:00`).getTime();
@@ -853,7 +965,7 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
 
   const handleSubmit = async () => {
     if (!name.trim()) { setError('Please enter a schedule name.'); return; }
-    if (startDate < minDate) { setError('Start date cannot be in the past.'); return; }
+    if (!isEdit && startDate < minDate) { setError('Start date cannot be in the past.'); return; }
     if (startDate > endDate) { setError('End date must be on or after start date.'); return; }
     if (totalDays > 60) { setError('Schedule cannot exceed 60 days.'); return; }
     const cleaned = items
@@ -863,30 +975,54 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
     const outOfRange = cleaned.find(it => it.dayOffset < 0 || it.dayOffset >= totalDays);
     if (outOfRange) { setError(`Item "${outOfRange.name}" is on day ${outOfRange.dayOffset + 1}, which is outside the schedule's ${totalDays} day(s).`); return; }
 
+    const parseMacro = (raw: string): number | null => {
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      const num = Number(trimmed);
+      return Number.isFinite(num) ? num : null;
+    };
+
+    const itemsPayload = cleaned.map((it, idx) => ({
+      dayOffset: it.dayOffset,
+      mealType: it.mealType,
+      scheduledTime: it.scheduledTime || null,
+      name: it.name,
+      serving: it.serving.trim() || null,
+      calories: parseMacro(it.calories),
+      protein: parseMacro(it.protein),
+      carbs: parseMacro(it.carbs),
+      fat: parseMacro(it.fat),
+      sortOrder: idx,
+    }));
+
     setSaving(true);
     setError('');
     try {
-      await onCreate({
-        name: name.trim(),
-        description: description.trim() || undefined,
-        startDate,
-        endDate,
-        color,
-        targetCalories: totalKcal > 0 ? Math.round(totalKcal) : undefined,
-        source: 'manual',
-        items: cleaned.map((it, idx) => ({
-          dayOffset: it.dayOffset,
-          mealType: it.mealType,
-          scheduledTime: it.scheduledTime || null,
-          name: it.name,
-          serving: it.serving.trim() || null,
-          calories: it.calories ? Number(it.calories) : null,
-          sortOrder: idx,
-        })),
-      });
+      if (isEdit && editingSchedule && onUpdate) {
+        await onUpdate(editingSchedule.scheduleId, {
+          name: name.trim(),
+          description: description.trim() || null,
+          startDate,
+          endDate,
+          color,
+          targetCalories: totalKcal > 0 ? Math.round(totalKcal) : null,
+          items: itemsPayload as unknown as ScheduleItem[],
+        });
+      } else {
+        await onCreate({
+          name: name.trim(),
+          description: description.trim() || undefined,
+          startDate,
+          endDate,
+          color,
+          targetCalories: totalKcal > 0 ? Math.round(totalKcal) : undefined,
+          source: 'manual',
+          items: itemsPayload,
+        });
+      }
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create schedule.');
+      setError(err instanceof Error ? err.message : (isEdit ? 'Failed to save changes.' : 'Failed to create schedule.'));
     } finally {
       setSaving(false);
     }
@@ -910,10 +1046,12 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
         <div className="h-2" style={{ backgroundColor: color }} />
         <div className="px-8 py-6 border-b border-white/5 flex items-start justify-between gap-4">
           <div>
-            <p className="text-[10px] uppercase tracking-widest text-text-muted mb-1">Manual</p>
-            <h2 className="text-2xl font-black">Create schedule</h2>
+            <p className="text-[10px] uppercase tracking-widest text-text-muted mb-1">{isEdit ? 'Edit' : 'Manual'}</p>
+            <h2 className="text-2xl font-black">{isEdit ? 'Edit schedule' : 'Create schedule'}</h2>
             <p className="text-text-muted text-sm mt-1">
-              Pick your meals, days and times. We'll remind you when each one is up.
+              {isEdit
+                ? 'Sửa thông tin và các món. Save sẽ ghi đè danh sách món hiện tại.'
+                : "Pick your meals, days and times. We'll remind you when each one is up."}
             </p>
           </div>
           <button
@@ -1007,15 +1145,78 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
               {items.map((it, idx) => (
                 <div key={it.key} className="bg-bg-dark/60 border border-white/5 rounded-2xl p-4 space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
-                    <div className="md:col-span-5">
+                    <div className="md:col-span-5 relative">
                       <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Dish name</label>
                       <input
                         type="text"
                         value={it.name}
-                        onChange={(e) => updateItem(it.key, { name: e.target.value })}
-                        placeholder={idx === 0 ? 'e.g. Greek yogurt + berries' : 'Dish name'}
+                        onChange={(e) => {
+                          updateItem(it.key, { name: e.target.value });
+                          setOpenDropdownKey(it.key);
+                        }}
+                        onFocus={() => setOpenDropdownKey(it.key)}
+                        onBlur={() => {
+                          // Delay đóng để click vào suggestion kịp fire.
+                          setTimeout(() => setOpenDropdownKey((prev) => (prev === it.key ? null : prev)), 150);
+                        }}
+                        placeholder={idx === 0 ? 'e.g. Cơm gà, Phở bò...' : 'Dish name'}
                         className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                        autoComplete="off"
                       />
+                      {openDropdownKey === it.key && it.name.trim().length > 0 && (() => {
+                        const q = it.name.trim().toLowerCase();
+                        // Xếp hạng theo độ liên quan để "Cơm gà" lên trên
+                        // "Bánh Bông Lan Bằng Nồi Cơm Điện" khi user gõ "cơm".
+                        //   exact match     → 1000
+                        //   starts với q    → 100   (vd "Cơm gà")
+                        //   1 từ bắt đầu q  → 50    (vd "Phở Cơm tấm")
+                        //   chứa q          → 10    (vd "...Nồi Cơm...")
+                        const scoreOf = (name: string): number => {
+                          const n = name.toLowerCase();
+                          if (n === q) return 1000;
+                          if (n.startsWith(q)) return 100;
+                          const words = n.split(/[\s,()\/\-]+/).filter(Boolean);
+                          if (words.some((w) => w.startsWith(q))) return 50;
+                          if (n.includes(q)) return 10;
+                          return 0;
+                        };
+                        const matches = catalog
+                          .map((f) => ({ food: f, score: scoreOf(f.name) }))
+                          .filter((x) => x.score > 0)
+                          .sort((a, b) => b.score - a.score || a.food.name.localeCompare(b.food.name))
+                          .slice(0, 8)
+                          .map((x) => x.food);
+                        if (matches.length === 0) return null;
+                        return (
+                          <div className="absolute z-30 left-0 right-0 mt-1 bg-surface-dark border border-white/10 rounded-lg shadow-2xl max-h-64 overflow-y-auto">
+                            {matches.map((f) => (
+                              <button
+                                key={f.id}
+                                type="button"
+                                onMouseDown={(e) => { e.preventDefault(); }}
+                                onClick={() => {
+                                  updateItem(it.key, {
+                                    name: f.name,
+                                    serving: f.servingSize || '',
+                                    calories: f.calories > 0 ? String(f.calories) : '',
+                                    protein: f.protein > 0 ? String(f.protein) : '',
+                                    carbs: f.carbs > 0 ? String(f.carbs) : '',
+                                    fat: f.fat > 0 ? String(f.fat) : '',
+                                  });
+                                  setOpenDropdownKey(null);
+                                }}
+                                className="w-full text-left px-3 py-2 hover:bg-white/5 transition-colors border-b border-white/5 last:border-b-0 cursor-pointer"
+                              >
+                                <p className="text-sm font-bold text-white truncate">{f.name}</p>
+                                <p className="text-[10px] text-text-muted">
+                                  {f.servingSize || '—'}
+                                  {f.calories > 0 && <span className="text-brand-orange ml-2">{f.calories} kcal</span>}
+                                </p>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div className="md:col-span-3">
                       <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Slot</label>
@@ -1060,8 +1261,8 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
                       />
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
-                    <div className="md:col-span-7">
+                  <div className="grid grid-cols-2 md:grid-cols-12 gap-2">
+                    <div className="col-span-2 md:col-span-4">
                       <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Serving (optional)</label>
                       <input
                         type="text"
@@ -1071,8 +1272,8 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
                         className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
                       />
                     </div>
-                    <div className="md:col-span-3">
-                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Calories (optional)</label>
+                    <div className="md:col-span-2">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Calories</label>
                       <input
                         type="number"
                         min={0}
@@ -1082,15 +1283,51 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
                         className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
                       />
                     </div>
-                    <div className="md:col-span-2 flex items-end">
-                      <button
-                        onClick={() => removeItem(it.key)}
-                        disabled={items.length <= 1}
-                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 size={12} /> Remove
-                      </button>
+                    <div className="md:col-span-2">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Protein (g)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.1"
+                        value={it.protein}
+                        onChange={(e) => updateItem(it.key, { protein: e.target.value })}
+                        placeholder="g"
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
                     </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Carbs (g)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.1"
+                        value={it.carbs}
+                        onChange={(e) => updateItem(it.key, { carbs: e.target.value })}
+                        placeholder="g"
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-text-muted mb-1">Fat (g)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.1"
+                        value={it.fat}
+                        onChange={(e) => updateItem(it.key, { fat: e.target.value })}
+                        placeholder="g"
+                        className="w-full bg-surface-dark border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-orange transition-colors"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => removeItem(it.key)}
+                      disabled={items.length <= 1}
+                      className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 size={12} /> Remove
+                    </button>
                   </div>
                 </div>
               ))}
@@ -1120,7 +1357,7 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
               disabled={saving}
               className="px-5 py-2 rounded-xl text-sm font-bold bg-brand-orange hover:bg-brand-orange-dark text-bg-dark transition-colors disabled:opacity-50"
             >
-              {saving ? 'Saving…' : 'Create schedule'}
+              {saving ? 'Saving…' : (isEdit ? 'Save changes' : 'Create schedule')}
             </button>
           </div>
         </div>
@@ -1128,3 +1365,4 @@ function CreateScheduleModal({ onClose, onCreate }: CreateScheduleModalProps) {
     </div>
   );
 }
+

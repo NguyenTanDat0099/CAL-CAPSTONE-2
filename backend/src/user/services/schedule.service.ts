@@ -38,6 +38,9 @@ interface UpdateSchedulePayload {
   color?: string | null;
   targetCalories?: number | null;
   achieved?: boolean;
+  // Khi truyền items: backend XOÁ toàn bộ mealscheduleitems hiện có rồi INSERT
+  // lại theo mảng này. Cho phép user sửa món qua nút Edit ở frontend.
+  items?: ScheduleItemInput[];
 }
 
 interface ScheduleRow {
@@ -185,7 +188,14 @@ const parsePlanPayload = (raw: string | null) => {
 
 const formatDate = (value: string | Date) => {
   if (typeof value === 'string') return value.slice(0, 10);
-  return value.toISOString().slice(0, 10);
+  // mysql2 returns DATE columns as Date objects at LOCAL midnight. Using
+  // toISOString() would shift to UTC and roll back a day in +tz locales
+  // (Asia/Ho_Chi_Minh is UTC+7 → "2026-05-18" became "2026-05-17"). Format
+  // from local components instead so the calendar date round-trips intact.
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 const normalizeTime = (value: string | null) => {
@@ -357,9 +367,52 @@ export const updateScheduleService = async (
   if (payload.targetCalories !== undefined) { fields.push('target_calories = ?'); values.push(payload.targetCalories); }
   if (payload.achieved !== undefined) { fields.push('achieved = ?'); values.push(payload.achieved ? 1 : 0); }
 
-  if (fields.length > 0) {
-    values.push(scheduleId);
-    await pool.query(`UPDATE mealschedules SET ${fields.join(', ')} WHERE schedule_id = ?`, values);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    if (fields.length > 0) {
+      values.push(scheduleId);
+      await conn.query(`UPDATE mealschedules SET ${fields.join(', ')} WHERE schedule_id = ?`, values);
+    }
+
+    // Replace items khi payload chứa mảng items (kể cả mảng rỗng — nghĩa là
+    // user muốn xoá hết). Nếu items undefined → không động vào items hiện có.
+    if (payload.items !== undefined) {
+      await conn.query('DELETE FROM mealscheduleitems WHERE schedule_id = ?', [scheduleId]);
+      for (let i = 0; i < payload.items.length; i++) {
+        const item = payload.items[i];
+        const timeValue = item.scheduledTime?.trim()
+          ? (item.scheduledTime.length === 5 ? `${item.scheduledTime}:00` : item.scheduledTime)
+          : null;
+        await conn.query(
+          `INSERT INTO mealscheduleitems
+            (schedule_id, day_offset, meal_type, scheduled_time, name, serving, calories, protein, carbs, fat, notes, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            scheduleId,
+            item.dayOffset ?? 0,
+            item.mealType,
+            timeValue,
+            item.name,
+            item.serving ?? null,
+            item.calories ?? null,
+            item.protein ?? null,
+            item.carbs ?? null,
+            item.fat ?? null,
+            item.notes ?? null,
+            item.sortOrder ?? i,
+          ]
+        );
+      }
+    }
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
   }
 
   const [rows] = await pool.query('SELECT * FROM mealschedules WHERE schedule_id = ?', [scheduleId]);

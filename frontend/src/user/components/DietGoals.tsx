@@ -15,7 +15,7 @@ interface DietGoalsProps {
   baseTarget: number;
   carryOver: number;
   schedules: MealSchedule[];
-  onUpdateSchedule: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>>) => Promise<void>;
+  onUpdateSchedule: (scheduleId: number, patch: Partial<Pick<MealSchedule, 'name' | 'description' | 'startDate' | 'endDate' | 'color' | 'targetCalories' | 'achieved'>> & { items?: ScheduleItem[] }) => Promise<void>;
   onDeleteSchedule: (scheduleId: number) => Promise<void>;
   onCreateSchedule: (payload: {
     name: string;
@@ -159,7 +159,18 @@ export function DietGoals({
     );
   }
 
-  const totalCalories = myDiets.reduce((sum, item) => sum + item.calories, 0);
+  // Label "Daily Target" → so only count meals logged TODAY (local date).
+  // Trước đây cộng dồn toàn bộ myDiets nên nhiều ngày log lại trông như vượt
+  // target dù chỉ hôm nay ăn dưới mức. Khớp với cách Homepage lọc theo ngày.
+  const todayKey = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const totalCalories = myDiets.reduce((sum, item) => {
+    const itemDate = new Date(item.date);
+    const itemKey = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}-${String(itemDate.getDate()).padStart(2, '0')}`;
+    return itemKey === todayKey ? sum + item.calories : sum;
+  }, 0);
   const progressPercentage = Math.min((totalCalories / dailyTarget) * 100, 100);
 
   return (

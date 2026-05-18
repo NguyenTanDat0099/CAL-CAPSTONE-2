@@ -102,6 +102,20 @@ export const markAsRead = async (
   return result.affectedRows > 0;
 };
 
+// Hard-delete a single notification for the given user. Used by the bell
+// dropdown's X button so a dismissed item stays dismissed across polls
+// (vs. mark-read which leaves the row and lets it reappear).
+export const deleteUserNotification = async (
+  notificationId: number,
+  userId: number
+): Promise<boolean> => {
+  const [result] = await pool.query<ResultSetHeader>(
+    `DELETE FROM notifications WHERE notification_id = ? AND user_id = ?`,
+    [notificationId, userId]
+  );
+  return result.affectedRows > 0;
+};
+
 export const markAllAsRead = async (userId: number): Promise<number> => {
   const [result] = await pool.query<ResultSetHeader>(
     `UPDATE notifications
