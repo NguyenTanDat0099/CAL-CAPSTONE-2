@@ -14,6 +14,7 @@ import {
   getAdminFoodsService,
   getAdminFoodByIdService,
   createAdminFoodService,
+  bulkImportAdminFoodsService,
   updateAdminFoodService,
   deleteAdminFoodService,
   getFoodCategoriesService,
@@ -283,6 +284,23 @@ export const createFood = async (req: Request, res: Response) => {
     const food = await createAdminFoodService(req.body);
     await writeAuditLog(req, 'CREATE_FOOD', 'food', food.id, `Created food ${food.name}`);
     res.status(201).json({ message: 'Food created successfully', data: food });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+export const bulkImportFoods = async (req: Request, res: Response) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    const result = await bulkImportAdminFoodsService(rows);
+    await writeAuditLog(
+      req,
+      'BULK_IMPORT_FOOD',
+      'food',
+      null,
+      `Imported ${result.inserted}/${result.total} foods, ${result.failed.length} failed`
+    );
+    res.status(200).json({ message: 'Bulk import completed', data: result });
   } catch (error) {
     handleError(error, res);
   }

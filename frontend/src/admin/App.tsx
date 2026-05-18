@@ -29,7 +29,7 @@ import {
   fetchAdminProfile, fetchAdminStats,
   fetchUsers, fetchUserById, fetchUserStatistics,
   createUser, updateUser, updateUserStatus, deleteUser,
-  fetchFoods, createFood, updateFood, deleteFood, fetchAdminAnalytics,
+  fetchFoods, createFood, bulkImportFoods, updateFood, deleteFood, fetchAdminAnalytics,
   fetchSecurityOverview, fetchRoleAccounts, updateAccountRole, fetchAuditLogs
 } from '../api';
 
@@ -167,20 +167,7 @@ export default function AdminApp({ onLogout }: AdminAppProps) {
       </AnimatePresence>
 
       {/* Global Header */}
-      <div className="fixed top-0 right-0 left-64 h-24 px-8 z-40 flex items-center justify-between bg-bg-dark/80 backdrop-blur-md border-b border-white/5">
-        <div className="flex-1">
-          {(activeTab === 'users') && (
-            <motion.div
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="flex items-center gap-4 bg-surface-dark px-4 py-2 rounded-2xl border border-white/5 w-96 shadow-inner"
-            >
-              <Search size={18} className="text-text-muted" />
-              <span className="text-sm text-text-muted">User Management</span>
-            </motion.div>
-          )}
-        </div>
-
+      <div className="fixed top-0 right-0 left-64 h-24 px-8 z-40 flex items-center justify-end bg-bg-dark/80 backdrop-blur-md border-b border-white/5">
         <div className="flex items-center gap-6">
           <div className="relative">
             <motion.button
@@ -1151,6 +1138,7 @@ function BanConfirmModal({
 function ContentManagement({ showToast }: ViewProps) {
   const [activeTab, setActiveTab] = useState<'food' | 'logs'>('food');
   const [showAddFood, setShowAddFood] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [foods, setFoods] = useState<FoodItem[]>([]);
   const [foodsLoading, setFoodsLoading] = useState(true);
   const [foodSearch, setFoodSearch] = useState('');
@@ -1275,12 +1263,21 @@ function ContentManagement({ showToast }: ViewProps) {
             <h1 className="text-4xl font-black tracking-tighter mb-2 italic uppercase text-white">CONTENT MANAGER</h1>
             <p className="text-text-muted font-medium font-sans">Curate the food database used by Meal Plans and chatbot nutrition references.</p>
           </div>
-          <button
-            onClick={openAddFood}
-            className="px-6 py-3 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform shadow-xl shadow-brand-orange/20"
-          >
-            + ADD FOOD ITEM
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowImport(true)}
+              className="px-6 py-3 bg-white/5 border border-white/10 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 hover:scale-105 transition-all cursor-pointer flex items-center gap-2"
+            >
+              <Upload size={14} />
+              IMPORT DATASET
+            </button>
+            <button
+              onClick={openAddFood}
+              className="px-6 py-3 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform cursor-pointer shadow-xl shadow-brand-orange/20"
+            >
+              + ADD FOOD ITEM
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1508,6 +1505,7 @@ function ContentManagement({ showToast }: ViewProps) {
                       { value: 'Lunch', label: 'LUNCH' },
                       { value: 'Dinner', label: 'DINNER' },
                       { value: 'Snack', label: 'SNACK' },
+                      { value: 'Other', label: 'OTHER' },
                     ]}
                   />
                 </div>
@@ -1576,6 +1574,333 @@ function ContentManagement({ showToast }: ViewProps) {
           </motion.div>
         </div>
       )}
+
+      {showImport && (
+        <ImportDatasetModal
+          onClose={() => setShowImport(false)}
+          onImported={() => loadFoods()}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── CSV → FoodPayload parser ─────────────────────────────
+// Tách dòng CSV xử lý quoted field có dấu phẩy. Trả về mảng cell đã trim.
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  let inQuote = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { buf += '"'; i += 1; }
+        else { inQuote = false; }
+      } else { buf += ch; }
+    } else {
+      if (ch === '"') inQuote = true;
+      else if (ch === ',') { out.push(buf); buf = ''; }
+      else buf += ch;
+    }
+  }
+  out.push(buf);
+  return out.map((s) => s.trim());
+}
+
+// Map alias header → tên cột chuẩn. Admin có thể dán file Food-100k,
+// Healthy-Eating, hoặc file tự tạo — đều khớp.
+const HEADER_ALIASES: Record<string, keyof FoodPayload | 'skip'> = {
+  // name
+  name: 'name', food_name: 'name', foodname: 'name',
+  dish_name: 'name', meal_name: 'name', tên: 'name', 'tên món': 'name',
+  // calories
+  calories: 'calories', kcal: 'calories', energy_kcal: 'calories',
+  calories_kcal: 'calories', calo: 'calories',
+  // protein
+  protein: 'protein', protein_g: 'protein', proteins: 'protein',
+  // carbs
+  carbs: 'carbs', carbohydrate: 'carbs', carbohydrates: 'carbs',
+  carbs_g: 'carbs', carbohydrate_g: 'carbs',
+  // fats
+  fats: 'fats', fat: 'fats', fat_g: 'fats', lipid: 'fats', lipids: 'fats',
+  // optional
+  category: 'category', meal_type: 'category', meal_slot: 'category', food_type: 'category', loại: 'category',
+  serving_size: 'servingSize', servingsize: 'servingSize',
+  serving: 'servingSize', portion: 'servingSize', portion_size: 'servingSize',
+  'khẩu phần': 'servingSize',
+  image_path: 'imagePath', imagepath: 'imagePath', image_url: 'imagePath',
+  imageurl: 'imagePath', image_link: 'imagePath', imagelink: 'imagePath', image: 'imagePath',
+  fiber: 'fiber', fiber_g: 'fiber', dietary_fiber: 'fiber',
+  sugar: 'sugar', sugar_g: 'sugar', sugars: 'sugar',
+  sodium: 'sodium', sodium_mg: 'sodium', salt: 'sodium',
+};
+
+const REQUIRED_FIELDS: Array<keyof FoodPayload> = ['name', 'calories', 'protein', 'carbs', 'fats'];
+
+interface ParsedRow {
+  row: FoodPayload;
+  errors: string[];
+  lineNumber: number;
+}
+
+function parseDatasetCsv(text: string): { rows: ParsedRow[]; missingHeaders: string[] } {
+  // Chuẩn hoá: bỏ BOM, normalize line endings.
+  const cleaned = text.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+  const lines = cleaned.split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length === 0) return { rows: [], missingHeaders: REQUIRED_FIELDS };
+
+  const headerCells = splitCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/[\s-]+/g, '_'));
+  const colIndex: Record<string, number> = {};
+  headerCells.forEach((h, idx) => {
+    const target = HEADER_ALIASES[h];
+    if (target && target !== 'skip' && colIndex[target] === undefined) {
+      colIndex[target] = idx;
+    }
+  });
+
+  // Báo cột bắt buộc thiếu sớm để admin biết file sai schema từ đầu.
+  const missingHeaders = REQUIRED_FIELDS.filter((f) => colIndex[f] === undefined);
+
+  const toNumber = (raw: string): number | null => {
+    if (raw === undefined || raw === null) return null;
+    const cleaned = String(raw).replace(/,/g, '.').replace(/[^0-9.\-]/g, '').trim();
+    if (!cleaned) return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const rows: ParsedRow[] = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const cells = splitCsvLine(lines[i]);
+    const errors: string[] = [];
+    const row: FoodPayload = {};
+
+    const getCell = (field: keyof FoodPayload) => {
+      const idx = colIndex[field];
+      return idx === undefined ? '' : (cells[idx] ?? '').trim();
+    };
+
+    const name = getCell('name');
+    if (!name) errors.push('Thiếu tên món');
+    row.name = name;
+
+    for (const field of ['calories', 'protein', 'carbs', 'fats'] as Array<keyof FoodPayload>) {
+      const raw = getCell(field);
+      if (colIndex[field] === undefined) {
+        // Cột thiếu hẳn — đã báo ở missingHeaders, không spam thêm vào từng row.
+        continue;
+      }
+      if (!raw) { errors.push(`Thiếu ${field}`); continue; }
+      const num = toNumber(raw);
+      if (num === null) errors.push(`${field} không phải số: "${raw}"`);
+      else if (num < 0) errors.push(`${field} âm: ${num}`);
+      else (row as Record<string, unknown>)[field] = num;
+    }
+
+    for (const field of ['fiber', 'sugar', 'sodium'] as Array<keyof FoodPayload>) {
+      const raw = getCell(field);
+      if (!raw) continue;
+      const num = toNumber(raw);
+      if (num !== null && num >= 0) (row as Record<string, unknown>)[field] = num;
+    }
+
+    const category = getCell('category');
+    if (category) row.category = category;
+    const servingSize = getCell('servingSize');
+    if (servingSize) row.servingSize = servingSize;
+    const imagePath = getCell('imagePath');
+    if (imagePath) row.imagePath = imagePath;
+
+    rows.push({ row, errors, lineNumber: i + 1 });
+  }
+
+  return { rows, missingHeaders };
+}
+
+// ─── Import Dataset Modal ─────────────────────────────────
+function ImportDatasetModal({
+  onClose, onImported, showToast,
+}: {
+  onClose: () => void;
+  onImported: () => void;
+  showToast: ViewProps['showToast'];
+}) {
+  const [fileName, setFileName] = useState<string>('');
+  const [parsed, setParsed] = useState<ParsedRow[]>([]);
+  const [missingHeaders, setMissingHeaders] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const validRows = parsed.filter((p) => p.errors.length === 0);
+  const errorRows = parsed.filter((p) => p.errors.length > 0);
+  const canImport = !submitting && missingHeaders.length === 0 && validRows.length > 0;
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onerror = () => showToast('Không đọc được file', 'error');
+    reader.onload = () => {
+      const text = String(reader.result || '');
+      const { rows, missingHeaders } = parseDatasetCsv(text);
+      setParsed(rows);
+      setMissingHeaders(missingHeaders);
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  const handleImport = async () => {
+    if (!canImport) return;
+    setSubmitting(true);
+    try {
+      const res = await bulkImportFoods(validRows.map((p) => p.row));
+      const { inserted, total, failed } = res.data;
+      const failPart = failed.length ? `, ${failed.length} lỗi server` : '';
+      showToast(`Đã import ${inserted}/${total} món${failPart}`, inserted > 0 ? 'success' : 'error');
+      onImported();
+      onClose();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Import failed', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-bg-dark/90 backdrop-blur-md"
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="relative bg-surface-dark border border-white/10 rounded-[2rem] max-w-3xl w-full shadow-2xl overflow-hidden p-10 space-y-6 max-h-[90vh] overflow-y-auto"
+      >
+        <div className="flex justify-between items-center">
+          <h2 className="text-3xl font-black italic uppercase tracking-tighter text-white">
+            IMPORT DATASET
+          </h2>
+          <button
+            onClick={onClose}
+            className="p-3 rounded-2xl bg-white/5 text-text-muted hover:text-white transition-colors cursor-pointer"
+          >
+            <X size={24} />
+          </button>
+        </div>
+
+        <p className="text-sm text-text-muted leading-relaxed">
+          Upload file <span className="font-mono text-white">.csv</span> để thêm hàng loạt món vào
+          food library. Các cột bắt buộc: <span className="font-mono text-brand-orange">name</span>,{' '}
+          <span className="font-mono text-brand-orange">calories</span>,{' '}
+          <span className="font-mono text-brand-orange">protein</span>,{' '}
+          <span className="font-mono text-brand-orange">carbs</span>,{' '}
+          <span className="font-mono text-brand-orange">fats</span>. Cột tuỳ chọn:{' '}
+          <span className="font-mono">category</span>, <span className="font-mono">serving_size</span>,{' '}
+          <span className="font-mono">image_url</span>, <span className="font-mono">fiber</span>,{' '}
+          <span className="font-mono">sugar</span>, <span className="font-mono">sodium</span>.
+        </p>
+
+        <label className="block">
+          <span className="text-[10px] font-black uppercase tracking-widest text-text-muted block mb-2">
+            CSV FILE
+          </span>
+          <div className="flex items-center gap-3">
+            <label className="flex-1 cursor-pointer">
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleFile}
+                className="hidden"
+              />
+              <div className="bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 hover:border-brand-orange transition-colors flex items-center gap-3">
+                <Upload size={18} className="text-brand-orange" />
+                <span className="text-white text-sm font-bold truncate">
+                  {fileName || 'Chọn file CSV...'}
+                </span>
+              </div>
+            </label>
+          </div>
+        </label>
+
+        {missingHeaders.length > 0 && (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5">
+            <p className="text-sm text-red-200 font-bold mb-2">
+              ⚠️ File thiếu cột bắt buộc:
+            </p>
+            <p className="font-mono text-xs text-red-100">{missingHeaders.join(', ')}</p>
+            <p className="text-xs text-red-100/70 mt-2">
+              Không thể import. Sửa file rồi upload lại.
+            </p>
+          </div>
+        )}
+
+        {parsed.length > 0 && missingHeaders.length === 0 && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
+                <p className="text-[10px] uppercase tracking-widest text-text-muted">Tổng</p>
+                <p className="text-2xl font-black text-white">{parsed.length}</p>
+              </div>
+              <div className="bg-emerald-500/10 rounded-2xl p-4 border border-emerald-500/30">
+                <p className="text-[10px] uppercase tracking-widest text-emerald-300">Hợp lệ</p>
+                <p className="text-2xl font-black text-emerald-300">{validRows.length}</p>
+              </div>
+              <div className="bg-red-500/10 rounded-2xl p-4 border border-red-500/30">
+                <p className="text-[10px] uppercase tracking-widest text-red-300">Lỗi</p>
+                <p className="text-2xl font-black text-red-300">{errorRows.length}</p>
+              </div>
+            </div>
+
+            {errorRows.length > 0 && (
+              <details className="bg-bg-dark/50 border border-white/10 rounded-2xl">
+                <summary className="cursor-pointer px-5 py-3 text-sm font-bold text-white">
+                  Xem {errorRows.length} dòng lỗi
+                </summary>
+                <div className="max-h-60 overflow-y-auto px-5 py-3 space-y-2 border-t border-white/10">
+                  {errorRows.slice(0, 100).map((r) => (
+                    <div key={r.lineNumber} className="text-xs">
+                      <span className="font-mono text-text-muted">Dòng {r.lineNumber}</span>
+                      {r.row.name && <span className="text-white"> · {r.row.name}</span>}
+                      <ul className="ml-6 mt-0.5 text-red-300 list-disc">
+                        {r.errors.map((e, i) => <li key={i}>{e}</li>)}
+                      </ul>
+                    </div>
+                  ))}
+                  {errorRows.length > 100 && (
+                    <p className="text-xs text-text-muted italic">
+                      ... và {errorRows.length - 100} dòng lỗi khác
+                    </p>
+                  )}
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-4 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="flex-1 py-4 bg-white/5 border border-white/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-white/10 transition-colors enabled:cursor-pointer disabled:opacity-50"
+          >
+            CANCEL
+          </button>
+          <button
+            type="button"
+            onClick={handleImport}
+            disabled={!canImport}
+            className="flex-1 py-4 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform shadow-xl shadow-brand-orange/20 enabled:cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
+          >
+            {submitting ? 'IMPORTING...' : `IMPORT ${validRows.length} MÓN`}
+          </button>
+        </div>
+      </motion.div>
     </div>
   );
 }

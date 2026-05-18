@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, RotateCcw, Plus, Utensils, ArrowLeft, Info, Flame, Zap, Droplets, Heart, PlusCircle, Sparkles, Trophy, CalendarDays } from 'lucide-react';
+import { Search, RotateCcw, Plus, Utensils, ArrowLeft, Info, Flame, Zap, Droplets, Heart, PlusCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Meal, MealCategory, DietItem, MealSchedule } from '../types';
+import { Meal, MealCategory, DietItem } from '../types';
 import { buildApiUrl } from '../../config/api';
 
 interface FoodCatalogItem {
@@ -75,6 +75,10 @@ const PORTION_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 2, label: '2 phần' },
 ];
 
+// 4 hàng × 4 cột (xl) = 16 / trang. Trên lg=3 cột → ~5 hàng, md=2 cột → 8 hàng,
+// mobile=1 cột → 16 hàng. Đủ ngắn để không phải scroll dài.
+const MEALS_PER_PAGE = 16;
+
 const AUTH_TOKEN_KEY = 'calai_token';
 const getAuthHeaders = (): Record<string, string> => {
   const token = sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY);
@@ -91,8 +95,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
   const [mealsError, setMealsError] = useState('');
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [portionMultiplier, setPortionMultiplier] = useState<number>(1);
-  const [communitySchedules, setCommunitySchedules] = useState<MealSchedule[]>([]);
-  const [communitySelected, setCommunitySelected] = useState<MealSchedule | null>(null);
+  const [page, setPage] = useState(1);
 
   // Reset portion picker each time the user opens a different meal detail.
   useEffect(() => {
@@ -103,7 +106,7 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
     setMealsLoading(true);
     setMealsError('');
     try {
-      const response = await fetch(buildApiUrl('/users/foods/search?limit=100'), {
+      const response = await fetch(buildApiUrl('/users/foods/search?limit=20000'), {
         headers: getAuthHeaders(),
       });
       const result = await response.json().catch(() => ({ message: 'Failed to load foods' }));
@@ -122,22 +125,6 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
     loadMeals();
   }, []);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const response = await fetch(buildApiUrl('/users/discover/meals'), {
-          headers: getAuthHeaders(),
-        });
-        if (!response.ok) return;
-        const result = await response.json();
-        setCommunitySchedules((result.data ?? []) as MealSchedule[]);
-      } catch {
-        // discover is optional; ignore failures
-      }
-    };
-    load();
-  }, []);
-
   const filteredMeals = useMemo(() => {
     return meals.filter(meal => {
       const matchesCategory = activeCategory === 'All' || meal.category === activeCategory;
@@ -153,11 +140,28 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
     });
   }, [meals, activeCategory, searchQuery, minKcal, maxKcal]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredMeals.length / MEALS_PER_PAGE));
+  // Reset về trang 1 mỗi khi filter đổi để user không bị mắc kẹt ở trang trống.
+  useEffect(() => {
+    setPage(1);
+  }, [activeCategory, searchQuery, minKcal, maxKcal]);
+  // Nếu sau filter mới page hiện tại vượt totalPages (vd vừa search ra ít kết
+  // quả), kéo về trang cuối hợp lệ.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const visibleMeals = useMemo(
+    () => filteredMeals.slice((page - 1) * MEALS_PER_PAGE, page * MEALS_PER_PAGE),
+    [filteredMeals, page]
+  );
+
   const handleReset = () => {
     setMinKcal('0');
     setMaxKcal('1200');
     setSearchQuery('');
     setActiveCategory('All');
+    setPage(1);
   };
 
   if (selectedMeal) {
@@ -310,71 +314,6 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
         </p>
       </header>
 
-      {communitySchedules.length > 0 && (
-        <section className="mb-12">
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-5">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-emerald-300 mb-2">
-                <Sparkles size={16} />
-                <span className="text-xs font-black uppercase tracking-widest">From the community</span>
-              </div>
-              <h2 className="text-xl sm:text-2xl font-black">Meal plans shared by other CalAI users</h2>
-            </div>
-            <p className="text-xs text-text-muted shrink-0">{communitySchedules.length} shared plan{communitySchedules.length === 1 ? '' : 's'}</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {communitySchedules.map(s => {
-              const totalKcal = s.items.reduce((sum, item) => sum + (item.calories ?? 0), 0);
-              const dayCount = Math.max(1, Math.round((new Date(s.endDate).getTime() - new Date(s.startDate).getTime()) / 86400000) + 1);
-              return (
-                <button
-                  key={s.scheduleId}
-                  onClick={() => setCommunitySelected(s)}
-                  className="text-left bg-surface-dark rounded-3xl border border-white/5 hover:border-emerald-400/30 transition-colors overflow-hidden"
-                >
-                  <div className="h-1.5" style={{ backgroundColor: s.color }} />
-                  <div className="p-5">
-                    <div className="flex items-start justify-between gap-2 mb-3">
-                      <div className="min-w-0">
-                        <h3 className="text-base font-bold truncate">{s.name}</h3>
-                        <p className="text-[10px] uppercase tracking-widest text-text-muted mt-0.5">
-                          By {s.authorName ?? 'Community'} · {dayCount} day{dayCount === 1 ? '' : 's'}
-                        </p>
-                      </div>
-                      {s.achieved && (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-400/10 border border-emerald-400/30 rounded-full px-2 py-0.5 shrink-0">
-                          <Trophy size={10} />
-                          Achieved
-                        </span>
-                      )}
-                    </div>
-                    {s.description && (
-                      <p className="text-xs text-text-muted leading-relaxed mb-4 h-9 overflow-hidden">
-                        {s.description.length > 120 ? `${s.description.slice(0, 120)}…` : s.description}
-                      </p>
-                    )}
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="inline-flex items-center gap-1 text-text-muted">
-                        <CalendarDays size={12} /> {s.items.length} meal{s.items.length === 1 ? '' : 's'}
-                      </span>
-                      {totalKcal > 0 && (
-                        <span className="font-bold text-brand-orange">{totalKcal.toLocaleString()} kcal</span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      <AnimatePresence>
-        {communitySelected && (
-          <CommunityScheduleModal schedule={communitySelected} onClose={() => setCommunitySelected(null)} />
-        )}
-      </AnimatePresence>
-
       {/* Navigation & Search */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8 border-b border-white/10">
         <div className="flex gap-5 sm:gap-8 overflow-x-auto -mx-1 px-1 pb-1">
@@ -453,9 +392,9 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
 
       {/* Meals Grid */}
       {!mealsLoading && !mealsError && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-32">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           <AnimatePresence mode="popLayout">
-            {filteredMeals.map((meal) => (
+            {visibleMeals.map((meal) => (
               <motion.div
                 key={meal.id}
                 layout
@@ -546,68 +485,68 @@ export function MealPlans({ onAddToMyDiet }: MealPlansProps) {
           </button>
         </div>
       )}
-    </div>
-  );
-}
 
-function CommunityScheduleModal({ schedule, onClose }: { schedule: MealSchedule; onClose: () => void }) {
-  const start = new Date(schedule.startDate);
-  const end = new Date(schedule.endDate);
-  const grouped = schedule.items.reduce<Record<number, MealSchedule['items']>>((acc, item) => {
-    const day = item.dayOffset ?? 0;
-    if (!acc[day]) acc[day] = [];
-    acc[day].push(item);
-    return acc;
-  }, {});
-  const dayKeys = Object.keys(grouped).map(Number).sort((a, b) => a - b);
-  const totalKcal = schedule.items.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+      {!mealsLoading && !mealsError && filteredMeals.length > 0 && (
+        <div className="flex flex-col items-center gap-3 mt-10 pb-32">
+          <p className="text-xs text-text-muted">
+            Hiển thị <span className="text-white font-bold">{(page - 1) * MEALS_PER_PAGE + 1}</span>
+            {' – '}
+            <span className="text-white font-bold">
+              {Math.min(page * MEALS_PER_PAGE, filteredMeals.length)}
+            </span>
+            {' / '}
+            <span className="text-white font-bold">{filteredMeals.length}</span> món
+          </p>
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-bg-dark/90 backdrop-blur-sm" />
-      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative bg-surface-dark rounded-[2rem] border border-white/10 max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col shadow-2xl">
-        <div className="h-2" style={{ backgroundColor: schedule.color }} />
-        <div className="px-7 py-5 border-b border-white/5 flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-widest text-emerald-300 mb-1">From the community</p>
-            <h2 className="text-2xl font-black truncate">{schedule.name}</h2>
-            <p className="text-text-muted text-sm mt-1">
-              By {schedule.authorName ?? 'Community'} · {start.toLocaleDateString()} → {end.toLocaleDateString()}
-            </p>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors shrink-0">
-            <ArrowLeft size={16} />
-          </button>
-        </div>
-        <div className="overflow-y-auto p-7 space-y-5">
-          {schedule.description && <p className="text-text-muted leading-relaxed text-sm">{schedule.description}</p>}
-          <div className="flex items-center justify-between text-xs text-text-muted">
-            <span>{schedule.items.length} meal{schedule.items.length === 1 ? '' : 's'}</span>
-            {totalKcal > 0 && <span className="font-bold text-brand-orange">{totalKcal.toLocaleString()} kcal total</span>}
-          </div>
-          {dayKeys.map(day => (
-            <div key={day} className="bg-bg-dark/60 rounded-2xl border border-white/5 p-4">
-              <p className="text-[10px] uppercase tracking-widest text-text-muted font-black mb-3">Day {day + 1}</p>
-              <div className="space-y-2">
-                {grouped[day].map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between text-sm">
-                    <div className="min-w-0">
-                      <p className="font-bold truncate">{item.name}</p>
-                      <p className="text-[10px] uppercase tracking-widest text-text-muted">{item.mealType}{item.serving ? ` · ${item.serving}` : ''}</p>
-                    </div>
-                    <div className="flex items-center gap-3 text-[11px] text-text-muted shrink-0 ml-4">
-                      {item.calories != null && <span><span className="text-white font-bold">{Math.round(item.calories)}</span> kcal</span>}
-                      {item.protein != null && <span>P {Math.round(item.protein)}g</span>}
-                      {item.carbs != null && <span>C {Math.round(item.carbs)}g</span>}
-                      {item.fat != null && <span>F {Math.round(item.fat)}g</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed enabled:cursor-pointer transition-colors text-white"
+                aria-label="Trang trước"
+              >
+                <ChevronLeft size={18} />
+              </button>
+
+              {Array.from({ length: totalPages }, (_, idx) => idx + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                .reduce<Array<number | 'gap'>>((acc, p, idx, arr) => {
+                  if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1) acc.push('gap');
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((entry, idx) =>
+                  entry === 'gap' ? (
+                    <span key={`gap-${idx}`} className="text-text-muted px-1">…</span>
+                  ) : (
+                    <button
+                      key={entry}
+                      onClick={() => setPage(entry as number)}
+                      className={`min-w-10 h-10 px-3 rounded-xl font-bold text-sm cursor-pointer transition-colors ${
+                        page === entry
+                          ? 'bg-brand-orange text-bg-dark'
+                          : 'bg-white/5 text-white hover:bg-white/10'
+                      }`}
+                    >
+                      {entry}
+                    </button>
+                  )
+                )}
+
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed enabled:cursor-pointer transition-colors text-white"
+                aria-label="Trang sau"
+              >
+                <ChevronRight size={18} />
+              </button>
             </div>
-          ))}
+          )}
         </div>
-      </motion.div>
+      )}
     </div>
   );
 }
+

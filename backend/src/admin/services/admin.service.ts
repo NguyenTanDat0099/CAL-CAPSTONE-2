@@ -1,4 +1,6 @@
 import pool from '../../shared/database/db';
+import { normalizeMealSlot } from '../../shared/foodCategory';
+import { normalizeServingSize } from '../../shared/servingSize';
 
 // ──────────────────────────────────────────────
 // Error class
@@ -234,13 +236,11 @@ const mapDbToFood = (row: FoodRow) => ({
   createdAt: row.created_at,
 });
 
-const normalizeFoodCategory = (value?: string | null) => {
-  const category = (value || 'General').trim();
-  return category.length > 0 ? category : 'General';
-};
-
-const ensureFoodCategory = async (categoryName: string) => {
-  const normalized = normalizeFoodCategory(categoryName);
+const ensureFoodCategory = async (
+  categoryName: string | null | undefined,
+  foodName?: string | null
+) => {
+  const normalized = normalizeMealSlot(categoryName, foodName);
   const [rows] = await pool.query(
     `SELECT category_id FROM foodcategories WHERE LOWER(category_name) = LOWER(?) LIMIT 1`,
     [normalized]
@@ -279,7 +279,7 @@ const ensureSeedFoods = async () => {
   }
 
   for (const food of SEED_FOODS) {
-    const categoryId = await ensureFoodCategory(food.category);
+    const categoryId = await ensureFoodCategory(food.category, food.name);
     await pool.query(
       `
         INSERT INTO foods (food_name, category_id, calories, protein, carbs, fat, fiber, sugar, serving_size)
@@ -970,8 +970,6 @@ export const getUserStatisticsService = async (userId: number) => {
 // ──────────────────────────────────────────────
 // Food Library
 export const getAdminFoodsService = async (filters: FoodFilters = {}) => {
-  await ensureSeedFoods();
-
   const {
     search,
     category,
@@ -1086,7 +1084,7 @@ export const getAdminFoodByIdService = async (foodId: number) => {
 export const createAdminFoodService = async (payload: FoodPayload) => {
   validateFoodPayload(payload, true);
 
-  const categoryId = await ensureFoodCategory(payload.category ?? 'General');
+  const categoryId = await ensureFoodCategory(payload.category ?? null, payload.name);
   const [insertResult] = await pool.query(
     `
       INSERT INTO foods
@@ -1103,12 +1101,84 @@ export const createAdminFoodService = async (payload: FoodPayload) => {
       payload.fiber ?? null,
       payload.sugar ?? null,
       payload.sodium ?? null,
-      payload.servingSize?.trim() || null,
+      normalizeServingSize(payload.servingSize, payload.name),
       payload.imagePath?.trim() || null,
     ]
   );
 
   return getAdminFoodByIdService((insertResult as { insertId: number }).insertId);
+};
+
+export interface BulkImportFoodResult {
+  total: number;
+  inserted: number;
+  failed: Array<{ index: number; name: string | null; error: string }>;
+}
+
+/**
+ * Bulk-insert nhiều food trong một lần admin upload dataset. Mỗi row đi qua
+ * cùng validation như createAdminFoodService nhưng KHÔNG dừng cả batch khi
+ * 1 row lỗi — trả về danh sách lỗi để admin sửa và import lại.
+ */
+export const bulkImportAdminFoodsService = async (
+  rows: FoodPayload[]
+): Promise<BulkImportFoodResult> => {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new AdminServiceError('No rows provided', 'EMPTY_IMPORT', 400);
+  }
+  if (rows.length > 5000) {
+    throw new AdminServiceError(
+      'Tối đa 5000 dòng / lần import',
+      'IMPORT_TOO_LARGE',
+      400
+    );
+  }
+
+  const result: BulkImportFoodResult = {
+    total: rows.length,
+    inserted: 0,
+    failed: [],
+  };
+
+  for (let i = 0; i < rows.length; i += 1) {
+    const payload = rows[i];
+    try {
+      validateFoodPayload(payload, true);
+      const categoryId = await ensureFoodCategory(payload.category ?? null, payload.name);
+      await pool.query(
+        `
+          INSERT INTO foods
+            (food_name, category_id, calories, protein, carbs, fat, fiber, sugar, sodium, serving_size, image_path)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          payload.name?.trim(),
+          categoryId,
+          payload.calories ?? 0,
+          payload.protein ?? 0,
+          payload.carbs ?? 0,
+          payload.fats ?? 0,
+          payload.fiber ?? null,
+          payload.sugar ?? null,
+          payload.sodium ?? null,
+          normalizeServingSize(payload.servingSize, payload.name),
+          payload.imagePath?.trim() || null,
+        ]
+      );
+      result.inserted += 1;
+    } catch (err) {
+      const message =
+        err instanceof AdminServiceError ? err.message :
+        err instanceof Error ? err.message : 'Unknown error';
+      result.failed.push({
+        index: i,
+        name: payload.name ?? null,
+        error: message,
+      });
+    }
+  }
+
+  return result;
 };
 
 export const updateAdminFoodService = async (foodId: number, payload: FoodPayload) => {
@@ -1132,7 +1202,7 @@ export const updateAdminFoodService = async (foodId: number, payload: FoodPayloa
 
   if (payload.category !== undefined) {
     updates.push(`category_id = ?`);
-    params.push(await ensureFoodCategory(payload.category));
+    params.push(await ensureFoodCategory(payload.category, payload.name));
   }
 
   if (payload.calories !== undefined) {
@@ -1165,7 +1235,7 @@ export const updateAdminFoodService = async (foodId: number, payload: FoodPayloa
   }
   if (payload.servingSize !== undefined) {
     updates.push(`serving_size = ?`);
-    params.push(payload.servingSize.trim() || null);
+    params.push(normalizeServingSize(payload.servingSize, payload.name));
   }
   if (payload.imagePath !== undefined) {
     updates.push(`image_path = ?`);
@@ -1191,7 +1261,6 @@ export const deleteAdminFoodService = async (foodId: number) => {
 };
 
 export const getFoodCategoriesService = async () => {
-  await ensureSeedFoods();
   const [rows] = await pool.query(
     `SELECT category_id, category_name FROM foodcategories ORDER BY category_name ASC`
   );

@@ -1,4 +1,5 @@
 import pool from '../../shared/database/db';
+import { normalizeMealSlot } from '../../shared/foodCategory';
 
 type AnalysisSource = 'upload' | 'camera';
 
@@ -832,10 +833,14 @@ const ensureUserGoal = async (userId: number): Promise<GoalRow | null> => {
   return goalRows[0] ?? null;
 };
 
-const ensureFoodCategory = async (categoryName: string) => {
+const ensureFoodCategory = async (
+  categoryName: string | null | undefined,
+  foodName?: string | null
+) => {
+  const normalized = normalizeMealSlot(categoryName, foodName);
   const [categories] = await pool.query(
     'SELECT category_id FROM foodcategories WHERE category_name = ? LIMIT 1',
-    [categoryName]
+    [normalized]
   );
   const rows = categories as Array<{ category_id: number }>;
   if (rows.length > 0) {
@@ -844,7 +849,7 @@ const ensureFoodCategory = async (categoryName: string) => {
 
   const [insertResult] = await pool.query(
     'INSERT INTO foodcategories (category_name) VALUES (?)',
-    [categoryName]
+    [normalized]
   );
 
   return (insertResult as { insertId: number }).insertId;
@@ -859,7 +864,7 @@ const ensureSeedFoods = async () => {
   }
 
   for (const food of SEED_FOODS) {
-    const categoryId = await ensureFoodCategory(food.category);
+    const categoryId = await ensureFoodCategory(food.category, food.name);
     await pool.query(
       `
         INSERT INTO foods (food_name, category_id, calories, protein, carbs, fat, fiber, sugar)
@@ -880,7 +885,7 @@ const ensureSeedFoods = async () => {
 };
 
 const createFoodRecord = async (template: FoodTemplate) => {
-  const categoryId = await ensureFoodCategory(template.categoryName);
+  const categoryId = await ensureFoodCategory(template.categoryName, template.name);
   const [insertResult] = await pool.query(
     `
       INSERT INTO foods (food_name, category_id, calories, protein, carbs, fat, fiber, sugar)
@@ -1328,9 +1333,10 @@ export const updateUserGoalsService = async (accountId: number | null | undefine
 };
 
 export const searchFoodsService = async (query: string, options: SearchFoodsOptions = {}) => {
-  await ensureSeedFoods();
-
-  const safeLimit = Math.min(100, Math.max(1, Number(options.limit) || 50));
+  // Cap 20000 để user Meal Plans tải được toàn bộ catalog (~18.6k món hiện
+  // tại). Search/filter/pagination ở client. Nếu data vượt 20k cần chuyển
+  // sang server-side search (cách B).
+  const safeLimit = Math.min(20000, Math.max(1, Number(options.limit) || 50));
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
@@ -1415,7 +1421,7 @@ export const createMealService = async (accountId: number | null | undefined, pa
     }
     mealItemCalories = mealItemCalories || Math.round(Number(food.calories ?? 0));
   } else {
-    const categoryId = await ensureFoodCategory(payload.mealType || 'Meal');
+    const categoryId = await ensureFoodCategory(payload.mealType || null, payload.foodName);
 
     const [foodInsert] = await pool.query(
       `

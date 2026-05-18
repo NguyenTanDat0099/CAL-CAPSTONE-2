@@ -201,6 +201,18 @@ export const createFood = (payload: import('./admin/types').FoodPayload) =>
     body: JSON.stringify(payload),
   });
 
+export interface BulkImportFoodsResponse {
+  total: number;
+  inserted: number;
+  failed: Array<{ index: number; name: string | null; error: string }>;
+}
+
+export const bulkImportFoods = (rows: import('./admin/types').FoodPayload[]) =>
+  request<{ message: string; data: BulkImportFoodsResponse }>('/admin/foods/import', {
+    method: 'POST',
+    body: JSON.stringify({ rows }),
+  });
+
 export const updateFood = (
   foodId: number,
   payload: import('./admin/types').FoodPayload

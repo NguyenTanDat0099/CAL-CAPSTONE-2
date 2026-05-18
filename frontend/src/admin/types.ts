@@ -98,12 +98,15 @@ export interface FoodCategory {
 }
 
 export interface FoodPayload {
-  name: string;
-  category: string;
-  calories: number;
-  protein: number;
-  carbs: number;
-  fats: number;
+  name?: string;
+  category?: string;
+  calories?: number;
+  protein?: number;
+  carbs?: number;
+  fats?: number;
+  fiber?: number;
+  sugar?: number;
+  sodium?: number;
   servingSize?: string;
   imagePath?: string;
 }

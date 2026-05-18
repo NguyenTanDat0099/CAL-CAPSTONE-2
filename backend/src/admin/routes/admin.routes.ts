@@ -14,6 +14,7 @@ import {
   getAllFoods,
   getFoodById,
   createFood,
+  bulkImportFoods,
   updateFood,
   deleteFood,
   getFoodCategories,
@@ -39,6 +40,7 @@ adminRouter.get('/foods', getAllFoods);
 adminRouter.get('/foods/categories', getFoodCategories);
 adminRouter.get('/foods/:foodId', getFoodById);
 adminRouter.post('/foods', createFood);
+adminRouter.post('/foods/import', bulkImportFoods);
 adminRouter.put('/foods/:foodId', updateFood);
 adminRouter.delete('/foods/:foodId', deleteFood);
 
