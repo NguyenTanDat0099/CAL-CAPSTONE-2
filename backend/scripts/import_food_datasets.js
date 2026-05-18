@@ -277,7 +277,7 @@ const makeFood100kItem = (row) => {
   const name = safeTrim(row.dish_name);
   const foodProb = parseNumber(row.food_prob);
   const imagePath = safeTrim(row.image_url);
-  const servingSize = Array.isArray(portion) ? portion.join(', ') : safeTrim(row.portion_size);
+  const servingSize = formatServing(name, portion) || safeTrim(row.portion_size) || null;
   const item = {
     source: 'food100k',
     name,
@@ -321,7 +321,9 @@ const makeHealthyItem = (row) => {
     fiber: round(parseNumber(row.fiber_g), 2),
     sugar: round(parseNumber(row.sugar_g), 2),
     sodium: round(parseNumber(row.sodium_mg), 2),
-    servingSize: servingSizeG ? `${servingSizeG}g` : null,
+    servingSize: servingSizeG
+      ? (formatServing(name, `${servingSizeG}g`) || `1 phần (${Math.round(servingSizeG)}g)`)
+      : null,
     imagePath,
     ingredients: null,
     cookingMethod: safeTrim(row.cooking_method) || null,
@@ -653,13 +655,11 @@ async function connectDb() {
   });
 }
 
-const normalizeCategory = (value) => {
-  const text = safeTrim(value);
-  return text || 'General';
-};
+const { normalizeMealSlot } = require('./_foodCategory');
+const { formatServing } = require('./_servingSize');
 
-async function getCategoryId(conn, cache, categoryName) {
-  const normalized = normalizeCategory(categoryName);
+async function getCategoryId(conn, cache, categoryName, foodName) {
+  const normalized = normalizeMealSlot(categoryName, foodName);
   const key = normalized.toLowerCase();
   if (cache.has(key)) return cache.get(key);
 
@@ -699,7 +699,7 @@ async function importRows(rows) {
     await connection.beginTransaction();
     for (const row of rows) {
       const existing = existingByKey.get(row.key);
-      const categoryId = await getCategoryId(connection, categoryCache, row.category);
+      const categoryId = await getCategoryId(connection, categoryCache, row.category, row.name);
 
       if (existing && !opts.updateExisting) {
         summary.skippedExisting += 1;
