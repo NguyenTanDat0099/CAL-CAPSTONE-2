@@ -5,6 +5,7 @@ import { MealPlans } from './components/MealPlans';
 import { Homepage } from './components/Homepage';
 import { Dashboard } from './components/Dashboard';
 import { Chatbox } from './components/Chatbox';
+import { FoodScan } from './components/FoodScan';
 import { Settings } from './components/Settings';
 import { ProfileSetup } from './components/ProfileSetup';
 import { DietItem, MealSchedule, ScheduleItem } from './types';
@@ -960,6 +961,18 @@ export default function App({ onLogout }: UserAppProps) {
             onCreateSchedule={createScheduleFromPlan}
           />
         )}
+        {activeTab === 'scan' && (
+          <FoodScan
+            onSavedToDiet={() => {
+              loadMeals().catch(err => console.error('meals reload failed:', err));
+              showDietToast({
+                kind: 'success',
+                title: 'Added to Diet Goals',
+                message: 'Your scanned meal was saved to today\'s diet log.',
+              });
+            }}
+          />
+        )}
         {activeTab === 'meals' && <MealPlans onAddToMyDiet={handleAddToMyDiet} />}
         {activeTab === 'chat' && (
           <Chatbox
@@ -979,7 +992,7 @@ export default function App({ onLogout }: UserAppProps) {
             setProfile={handleProfileChange}
           />
         )}
-        {activeTab !== 'home' && activeTab !== 'goals' && activeTab !== 'meals' && activeTab !== 'dashboard' && activeTab !== 'chat' && activeTab !== 'settings' && (
+        {activeTab !== 'home' && activeTab !== 'goals' && activeTab !== 'meals' && activeTab !== 'dashboard' && activeTab !== 'chat' && activeTab !== 'settings' && activeTab !== 'scan' && (
           <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 flex items-center justify-center text-text-muted">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2">Section "{activeTab}"</h2>

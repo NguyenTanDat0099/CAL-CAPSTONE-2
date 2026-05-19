@@ -19,8 +19,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,7 +26,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -37,16 +37,13 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,7 +71,6 @@ private val Suggestions = listOf(
     "Lên thực đơn 7 ngày tăng cơ" to "Lập thực đơn 7 ngày giúp tôi tăng cơ, kèm bảng macro."
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     sessionId: Int?,
@@ -95,90 +91,109 @@ fun ChatScreen(
         }
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "CalAI Assistant",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = if (vm.sending) "Đang trả lời…"
-                            else "Trợ lý dinh dưỡng",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+    // Plain Column instead of Scaffold — nested Scaffold inside HomeShell was
+    // double-consuming system bar insets, causing TopAppBar to render with
+    // 0 height and chat content to leak behind the status bar.
+    // System bars + IME are now handled by HomeShell's Scaffold via
+    // contentWindowInsets = safeDrawing, so this Column applies no insets.
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        ChatTopBar(
+            title = "CalAI Assistant",
+            subtitle = if (vm.sending) "Đang trả lời…" else "Trợ lý dinh dưỡng",
+            onBack = onBack,
+        )
+
+        Box(modifier = Modifier.weight(1f)) {
+            when {
+                vm.loading && vm.messages.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
                     }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface
-                )
-            )
-        }
-    ) { padding: PaddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .imePadding()
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                when {
-                    vm.loading && vm.messages.isEmpty() -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
+                }
+                vm.messages.isEmpty() -> {
+                    EmptyChatState(onSuggestion = { vm.input = it })
+                }
+                else -> {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(vm.messages, key = { it.messageId }) { msg ->
+                            MessageRow(msg)
                         }
-                    }
-                    vm.messages.isEmpty() -> {
-                        EmptyChatState(
-                            onSuggestion = { vm.input = it }
-                        )
-                    }
-                    else -> {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            items(vm.messages, key = { it.messageId }) { msg ->
-                                MessageRow(msg)
-                            }
-                            if (vm.sending) {
-                                item { TypingRow() }
-                            }
-                            item { Spacer(Modifier.height(8.dp)) }
+                        if (vm.sending) {
+                            item { TypingRow() }
                         }
+                        item { Spacer(Modifier.height(8.dp)) }
                     }
                 }
             }
+        }
 
-            vm.error?.let {
-                Text(
-                    text = it,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
+        vm.error?.let {
+            Text(
+                text = it,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        ChatInputBar(
+            value = vm.input,
+            onValueChange = { vm.input = it },
+            onSend = { vm.send() },
+            sending = vm.sending
+        )
+    }
+}
+
+@Composable
+private fun ChatTopBar(title: String, subtitle: String, onBack: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .padding(end = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Quay lại"
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-
-            ChatInputBar(
-                value = vm.input,
-                onValueChange = { vm.input = it },
-                onSend = { vm.send() },
-                sending = vm.sending
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant,
+                thickness = 0.5.dp,
             )
         }
     }
@@ -186,12 +201,16 @@ fun ChatScreen(
 
 @Composable
 private fun EmptyChatState(onSuggestion: (String) -> Unit) {
+    // Scrollable so content never overflows the top/bottom when the keyboard
+    // opens and shrinks the available height. Top-anchored with generous
+    // padding instead of vertically centered — centered content was bleeding
+    // behind the top bar / status bar on small viewports.
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
     ) {
         Surface(
             shape = CircleShape,
@@ -416,7 +435,6 @@ private fun ChatInputBar(
     ) {
         Row(
             modifier = Modifier
-                .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Bottom
         ) {

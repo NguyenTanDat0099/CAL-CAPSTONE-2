@@ -11,13 +11,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -26,16 +27,13 @@ import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +48,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.calai.app.CalAiApplication
 import com.calai.app.data.api.dto.ChatSessionDto
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatListScreen(
     onOpen: (Int) -> Unit,
@@ -64,70 +61,100 @@ fun ChatListScreen(
         }
     )
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            "Trò chuyện",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        val subtitle = when {
-                            vm.loading -> "Đang tải…"
-                            vm.sessions.isEmpty() -> "Bắt đầu cuộc trò chuyện mới"
-                            else -> "${vm.sessions.size} đoạn chat"
-                        }
-                        Text(
-                            subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+    // Plain Box + Column instead of Scaffold so the nested-Scaffold inset
+    // double-consumption bug stays fixed (same pattern as ChatScreen and
+    // FoodScanScreen). FAB lives as a Box overlay anchored bottom-end.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            ChatListTopBar(
+                title = "Trò chuyện",
+                subtitle = when {
+                    vm.loading -> "Đang tải…"
+                    vm.sessions.isEmpty() -> "Bắt đầu cuộc trò chuyện mới"
+                    else -> "${vm.sessions.size} đoạn chat"
                 },
-                actions = {
-                    IconButton(onClick = { vm.refresh() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Làm mới")
-                    }
-                    IconButton(onClick = { vm.logout(onLogout) }) {
-                        Icon(Icons.Default.Logout, contentDescription = "Đăng xuất")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface
-                )
+                onRefresh = { vm.refresh() },
+                onLogout = { vm.logout(onLogout) },
             )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onNew,
-                icon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                text = { Text("Chat mới") },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
-            )
-        }
-    ) { padding: PaddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            when {
-                vm.loading && vm.sessions.isEmpty() -> LoadingState()
-                vm.error != null && vm.sessions.isEmpty() -> ErrorState(
-                    message = vm.error ?: "Lỗi không xác định",
-                    onRetry = { vm.refresh() }
-                )
-                vm.sessions.isEmpty() -> EmptyState(onNew = onNew)
-                else -> SessionsList(
-                    sessions = vm.sessions,
-                    onOpen = onOpen
-                )
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                when {
+                    vm.loading && vm.sessions.isEmpty() -> LoadingState()
+                    vm.error != null && vm.sessions.isEmpty() -> ErrorState(
+                        message = vm.error ?: "Lỗi không xác định",
+                        onRetry = { vm.refresh() }
+                    )
+                    vm.sessions.isEmpty() -> EmptyState(onNew = onNew)
+                    else -> SessionsList(
+                        sessions = vm.sessions,
+                        onOpen = onOpen
+                    )
+                }
             }
+        }
+
+        ExtendedFloatingActionButton(
+            onClick = onNew,
+            icon = { Icon(Icons.Default.Edit, contentDescription = null) },
+            text = { Text("Chat mới") },
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        )
+    }
+}
+
+@Composable
+private fun ChatListTopBar(
+    title: String,
+    subtitle: String,
+    onRefresh: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 60.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Làm mới")
+                }
+                IconButton(onClick = onLogout) {
+                    Icon(Icons.Default.Logout, contentDescription = "Đăng xuất")
+                }
+            }
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant,
+                thickness = 0.5.dp,
+            )
         }
     }
 }

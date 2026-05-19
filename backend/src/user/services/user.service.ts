@@ -85,6 +85,8 @@ export interface FoodAnalysisResult {
   estimatedPortion: string;
   confidence: number;
   needsReview: boolean;
+  nutritionAvailable: boolean;
+  nutritionMessage: string | null;
   totalKcal: number;
   protein: number;
   carbs: number;
@@ -137,6 +139,8 @@ interface FoodTemplate {
   categoryName: string;
   estimatedPortion: string;
   confidence: number;
+  nutritionAvailable: boolean;
+  nutritionMessage: string | null;
   totalKcal: number;
   protein: number;
   carbs: number;
@@ -616,6 +620,15 @@ const buildFoodTemplateFromCalAi = (data: unknown, source: AnalysisSource): Food
   const summary = toRecord(record.nutrition_summary);
   const estimate = toRecord(summary.estimated_visible_portion ?? record.estimated_nutrition);
 
+  // Cal-AI's food-content gate: when CLIP rejects the image as non-food
+  // (selfie, screenshot, etc.) the pipeline returns is_food=false instead
+  // of a synthesized dish. We must propagate that as a hard error here —
+  // otherwise the rejection payload would be mapped to "Unidentified food"
+  // at 0 kcal and silently saved into the user's history.
+  if (record.is_food === false) {
+    throw new Error('NOT_A_FOOD_IMAGE');
+  }
+
   const rawName = String(record.dish_name || '').trim();
   const name = rawName && rawName.toLowerCase() !== 'unknown'
     ? rawName
@@ -627,6 +640,19 @@ const buildFoodTemplateFromCalAi = (data: unknown, source: AnalysisSource): Food
   const carbs = best.carbs ?? 0;
   const fats = best.fat ?? 0;
   const confidence = toNumber(record.confidence) ?? 0;
+  const allMacrosZero = totalKcal === 0 && protein === 0 && carbs === 0 && fats === 0;
+  const nutritionAvailable = !allMacrosZero;
+  const nutritionMessage = nutritionAvailable
+    ? null
+    : 'Nutrition data is unavailable for this scan. The dish was identified, but Cal-AI did not return reliable calories or macros.';
+
+  // Defensive secondary gate: if Cal-AI didn't flag the image but every
+  // macro is zero AND the dish name was never confidently identified, treat
+  // it as a non-food fail too. This catches edge cases where the food gate
+  // would have rejected but Cal-AI fell back to an older response shape.
+  if (allMacrosZero && confidence < 0.7) {
+    throw new Error('NOT_A_FOOD_IMAGE');
+  }
   const categoryName = typeof vision.category === 'string' && vision.category.trim()
     ? vision.category.trim()
     : 'AI Analysis';
@@ -654,6 +680,8 @@ const buildFoodTemplateFromCalAi = (data: unknown, source: AnalysisSource): Food
     categoryName,
     estimatedPortion,
     confidence,
+    nutritionAvailable,
+    nutritionMessage,
     totalKcal: Math.round(totalKcal),
     protein: Math.round(protein),
     carbs: Math.round(carbs),
@@ -1050,6 +1078,15 @@ const buildAnalysisResult = async (resultId: number): Promise<FoodAnalysisResult
 
   const dailyTotals = await updateDailyNutritionLog(row.user_id);
   const sodium = getSodiumLevel(row.calories);
+  const nutritionAvailable = !(
+    Number(row.calories || 0) === 0
+    && Number(row.protein || 0) === 0
+    && Number(row.carbs || 0) === 0
+    && Number(row.fat || 0) === 0
+  );
+  const nutritionMessage = nutritionAvailable
+    ? null
+    : 'Nutrition data is unavailable for this scan. The dish was identified, but Cal-AI did not return reliable calories or macros.';
 
   const ingredients: FoodIngredient[] = [
     {
@@ -1073,7 +1110,9 @@ const buildAnalysisResult = async (resultId: number): Promise<FoodAnalysisResult
     detectedItems: [row.food_name],
     estimatedPortion: `${Number(row.portion_size || 1).toFixed(1)} serving`,
     confidence: Number(row.confidence_score || 0.8),
-    needsReview: Number(row.confidence_score || 0.8) < 0.75,
+    needsReview: Number(row.confidence_score || 0.8) < 0.75 || !nutritionAvailable,
+    nutritionAvailable,
+    nutritionMessage,
     totalKcal: Math.round(row.calories),
     protein: Math.round(row.protein),
     carbs: Math.round(row.carbs),
@@ -1592,7 +1631,19 @@ export const analyzeFoodImageService = async (
   );
   const imageId = (imageResult as { insertId: number }).insertId;
 
-  const template = await analyzeImageWithCalAi(imageUrl, source);
+  // The image is persisted before Cal-AI is invoked so the history table
+  // has a stable foreign key. If Cal-AI rejects the image as non-food (or
+  // any other failure), we must clean up the orphan row — otherwise every
+  // rejected scan would still appear in /food-analysis/history with no
+  // result attached.
+  let template: FoodTemplate;
+  try {
+    template = await analyzeImageWithCalAi(imageUrl, source);
+  } catch (error) {
+    await pool.query('DELETE FROM foodimages WHERE image_id = ?', [imageId]).catch(() => {});
+    throw error;
+  }
+
   const foodId = await createFoodRecord(template);
 
   const [resultInsert] = await pool.query(
@@ -1686,6 +1737,9 @@ export const saveFoodAnalysisToMealLogService = async (accountId: number | null 
   const analysis = await getFoodAnalysisByIdService(accountId, analysisId);
   if (!analysis) {
     return null;
+  }
+  if (!analysis.nutritionAvailable) {
+    throw new Error('NUTRITION_UNAVAILABLE');
   }
 
   const user = await resolveUser(accountId);

@@ -43,7 +43,11 @@ object ApiClient {
             .addInterceptor(authInterceptor)
             .addInterceptor(logging)
             .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS) // Cal-AI vision/LLM có thể chậm
+            // Cal-AI vision pipeline can take 60–120s on a cold Qwen-VL load,
+            // plus another ~10s for RAG + LLM compose. Match the web client's
+            // 6-minute ceiling so a slow first scan does not time out before
+            // the server has a chance to respond.
+            .readTimeout(360, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
 

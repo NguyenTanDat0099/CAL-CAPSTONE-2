@@ -23,7 +23,7 @@ android {
         buildConfigField(
             "String",
             "BACKEND_BASE_URL",
-            "\"https://dce7-2001-ee0-4b6b-a110-a9a7-2f9a-edce-cfc9.ngrok-free.app\""
+            "\"http://192.168.1.3:3000\""
         )
     }
 
@@ -53,6 +53,7 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
 
@@ -75,6 +76,11 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.compose.markdown)
+
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

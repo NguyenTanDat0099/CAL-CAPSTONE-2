@@ -5,6 +5,7 @@ import {
   UtensilsCrossed,
   Target,
   MessageSquare,
+  ScanLine,
   Settings,
   LogOut,
   X,
@@ -30,6 +31,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, mobileOpen, onMobile
   const navItems = [
     { icon: Home, label: 'Homepage', id: 'home' },
     { icon: LayoutDashboard, label: 'Dashboard', id: 'dashboard' },
+    { icon: ScanLine, label: 'Food Scan', id: 'scan' },
     { icon: UtensilsCrossed, label: 'Meal plans', id: 'meals' },
     { icon: Target, label: 'Diet goals', id: 'goals' },
     { icon: MessageSquare, label: 'AI Chatbox', id: 'chat' },

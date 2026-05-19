@@ -15,6 +15,8 @@ import os
 import re
 import unicodedata
 
+import numpy as np
+
 from qdrant_client import models as qdrant_models
 
 class FoodAnalysisPipeline:
@@ -96,6 +98,112 @@ class FoodAnalysisPipeline:
     def _image_key(self, image):
         return hashlib.md5(image.tobytes()).hexdigest()
 
+    # CLIP zero-shot prompts used to gate the pipeline against non-food
+    # uploads (selfies, screenshots, random objects). The pipeline used to
+    # force a "best guess" dish_name even for portraits because Qwen-VL and
+    # the candidate classifier are food-domain models — they have no
+    # "no food here" option and will surface whatever recipe row vibes
+    # closest, returning bogus 0-macro hits like "Pork Spice Rub" for a face.
+    _FOOD_PROMPTS = (
+        "a photo of food",
+        "a plate of food",
+        "a meal on a plate",
+        "a dish of food",
+        "a bowl of food",
+        "a photo of a prepared meal",
+    )
+    _NON_FOOD_PROMPTS = (
+        "a photo of a person",
+        "a portrait of a face",
+        "a selfie",
+        "a photo of an animal",
+        "a photo of clothing",
+        "a photo of an object",
+        "a photo of scenery",
+        "a photo of a building",
+        "a screenshot",
+        "a photo of a document",
+    )
+    # Minimum cosine-similarity margin (food_top - non_food_top) for the
+    # image to be accepted as food. 0.02 is loose enough to keep edge cases
+    # like dimly-lit dishes, but rejects clear non-food.
+    _FOOD_GATE_MARGIN = 0.02
+
+    def _cosine(self, a, b):
+        va = np.asarray(a, dtype=np.float32)
+        vb = np.asarray(b, dtype=np.float32)
+        na = np.linalg.norm(va)
+        nb = np.linalg.norm(vb)
+        if na == 0 or nb == 0:
+            return 0.0
+        return float(np.dot(va, vb) / (na * nb))
+
+    def _is_food_image(self, image, image_vec=None):
+        """CLIP zero-shot gate. Returns dict {is_food, food_score,
+        non_food_score, top_food_prompt, top_non_food_prompt} so we can
+        surface diagnostics in the API response when we reject."""
+        try:
+            if image_vec is None:
+                image_vec = self.clip.embed_image_pil(image)
+            food_scores = [
+                (p, self._cosine(image_vec, self.clip.embed_text(p)))
+                for p in self._FOOD_PROMPTS
+            ]
+            non_food_scores = [
+                (p, self._cosine(image_vec, self.clip.embed_text(p)))
+                for p in self._NON_FOOD_PROMPTS
+            ]
+            top_food = max(food_scores, key=lambda x: x[1])
+            top_non_food = max(non_food_scores, key=lambda x: x[1])
+            return {
+                "is_food": top_food[1] >= top_non_food[1] + self._FOOD_GATE_MARGIN,
+                "food_score": top_food[1],
+                "non_food_score": top_non_food[1],
+                "top_food_prompt": top_food[0],
+                "top_non_food_prompt": top_non_food[0],
+            }
+        except Exception as exc:
+            # If CLIP fails we *don't* want to block legitimate food uploads
+            # — fall through to the normal pipeline and let downstream stages
+            # produce a result as before.
+            print(f"[FoodAnalysis] food-gate CLIP check failed, skipping: {exc!r}")
+            return {"is_food": True, "food_score": None, "non_food_score": None}
+
+    def _build_not_food_response(self, gate, question):
+        """Structured response when the food gate rejects the image. The
+        Node backend's `buildFoodTemplateFromCalAi` checks `is_food: false`
+        and throws NOT_A_FOOD_IMAGE so the user sees a clean 422 instead
+        of a fake 'Pork Spice Rub @ 0 kcal' card."""
+        return {
+            "is_food": False,
+            "rejection_reason": "no_food_detected",
+            "dish_name": "Not a food image",
+            "confidence": 0.0,
+            "vision_detail": {},
+            "estimated_nutrition": None,
+            "retrieved_nutrition": {},
+            "nutrition_summary": {
+                "matched_item": None,
+                "basis": None,
+                "per_100g": None,
+                "declared_nutrition": None,
+                "estimated_visible_portion": None,
+                "note": "Image did not pass the food-content check (CLIP zero-shot).",
+            },
+            "nutrition_source": "not_food",
+            "warnings": [
+                "Hệ thống không phát hiện món ăn trong ảnh. Vui lòng chụp lại với một món ăn rõ ràng."
+            ],
+            "analysis_note": "Bỏ qua nhận diện vì ảnh không chứa món ăn.",
+            "answer": (
+                "Mình không nhận diện được món ăn nào trong ảnh này. "
+                "Bạn vui lòng chụp lại với món ăn ở giữa khung hình, "
+                "đủ ánh sáng và không bị che khuất nhé."
+            ),
+            "food_gate": gate,
+            "cache_hit": False,
+        }
+
     def _response_cache_key(self, image, question):
         # Image bytes are normalized to 512×512 in the route handler before
         # reaching here, so the same upload always produces the same digest.
@@ -105,9 +213,14 @@ class FoodAnalysisPipeline:
         question_digest = hashlib.sha1(
             question_norm.encode("utf-8")
         ).hexdigest()[:16]
-        # v8: bumped 2026-05-18 — filename-match path no longer leaks the
-        # English debug fields `description="Recipe row matched by filename"`
-        # and `identification_evidence=["filename_match:..."]` into the
+        # v9: bumped 2026-05-18 — added CLIP-based food/non-food gate at the
+        # start of analyze(). Pre-gate bogus results (e.g. "Pork Spice Rub"
+        # for a portrait photo, 0 kcal across the board) were getting cached
+        # by image hash and would survive forever; bumping the version
+        # invalidates them so legitimate users see the new gate's decisions.
+        # v8: filename-match path no longer leaks the English debug fields
+        # `description="Recipe row matched by filename"` and
+        # `identification_evidence=["filename_match:..."]` into the
         # user-facing payload, and `result["answer"]` is now always set so
         # the backend never falls into its English-leaky template renderer.
         # v7: to_vision_seed no longer commits a Qdrant visual-neighbor title
@@ -116,7 +229,7 @@ class FoodAnalysisPipeline:
         # v5: filename match moved BEFORE Qwen-VL so dataset uploads skip the
         # 60-100s vision call entirely. Also restored Qdrant keyword indexes
         # on image_file/image_name (got dropped during the --recreate ingest).
-        return f"food_analysis:v8:{self._image_key(image)}:{question_digest}"
+        return f"food_analysis:v9:{self._image_key(image)}:{question_digest}"
 
     def _response_cache_get(self, key):
         raw = self.response_cache.get(key)
@@ -897,6 +1010,27 @@ class FoodAnalysisPipeline:
                 except Exception as exc:
                     print("[FoodAnalysis] cache-hit log_meal failed:", exc)
             return cached
+
+        # STEP 0.5: FOOD-CONTENT GATE
+        # CLIP zero-shot: reject selfies, screenshots, random objects BEFORE
+        # paying the Qwen-VL + RAG cost. The downstream models will happily
+        # invent a dish name for any image (they're domain-restricted to
+        # food), so without this gate a portrait gets matched to a random
+        # recipe row with all-zero macros and shown as a real result.
+        # Filename short-circuit bypasses the gate — known dataset uploads
+        # are trusted by definition.
+        if not self._lookup_by_filename(filename):
+            gate = self._is_food_image(image)
+            if not gate.get("is_food", True):
+                print(
+                    f"[FoodAnalysis] food gate REJECTED image — "
+                    f"food={gate.get('food_score'):.3f} ({gate.get('top_food_prompt')!r}) "
+                    f"vs non_food={gate.get('non_food_score'):.3f} ({gate.get('top_non_food_prompt')!r})"
+                )
+                # Deliberately NOT cached — the user is expected to retry
+                # with an actual food photo. Caching a rejection by image
+                # hash would lock that image into "not food" forever.
+                return self._build_not_food_response(gate, question)
 
         # STEP 1: FILENAME SHORT-CIRCUIT (try BEFORE the slow vision call).
         # If the upload filename matches a recipe row exactly, the DB record
