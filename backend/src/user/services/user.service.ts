@@ -28,6 +28,7 @@ interface UpsertUserProfilePayload {
 interface UpdateUserGoalsPayload {
   dailyCalories?: number;
   targetWeight?: number;
+  targetDate?: string | null;
   goal?: 'lose' | 'maintain' | 'gain';
   activityLevel?: 'sedentary' | 'light' | 'moderate' | 'active';
 }
@@ -118,6 +119,7 @@ interface GoalRow {
   user_id: number;
   target_calories: number | null;
   target_weight: number | null;
+  target_date: string | null;
   goal_type: string | null;
   activity_level: string | null;
 }
@@ -170,6 +172,13 @@ const normalizeActivityLevel = (value?: string | null) => {
     return value;
   }
   return null;
+};
+
+const normalizeTargetDate = (value?: string | null) => {
+  if (value == null || value === '') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : value;
 };
 
 const hasColumn = async (tableName: string, columnName: string) => {
@@ -239,6 +248,7 @@ const initializeUserModuleSchema = async () => {
       target_carbs INT,
       target_fat INT,
       target_weight DECIMAL(5,2),
+      target_date DATE NULL,
       goal_type VARCHAR(50) DEFAULT 'weight_loss',
       activity_level VARCHAR(50) DEFAULT 'moderate',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -484,6 +494,13 @@ const initializeUserModuleSchema = async () => {
     await pool.query(`
       ALTER TABLE usergoals
       ADD COLUMN activity_level VARCHAR(50) NULL DEFAULT 'moderate'
+    `);
+  }
+
+  if (!(await hasColumn('usergoals', 'target_date'))) {
+    await pool.query(`
+      ALTER TABLE usergoals
+      ADD COLUMN target_date DATE NULL
     `);
   }
 
@@ -848,7 +865,7 @@ const ensureInitialWeightHistory = async (user: UserRow) => {
 const ensureUserGoal = async (userId: number): Promise<GoalRow | null> => {
   const [goals] = await pool.query(
     `
-      SELECT goal_id, user_id, target_calories, target_weight, goal_type, activity_level
+      SELECT goal_id, user_id, target_calories, target_weight, target_date, goal_type, activity_level
       FROM usergoals
       WHERE user_id = ?
       ORDER BY goal_id DESC
@@ -1168,6 +1185,7 @@ export const getUserGoalsService = async (accountId?: number | null) => {
     return {
       dailyCalories: goal.target_calories || null,
       targetWeight: goal.target_weight || null,
+      targetDate: goal.target_date || null,
       currentWeight: user.weight || null,
       goal: mapGoalTypeToAppGoal(goal.goal_type),
       activityLevel: normalizeActivityLevel(goal.activity_level),
@@ -1334,11 +1352,12 @@ export const updateUserGoalsService = async (accountId: number | null | undefine
   let goal = await ensureUserGoal(user.user_id);
   if (!goal) {
     const [insertResult] = await pool.query(
-      `INSERT INTO usergoals (user_id, target_calories, target_weight, goal_type, activity_level) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO usergoals (user_id, target_calories, target_weight, target_date, goal_type, activity_level) VALUES (?, ?, ?, ?, ?, ?)`,
       [
         user.user_id,
         payload.dailyCalories ?? null,
         payload.targetWeight ?? null,
+        normalizeTargetDate(payload.targetDate),
         payload.goal ? mapAppGoalToGoalType(payload.goal) : null,
         payload.activityLevel ?? null,
       ]
@@ -1348,6 +1367,7 @@ export const updateUserGoalsService = async (accountId: number | null | undefine
       user_id: user.user_id,
       target_calories: payload.dailyCalories ?? null,
       target_weight: payload.targetWeight ?? null,
+      target_date: normalizeTargetDate(payload.targetDate),
       goal_type: payload.goal ? mapAppGoalToGoalType(payload.goal) : null,
       activity_level: payload.activityLevel ?? null,
     };
@@ -1355,12 +1375,13 @@ export const updateUserGoalsService = async (accountId: number | null | undefine
     await pool.query(
       `
         UPDATE usergoals
-        SET target_calories = ?, target_weight = ?, goal_type = ?, activity_level = ?
+        SET target_calories = ?, target_weight = ?, target_date = ?, goal_type = ?, activity_level = ?
         WHERE goal_id = ?
       `,
       [
         payload.dailyCalories ?? goal.target_calories,
         payload.targetWeight ?? goal.target_weight,
+        payload.targetDate !== undefined ? normalizeTargetDate(payload.targetDate) : goal.target_date,
         payload.goal ? mapAppGoalToGoalType(payload.goal) : goal.goal_type,
         payload.activityLevel ?? goal.activity_level,
         goal.goal_id,

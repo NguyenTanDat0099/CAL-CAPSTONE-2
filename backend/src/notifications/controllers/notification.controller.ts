@@ -52,6 +52,8 @@ export const getMyNotifications = async (req: Request, res: Response) => {
   });
 };
 
+export const getAdminNotifications = getMyNotifications;
+
 export const markOneRead = async (req: Request, res: Response) => {
   const userId = await resolveUserId(req);
   if (!userId) return res.status(404).json({ message: 'USER_NOT_FOUND' });
@@ -83,6 +85,12 @@ export const markAllRead = async (req: Request, res: Response) => {
   const count = await markAllAsRead(userId);
   res.json({ updated: count });
 };
+
+export const markAdminOneRead = markOneRead;
+
+export const deleteAdminOne = deleteOne;
+
+export const markAdminAllRead = markAllRead;
 
 // ── Admin debug endpoints (mounted under /api/admin) ───────────────
 

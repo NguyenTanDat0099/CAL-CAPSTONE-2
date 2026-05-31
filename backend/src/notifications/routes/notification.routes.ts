@@ -2,8 +2,12 @@ import { Router } from 'express';
 import {
   adminListJobRuns,
   adminTriggerJob,
+  deleteAdminOne,
   deleteOne,
+  getAdminNotifications,
   getMyNotifications,
+  markAdminAllRead,
+  markAdminOneRead,
   markAllRead,
   markOneRead,
 } from '../controllers/notification.controller';
@@ -17,5 +21,9 @@ notificationUserRouter.delete('/:id', deleteOne);
 
 // Admin debug routes — mounted under /api/admin/notifications.
 export const notificationAdminRouter = Router();
+notificationAdminRouter.get('/', getAdminNotifications);
+notificationAdminRouter.patch('/:id/read', markAdminOneRead);
+notificationAdminRouter.post('/mark-all-read', markAdminAllRead);
+notificationAdminRouter.delete('/:id', deleteAdminOne);
 notificationAdminRouter.get('/runs', adminListJobRuns);
 notificationAdminRouter.post('/trigger/:name', adminTriggerJob);

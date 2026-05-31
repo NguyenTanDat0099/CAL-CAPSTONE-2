@@ -531,7 +531,7 @@ export const getAllUsersService = async (filters: UserFilters = {}) => {
   const safeLimit = Math.min(100, Math.max(1, Number(limit)));
   const offset = (safePage - 1) * safeLimit;
 
-  const conditions: string[] = [];
+  const conditions: string[] = [`LOWER(r.role_name) = 'user'`];
   const params: (string | number)[] = [];
 
   if (status && VALID_STATUSES.includes(status)) {
@@ -551,6 +551,8 @@ export const getAllUsersService = async (filters: UserFilters = {}) => {
     SELECT COUNT(*) AS total
     FROM users u
     LEFT JOIN accounts a ON a.account_id = u.account_id
+    LEFT JOIN accountroles ar ON ar.account_id = u.account_id
+    LEFT JOIN roles r ON r.role_id = ar.role_id
     ${whereClause}
   `;
 

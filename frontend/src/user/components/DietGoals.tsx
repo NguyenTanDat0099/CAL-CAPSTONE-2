@@ -59,6 +59,7 @@ export function DietGoals({
       height: 0,
       weight: 0,
       targetWeight: 0,
+      targetDate: '',
       startingWeight: 0,
       weightHistory: [],
       hasCompletedSetup: false,

@@ -661,6 +661,9 @@ interface UserProfile {
   weight?: number | null;
   dailyCalories?: number | null;
   targetWeight?: number | null;
+  targetDate?: string | null;
+  daysToTarget?: number | null;
+  weeklyWeightChangeRequired?: number | null;
   goal?: string | null;
   activityLevel?: string | null;
   foodPreferences?: FoodPreferenceSummary[];
@@ -678,11 +681,27 @@ const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile 
     if (!user) return null;
 
     const [goalRows] = await pool.query(
-      `SELECT target_calories, target_weight, goal_type, activity_level
-       FROM usergoals WHERE user_id = (SELECT user_id FROM users WHERE account_id = ? LIMIT 1) LIMIT 1`,
+      `SELECT target_calories, target_weight, target_date, goal_type, activity_level
+       FROM usergoals
+       WHERE user_id = (SELECT user_id FROM users WHERE account_id = ? LIMIT 1)
+       ORDER BY goal_id DESC
+       LIMIT 1`,
       [accountId]
     );
     const goal = (goalRows as Array<Record<string, unknown>>)[0];
+    const targetDate = typeof goal?.target_date === 'string'
+      ? goal.target_date
+      : goal?.target_date instanceof Date
+        ? goal.target_date.toISOString().slice(0, 10)
+        : null;
+    const daysToTarget = targetDate
+      ? Math.ceil((new Date(`${targetDate}T00:00:00Z`).getTime() - Date.now()) / 86_400_000)
+      : null;
+    const currentWeight = typeof user.weight === 'number' ? user.weight : Number(user.weight ?? 0);
+    const targetWeight = typeof goal?.target_weight === 'number' ? goal.target_weight : Number(goal?.target_weight ?? 0);
+    const weeklyWeightChangeRequired = daysToTarget && daysToTarget > 0 && currentWeight > 0 && targetWeight > 0
+      ? Number((((targetWeight - currentWeight) / daysToTarget) * 7).toFixed(2))
+      : null;
 
     let foodPreferences: FoodPreferenceSummary[] = [];
     try {
@@ -711,6 +730,9 @@ const fetchUserProfile = async (accountId?: number | null): Promise<UserProfile 
       weight: user.weight as number | null,
       dailyCalories: goal?.target_calories as number | null ?? null,
       targetWeight: goal?.target_weight as number | null ?? null,
+      targetDate,
+      daysToTarget: daysToTarget && daysToTarget > 0 ? daysToTarget : null,
+      weeklyWeightChangeRequired,
       goal: goal?.goal_type as string | null ?? null,
       activityLevel: goal?.activity_level as string | null ?? null,
       foodPreferences,

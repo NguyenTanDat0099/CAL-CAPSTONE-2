@@ -85,6 +85,32 @@ export const fetchAuditLogs = (limit = 50) =>
 // ──────────────────────────────────────────────
 // User Management
 // ──────────────────────────────────────────────
+export interface AdminNotification {
+  id: number;
+  type: string;
+  title: string;
+  message: string;
+  data: Record<string, unknown> | null;
+  isRead: boolean;
+  sentAt: string;
+  readAt: string | null;
+}
+
+export const fetchAdminNotifications = (limit = 30) =>
+  request<{ notifications: AdminNotification[]; unreadCount: number }>(
+    `/admin/notifications?limit=${limit}`
+  );
+
+export const markAdminNotificationRead = (notificationId: number) =>
+  request<{ updated: boolean }>(`/admin/notifications/${notificationId}/read`, {
+    method: 'PATCH',
+  });
+
+export const markAllAdminNotificationsRead = () =>
+  request<{ updated: number }>('/admin/notifications/mark-all-read', {
+    method: 'POST',
+  });
+
 export interface GetUsersParams {
   page?: number;
   limit?: number;

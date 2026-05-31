@@ -3,6 +3,7 @@ import { runCleanupJob } from './cleanup.job';
 import { runDailySummaryJob } from './daily-summary.job';
 import { runGoalAchievementJob } from './goal-achievement.job';
 import { runMealReminderJob } from './meal-reminder.job';
+import { runWeeklyWeightCheckInJob } from './weekly-weight-checkin.job';
 
 interface JobDefinition {
   name: string;
@@ -15,6 +16,7 @@ interface JobDefinition {
 const JOBS: JobDefinition[] = [
   { name: 'meal_reminder', cron: '* * * * *', run: runMealReminderJob },
   { name: 'daily_summary', cron: '0 21 * * *', run: runDailySummaryJob },
+  { name: 'weekly_weight_checkin', cron: '0 9 * * *', run: runWeeklyWeightCheckInJob },
   { name: 'goal_achievement', cron: '*/10 * * * *', run: runGoalAchievementJob },
   { name: 'cleanup', cron: '0 3 * * *', run: runCleanupJob },
 ];

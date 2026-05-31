@@ -25,6 +25,7 @@ import {
   getAdminAuditLogsService,
   AdminServiceError,
 } from '../services/admin.service';
+import { createAdminNotifications } from '../../notifications/services/notification.service';
 
 // ──────────────────────────────────────────────
 // Helper
@@ -61,6 +62,23 @@ const writeAuditLog = async (
     });
   } catch (error) {
     console.error('[AdminAudit] Failed to write audit log:', error);
+  }
+};
+
+const notifyAdmins = async (
+  title: string,
+  message: string,
+  data: Record<string, unknown>
+) => {
+  try {
+    await createAdminNotifications({
+      type: 'system',
+      title,
+      message,
+      data,
+    });
+  } catch (error) {
+    console.error('[AdminNotification] Failed to write notification:', error);
   }
 };
 
@@ -165,6 +183,11 @@ export const createUser = async (req: Request, res: Response) => {
 
     const result = await createUserService({ email, fullName, gender, age, height, weight });
     await writeAuditLog(req, 'CREATE_USER', 'user', result.user?.id, `Created user ${email}`);
+    await notifyAdmins(
+      'New user added',
+      `${result.user.name} (${email}) was added to the system.`,
+      { event: 'USER_CREATED_BY_ADMIN', userId: result.user?.id, email, adminAccountId: req.auth?.accountId }
+    );
     res.status(201).json({ message: 'User created successfully', data: result });
   } catch (error) {
     handleError(error, res);
@@ -283,6 +306,11 @@ export const createFood = async (req: Request, res: Response) => {
   try {
     const food = await createAdminFoodService(req.body);
     await writeAuditLog(req, 'CREATE_FOOD', 'food', food.id, `Created food ${food.name}`);
+    await notifyAdmins(
+      'Content item created',
+      `${food.name} was added in Content Manager.`,
+      { event: 'CONTENT_CREATED', foodId: food.id, foodName: food.name, adminAccountId: req.auth?.accountId }
+    );
     res.status(201).json({ message: 'Food created successfully', data: food });
   } catch (error) {
     handleError(error, res);
@@ -311,6 +339,11 @@ export const updateFood = async (req: Request, res: Response) => {
     const foodId = parseIntParam(req.params.foodId, 0);
     const food = await updateAdminFoodService(foodId, req.body);
     await writeAuditLog(req, 'UPDATE_FOOD', 'food', foodId, `Updated food ${food.name}`);
+    await notifyAdmins(
+      'Content item updated',
+      `${food.name} was updated in Content Manager.`,
+      { event: 'CONTENT_UPDATED', foodId, foodName: food.name, adminAccountId: req.auth?.accountId }
+    );
     res.status(200).json({ message: 'Food updated successfully', data: food });
   } catch (error) {
     handleError(error, res);
@@ -320,8 +353,14 @@ export const updateFood = async (req: Request, res: Response) => {
 export const deleteFood = async (req: Request, res: Response) => {
   try {
     const foodId = parseIntParam(req.params.foodId, 0);
+    const existingFood = foodId > 0 ? await getAdminFoodByIdService(foodId).catch(() => null) : null;
     const result = await deleteAdminFoodService(foodId);
     await writeAuditLog(req, 'DELETE_FOOD', 'food', foodId, `Deleted food ${foodId}`);
+    await notifyAdmins(
+      'Content item deleted',
+      `${existingFood?.name ?? `Food #${foodId}`} was deleted from Content Manager.`,
+      { event: 'CONTENT_DELETED', foodId, foodName: existingFood?.name ?? null, adminAccountId: req.auth?.accountId }
+    );
     res.status(200).json({ message: 'Food deleted successfully', data: result });
   } catch (error) {
     handleError(error, res);

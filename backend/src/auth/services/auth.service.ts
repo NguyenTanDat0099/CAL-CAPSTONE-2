@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import pool from '../../shared/database/db';
 import { emailSenderConfigured, sendOtpEmail } from '../../shared/email/mailer';
 import { jwtSecret, jwtExpiresIn } from '../../shared/config/jwt';
+import { createAdminNotifications } from '../../notifications/services/notification.service';
 
 interface AccountRow {
   account_id: number;
@@ -264,6 +265,18 @@ export const verifyRegisterOtpService = async ({ email, code }: VerifyRegisterOt
 
   registerOtps.delete(email.toLowerCase());
 
+  try {
+    await createAdminNotifications({
+      type: 'system',
+      title: 'New user registered',
+      message: `${pending.username} (${email}) registered a new account.`,
+      data: { event: 'USER_REGISTERED', accountId, email, username: pending.username },
+      dedupeKey: `user-registered:${accountId}`,
+    });
+  } catch (error) {
+    console.error('[AdminNotification] Failed to notify new registration:', error);
+  }
+
   return {
     accountId,
     email,
@@ -279,6 +292,10 @@ export const loginService = async ({ email, password }: LoginPayload) => {
 
   if (!account.email_verified) {
     throw new Error('EMAIL_NOT_VERIFIED');
+  }
+
+  if (normalizeStatus(account.status) === 'suspended') {
+    throw new Error('ACCOUNT_SUSPENDED');
   }
 
   return {

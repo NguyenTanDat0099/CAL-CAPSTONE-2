@@ -101,7 +101,10 @@ export function Settings({ profile, setProfile }: SettingsProps) {
   const weightChangeLabel = latestWeight && previousWeight
     ? `${latestWeight.weight - previousWeight.weight >= 0 ? '+' : ''}${(latestWeight.weight - previousWeight.weight).toFixed(1)}kg since last entry`
     : 'No previous weight entry yet';
-  const narrative = `${objectiveLabel} goal with ${(activityLabels[profile.activityLevel] || 'Moderate').toLowerCase()} activity. Current weight is ${profile.weight || '--'}kg${profile.targetWeight ? ` with a ${profile.targetWeight}kg target` : ''}.`;
+  const targetDateLabel = profile.targetDate
+    ? new Date(`${profile.targetDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : null;
+  const narrative = `${objectiveLabel} goal with ${(activityLabels[profile.activityLevel] || 'Moderate').toLowerCase()} activity. Current weight is ${profile.weight || '--'}kg${profile.targetWeight ? ` with a ${profile.targetWeight}kg target` : ''}${targetDateLabel ? ` by ${targetDateLabel}` : ''}.`;
 
   return (
     <div className="flex-1 lg:ml-64 px-4 pt-20 pb-10 sm:px-6 sm:pt-24 lg:p-10 min-h-screen bg-bg-dark text-white relative overflow-y-auto">
@@ -249,6 +252,11 @@ export function Settings({ profile, setProfile }: SettingsProps) {
                       ? `${weightChangeLabel}. ${sortedWeightHistory.length} weight ${sortedWeightHistory.length === 1 ? 'entry' : 'entries'} recorded.`
                       : 'Set a current weight and target weight to calculate progress.'}
                   </p>
+                  {targetDateLabel && (
+                    <p className="text-[11px] font-black uppercase tracking-widest opacity-60">
+                      Target date: {targetDateLabel}
+                    </p>
+                  )}
                 </div>
               </div>
             </section>
@@ -386,6 +394,16 @@ export function Settings({ profile, setProfile }: SettingsProps) {
                         value={editForm.weight}
                         onChange={(e) => setEditForm({ ...editForm, weight: parseFloat(e.target.value) || 0 })}
                         className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-brand-orange transition-colors font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-text-muted mb-2 block">Goal Deadline</label>
+                      <input
+                        type="date"
+                        value={editForm.targetDate || ''}
+                        onChange={(e) => setEditForm({ ...editForm, targetDate: e.target.value })}
+                        disabled={editForm.goal === 'maintain'}
+                        className="w-full bg-bg-dark border border-white/10 rounded-2xl px-6 py-4 focus:outline-none focus:border-brand-orange transition-colors font-bold disabled:opacity-50"
                       />
                     </div>
                   </div>

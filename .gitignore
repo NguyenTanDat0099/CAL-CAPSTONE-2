@@ -6,7 +6,7 @@ coverage/
 *.log
 .codex-run/
 ngrok.yml
-.claude/settings.local.json
+.claude/
 
 # Local training datasets are too large for the application repo.
 /food-101/

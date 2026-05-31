@@ -30,7 +30,9 @@ import {
   fetchUsers, fetchUserById, fetchUserStatistics,
   createUser, updateUser, updateUserStatus, deleteUser,
   fetchFoods, createFood, bulkImportFoods, updateFood, deleteFood, fetchAdminAnalytics,
-  fetchSecurityOverview, fetchRoleAccounts, updateAccountRole, fetchAuditLogs
+  fetchSecurityOverview, fetchRoleAccounts, updateAccountRole, fetchAuditLogs,
+  fetchAdminNotifications, markAdminNotificationRead, markAllAdminNotificationsRead,
+  type AdminNotification
 } from '../api';
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -106,6 +108,21 @@ function LoadingSpinner({ size = 24 }: { size?: number }) {
   );
 }
 
+const formatNotificationTime = (value: string) => {
+  const sentAt = new Date(value).getTime();
+  if (!Number.isFinite(sentAt)) return '';
+  const diffMs = Date.now() - sentAt;
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) return 'Just now';
+  if (diffMs < hour) return `${Math.floor(diffMs / minute)} min ago`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)} hr ago`;
+  return new Date(value).toLocaleDateString();
+};
+
+const normalizeAccountStatus = (status?: string | null) => (status || 'active').toLowerCase();
+
 // ─── App ────────────────────────────────────────────
 interface AdminAppProps {
   onLogout: () => void;
@@ -117,6 +134,8 @@ export default function AdminApp({ onLogout }: AdminAppProps) {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [adminProfile, setAdminProfile] = useState<AdminProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
+  const [notifications, setNotifications] = useState<AdminNotification[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   useEffect(() => {
     fetchAdminProfile()
@@ -130,9 +149,53 @@ export default function AdminApp({ onLogout }: AdminAppProps) {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const notifications = [
-    { id: '1', message: 'System is running normally', time: 'Just now' },
-  ];
+  const loadNotifications = useCallback(async () => {
+    try {
+      const res = await fetchAdminNotifications(30);
+      setNotifications(res.notifications);
+      setUnreadNotifications(res.unreadCount);
+      return res.unreadCount;
+    } catch (error) {
+      console.error('[AdminNotifications] Failed to load notifications:', error);
+      return 0;
+    }
+  }, []);
+
+  useEffect(() => {
+    loadNotifications();
+    const interval = window.setInterval(loadNotifications, 30000);
+    return () => window.clearInterval(interval);
+  }, [loadNotifications]);
+
+  const handleOpenNotifications = async () => {
+    const nextOpen = !showNotifications;
+    setShowNotifications(nextOpen);
+    if (!nextOpen) return;
+
+    const unreadCount = await loadNotifications();
+    if (unreadCount > 0) {
+      try {
+        await markAllAdminNotificationsRead();
+        setUnreadNotifications(0);
+        setNotifications(prev => prev.map(item => ({ ...item, isRead: true })));
+      } catch (error) {
+        console.error('[AdminNotifications] Failed to mark notifications read:', error);
+      }
+    }
+  };
+
+  const handleNotificationClick = async (notification: AdminNotification) => {
+    if (notification.isRead) return;
+    try {
+      await markAdminNotificationRead(notification.id);
+      setUnreadNotifications(count => Math.max(0, count - 1));
+      setNotifications(prev => prev.map(item => (
+        item.id === notification.id ? { ...item, isRead: true } : item
+      )));
+    } catch (error) {
+      console.error('[AdminNotifications] Failed to mark notification read:', error);
+    }
+  };
 
   const displayProfile: AdminProfile = adminProfile ?? {
     id: 0,
@@ -173,10 +236,15 @@ export default function AdminApp({ onLogout }: AdminAppProps) {
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              onClick={() => setShowNotifications(!showNotifications)}
+              onClick={handleOpenNotifications}
               className="w-12 h-12 rounded-2xl bg-surface-dark border border-white/5 flex items-center justify-center text-text-muted hover:text-white transition-colors relative"
             >
               <Bell size={20} />
+              {unreadNotifications > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-brand-orange text-bg-dark text-[10px] font-black flex items-center justify-center">
+                  {unreadNotifications > 9 ? '9+' : unreadNotifications}
+                </span>
+              )}
             </motion.button>
 
             <AnimatePresence>
@@ -192,11 +260,21 @@ export default function AdminApp({ onLogout }: AdminAppProps) {
                     <button onClick={() => setShowNotifications(false)} className="text-text-muted hover:text-white"><X size={16} /></button>
                   </div>
                   <div className="max-h-96 overflow-y-auto bg-surface-dark custom-scrollbar">
-                    {notifications.map(n => (
-                      <div key={n.id} className="p-6 border-b border-white/5 hover:bg-white/5 transition-colors">
-                        <p className="text-sm font-medium pr-6">{n.message}</p>
-                        <p className="text-[10px] text-text-muted mt-2 font-bold uppercase tracking-widest">{n.time}</p>
-                      </div>
+                    {notifications.length === 0 ? (
+                      <div className="p-6 text-sm text-text-muted font-medium">No notifications yet.</div>
+                    ) : notifications.map(n => (
+                      <button
+                        key={n.id}
+                        onClick={() => handleNotificationClick(n)}
+                        className="w-full text-left p-6 border-b border-white/5 hover:bg-white/5 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm font-black uppercase tracking-tight text-white">{n.title}</p>
+                          {!n.isRead && <span className="mt-1 w-2 h-2 rounded-full bg-brand-orange flex-shrink-0" />}
+                        </div>
+                        <p className="text-sm font-medium pr-6 mt-2 text-text-muted">{n.message}</p>
+                        <p className="text-[10px] text-text-muted mt-3 font-bold uppercase tracking-widest">{formatNotificationTime(n.sentAt)}</p>
+                      </button>
                     ))}
                   </div>
                 </motion.div>
@@ -572,7 +650,7 @@ function UserManagement({ showToast }: ViewProps) {
             <button type="submit" className="px-4 py-2 bg-brand-orange/20 text-brand-orange rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-brand-orange/30 transition-colors">Search</button>
           </form>
           <div className="flex bg-surface-dark border border-white/5 p-1 rounded-2xl shadow-lg">
-            {['All', 'Active', 'Inactive', 'Suspended'].map(f => (
+            {['All', 'Active', 'Suspended'].map(f => (
               <button key={f} onClick={() => { setFilter(f); loadUsers(1, f, searchInput); }}
                 className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${filter === f ? 'bg-white/10 text-white' : 'text-text-muted hover:text-white'}`}>
                 {f}
@@ -632,8 +710,8 @@ function UserManagement({ showToast }: ViewProps) {
                 <td className="px-8 py-6">
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${
-                      user.status === 'active' ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' :
-                      user.status === 'suspended' ? 'bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.5)]' :
+                      normalizeAccountStatus(user.status) === 'active' ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.5)]' :
+                      normalizeAccountStatus(user.status) === 'suspended' ? 'bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.5)]' :
                       'bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.5)]'
                     }`} />
                     <span className="text-xs font-black uppercase tracking-widest capitalize">{user.status || 'active'}</span>
@@ -827,6 +905,7 @@ function UserDetailModal({
   const [userDetails, setUserDetails] = useState<User>(user);
   const [userStats, setUserStats] = useState<import('./types').UserStatistics | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
+  const status = normalizeAccountStatus(userDetails.status);
 
   useEffect(() => {
     // Fetch full user details to get goal info
@@ -933,9 +1012,9 @@ function UserDetailModal({
         </div>
 
         <div className="flex gap-4 pt-4">
-          <button onClick={() => onStatusChange(user.status === 'active' ? 'suspended' : 'active')}
-            className={`flex-1 py-5 ${user.status === 'active' ? 'bg-red-400/10 text-red-400 border border-red-400/20 hover:bg-red-400 hover:text-white' : 'bg-green-400/10 text-green-400 border border-green-400/20 hover:bg-green-400 hover:text-white'} rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-lg`}>
-            {user.status === 'active' ? 'Suspend Account' : 'Activate Account'}
+          <button onClick={() => onStatusChange(status === 'active' ? 'suspended' : 'active')}
+            className={`flex-1 py-5 ${status === 'active' ? 'bg-red-400/10 text-red-400 border border-red-400/20 hover:bg-red-400 hover:text-white' : 'bg-green-400/10 text-green-400 border border-green-400/20 hover:bg-green-400 hover:text-white'} rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-lg`}>
+            {status === 'active' ? 'Suspend Account' : 'Activate Account'}
           </button>
           <button onClick={onClose}
             className="px-10 py-5 bg-brand-orange text-bg-dark rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-transform active:scale-95 shadow-xl shadow-brand-orange/20">Close</button>
@@ -1056,6 +1135,7 @@ function BanConfirmModal({
 }) {
   const [action, setAction] = useState<'suspend' | 'activate' | 'delete' | null>(null);
   const [loading, setLoading] = useState(false);
+  const status = normalizeAccountStatus(user.status);
 
   const handleAction = async (act: 'suspend' | 'activate' | 'delete') => {
     if (act === 'delete' && action !== 'delete') {
@@ -1105,18 +1185,18 @@ function BanConfirmModal({
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {user.status !== 'active' && (
+            {status !== 'active' && (
               <button onClick={() => handleAction('activate')} disabled={loading}
                 className="w-full py-5 bg-green-400/10 text-green-400 border border-green-400/20 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-green-400 hover:text-white transition-all shadow-lg disabled:opacity-50 flex items-center justify-center gap-2">
                 {loading && action === 'activate' ? <LoadingSpinner size={16} /> : null}
                 Activate Account
               </button>
             )}
-            {user.status === 'active' && (
+            {status !== 'suspended' && (
               <button onClick={() => handleAction('suspend')} disabled={loading}
                 className="w-full py-5 bg-red-500/10 text-red-400 border border-red-500/20 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-500 hover:text-white transition-all shadow-lg disabled:opacity-50 flex items-center justify-center gap-2">
                 {loading && action === 'suspend' ? <LoadingSpinner size={16} /> : null}
-                Suspend Account
+                Suspended
               </button>
             )}
             <button onClick={() => handleAction('delete')} disabled={loading}

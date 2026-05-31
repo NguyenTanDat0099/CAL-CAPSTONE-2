@@ -5,6 +5,7 @@ import { UserProfile, Goal, ActivityLevel, Gender, WeightHistoryEntry } from '..
 
 interface FormErrors {
   targetWeight?: string;
+  targetDate?: string;
   age?: string;
   height?: string;
   weight?: string;
@@ -24,6 +25,19 @@ function validateProfile(p: UserProfile): FormErrors {
     errors.targetWeight = 'Target weight is required. Please enter your goal weight in kg.';
   } else if (p.targetWeight < 20 || p.targetWeight > 300) {
     errors.targetWeight = 'Target weight must be between 20 and 300 kg.';
+  }
+
+  if (p.goal !== 'maintain') {
+    if (!p.targetDate) {
+      errors.targetDate = 'Target date is required. Choose when you want to reach your goal weight.';
+    } else {
+      const date = new Date(`${p.targetDate}T00:00:00`);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (Number.isNaN(date.getTime()) || date <= today) {
+        errors.targetDate = 'Target date must be in the future.';
+      }
+    }
   }
 
   if (!p.age || p.age <= 0) {
@@ -186,6 +200,12 @@ export function ProfileSetup({ profile, setProfile, onLogout }: ProfileSetupProp
                       {errors.targetWeight}
                     </li>
                   )}
+                  {errors.targetDate && (
+                    <li className="text-xs text-red-400/80 flex items-start gap-2">
+                      <span className="text-red-400 shrink-0 mt-0.5">â€¢</span>
+                      {errors.targetDate}
+                    </li>
+                  )}
                   {errors.age && (
                     <li className="text-xs text-red-400/80 flex items-start gap-2">
                       <span className="text-red-400 shrink-0 mt-0.5">•</span>
@@ -287,44 +307,80 @@ export function ProfileSetup({ profile, setProfile, onLogout }: ProfileSetupProp
                 Your goal weight — used to determine your primary goal direction.
               </p>
 
-              <div className="max-w-xs">
-                <label className="block text-sm font-bold mb-3">
-                  Target Weight (kg) <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={profile.targetWeight || ''}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === '') {
-                      setProfile(prev => ({ ...prev, targetWeight: 0 }));
-                    } else {
-                      const parsed = parseFloat(raw);
-                      if (!isNaN(parsed)) setProfile(prev => ({ ...prev, targetWeight: parsed }));
-                    }
-                  }}
-                  className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${
-                    errors.targetWeight
-                      ? 'border-red-500 focus:border-red-400'
-                      : 'border-white/5 focus:border-brand-orange'
-                  }`}
-                  placeholder="e.g. 65"
-                />
-                <AnimatePresence>
-                  {errors.targetWeight && (
-                    <motion.p
-                      key="targetWeight-error"
-                      initial={{ opacity: 0, y: -4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      className="text-red-400 text-xs mt-2 flex items-center gap-1.5 font-medium"
-                    >
-                      <AlertTriangle size={12} className="shrink-0" />
-                      {errors.targetWeight}
-                    </motion.p>
-                  )}
-                </AnimatePresence>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 sm:gap-x-8 gap-y-5 sm:gap-y-6 max-w-2xl">
+                <div>
+                  <label className="block text-sm font-bold mb-3">
+                    Target Weight (kg) <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={profile.targetWeight || ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === '') {
+                        setProfile(prev => ({ ...prev, targetWeight: 0 }));
+                      } else {
+                        const parsed = parseFloat(raw);
+                        if (!isNaN(parsed)) setProfile(prev => ({ ...prev, targetWeight: parsed }));
+                      }
+                    }}
+                    className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors ${
+                      errors.targetWeight
+                        ? 'border-red-500 focus:border-red-400'
+                        : 'border-white/5 focus:border-brand-orange'
+                    }`}
+                    placeholder="e.g. 65"
+                  />
+                  <AnimatePresence>
+                    {errors.targetWeight && (
+                      <motion.p
+                        key="targetWeight-error"
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className="text-red-400 text-xs mt-2 flex items-center gap-1.5 font-medium"
+                      >
+                        <AlertTriangle size={12} className="shrink-0" />
+                        {errors.targetWeight}
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold mb-3">
+                    Goal Deadline {profile.goal !== 'maintain' && <span className="text-red-400">*</span>}
+                  </label>
+                  <input
+                    type="date"
+                    value={profile.targetDate || ''}
+                    onChange={(e) => setProfile(prev => ({ ...prev, targetDate: e.target.value }))}
+                    disabled={profile.goal === 'maintain'}
+                    className={`w-full bg-surface-dark border rounded-2xl p-4 text-white focus:outline-none transition-colors disabled:opacity-50 ${
+                      errors.targetDate
+                        ? 'border-red-500 focus:border-red-400'
+                        : 'border-white/5 focus:border-brand-orange'
+                    }`}
+                  />
+                  <AnimatePresence>
+                    {errors.targetDate && (
+                      <motion.p
+                        key="targetDate-error"
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className="text-red-400 text-xs mt-2 flex items-center gap-1.5 font-medium"
+                      >
+                        <AlertTriangle size={12} className="shrink-0" />
+                        {errors.targetDate}
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                  <p className="mt-2 text-xs text-text-muted">
+                    CalAI uses this timeline to adjust your calorie target and meal plan recommendations.
+                  </p>
+                </div>
               </div>
             </section>
 

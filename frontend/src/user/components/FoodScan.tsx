@@ -48,6 +48,8 @@ interface FoodAnalysis {
   estimatedPortion: string;
   confidence: number;
   needsReview: boolean;
+  nutritionAvailable?: boolean;
+  nutritionMessage?: string | null;
   totalKcal: number;
   protein: number;
   carbs: number;
@@ -342,7 +344,7 @@ export function FoodScan({ onSavedToDiet }: FoodScanProps) {
     try {
       const response = await fetch(buildApiUrl(`/users/food-analysis/${item.id}`), {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${localStorage.getItem(AUTH_TOKEN_KEY) || ''}` },
+        headers: getAuthHeaders(),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (err) {
@@ -350,6 +352,13 @@ export function FoodScan({ onSavedToDiet }: FoodScanProps) {
       setHistoryError(err instanceof Error ? err.message : 'Failed to delete scan.');
     }
   };
+
+  const resultHasNutrition = !!result && result.nutritionAvailable !== false && (
+    result.totalKcal > 0 ||
+    result.protein > 0 ||
+    result.carbs > 0 ||
+    result.fats > 0
+  );
 
   return (
     <div className="flex-1 lg:ml-64 min-h-screen pt-20 pb-24 px-4 sm:px-6 lg:px-10 lg:pt-12">
@@ -696,18 +705,32 @@ export function FoodScan({ onSavedToDiet }: FoodScanProps) {
                     </div>
 
                     <div className="p-6 sm:p-8">
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                        <NutritionCell
-                          icon={<Flame size={16} />}
-                          value={result.totalKcal}
-                          unit="kcal"
-                          label="Calories"
-                          accent
-                        />
-                        <NutritionCell value={result.protein} unit="g" label="Protein" />
-                        <NutritionCell value={result.carbs} unit="g" label="Carbs" />
-                        <NutritionCell value={result.fats} unit="g" label="Fat" />
-                      </div>
+                      {resultHasNutrition ? (
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                          <NutritionCell
+                            icon={<Flame size={16} />}
+                            value={result.totalKcal}
+                            unit="kcal"
+                            label="Calories"
+                            accent
+                          />
+                          <NutritionCell value={result.protein} unit="g" label="Protein" />
+                          <NutritionCell value={result.carbs} unit="g" label="Carbs" />
+                          <NutritionCell value={result.fats} unit="g" label="Fat" />
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-white/10 bg-bg-dark/60 px-4 py-4">
+                          <div className="flex items-start gap-3 text-text-muted">
+                            <Sparkles size={16} className="mt-0.5 text-brand-orange" />
+                            <div>
+                              <p className="text-sm font-black text-white">Nutrition data unavailable</p>
+                              <p className="mt-1 text-xs">
+                                {result.nutritionMessage || 'Cal-AI identified the dish, but reliable calories and macros were not returned for this scan.'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="mt-5 grid sm:grid-cols-2 gap-3">
                         <InfoChip
@@ -748,13 +771,15 @@ export function FoodScan({ onSavedToDiet }: FoodScanProps) {
                         </button>
                         <button
                           onClick={handleSaveToDiet}
-                          disabled={saving || result.status === 'saved'}
+                          disabled={saving || result.status === 'saved' || !resultHasNutrition}
                           className="flex-[1.4] inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-brand-orange text-bg-dark text-sm font-black uppercase tracking-widest shadow-lg shadow-brand-orange/30 hover:bg-brand-orange-dark transition-colors disabled:opacity-60"
                         >
                           {saving ? (
                             <><Loader2 size={16} className="animate-spin" /> Saving…</>
                           ) : result.status === 'saved' ? (
                             <><CheckCircle2 size={16} /> Saved to diet log</>
+                          ) : !resultHasNutrition ? (
+                            <><Utensils size={16} /> No nutrition data</>
                           ) : (
                             <><Utensils size={16} /> Save to diet log</>
                           )}
@@ -935,7 +960,7 @@ export function FoodScan({ onSavedToDiet }: FoodScanProps) {
                             {item.detectedDish || item.name || 'Unknown dish'}
                           </p>
                           <p className="text-[11px] text-text-muted truncate">
-                            {Math.round(item.totalKcal)} kcal • {Math.round((item.confidence || 0) * 100)}%
+                            {item.nutritionAvailable === false || (item.totalKcal <= 0 && item.protein <= 0 && item.carbs <= 0 && item.fats <= 0) ? 'Nutrition unavailable' : `${Math.round(item.totalKcal)} kcal - ${Math.round((item.confidence || 0) * 100)}%`}
                           </p>
                           <p className="text-[10px] text-text-muted/80 mt-0.5 flex items-center gap-1">
                             <Clock size={10} />

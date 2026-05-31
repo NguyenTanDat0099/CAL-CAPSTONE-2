@@ -35,6 +35,7 @@ export interface UserProfile {
   height: number;
   weight: number;
   targetWeight: number;
+  targetDate: string;
   startingWeight: number;
   weightHistory: WeightHistoryEntry[];
   hasCompletedSetup: boolean;
@@ -53,6 +54,10 @@ export interface BellNotification {
   isRead: boolean;
   sentAt: string;
 }
+
+const isWeightCheckinNotification = (value: unknown): boolean => (
+  Boolean(value && typeof value === 'object' && (value as { action?: unknown }).action === 'weight_checkin')
+);
 
 type AddToDietOptions = {
   alreadyPersisted?: boolean;
@@ -136,6 +141,7 @@ const createDefaultProfile = (): UserProfile => ({
   height: 0,
   weight: 0,
   targetWeight: 0,
+  targetDate: '',
   startingWeight: 0,
   weightHistory: [],
   hasCompletedSetup: false,
@@ -206,12 +212,27 @@ export default function App({ onLogout }: UserAppProps) {
     };
 
     const tdee = bmr * activityFactors[profile.activityLevel];
-
-    const estimatedTarget = profile.goal === 'lose'
-      ? tdee - 500
+    const targetDate = profile.targetDate ? new Date(`${profile.targetDate}T00:00:00`) : null;
+    const daysToTarget = targetDate && !Number.isNaN(targetDate.getTime())
+      ? Math.ceil((targetDate.getTime() - Date.now()) / 86_400_000)
+      : 0;
+    const weightDelta = profile.targetWeight > 0 ? profile.targetWeight - profile.weight : 0;
+    const timelineAdjustment = daysToTarget > 0 && Math.abs(weightDelta) > 0.05
+      ? Math.round((weightDelta * 7700) / daysToTarget)
+      : 0;
+    const boundedTimelineAdjustment = profile.goal === 'lose'
+      ? Math.max(-1000, Math.min(-250, timelineAdjustment))
       : profile.goal === 'gain'
-        ? tdee + 300
-        : tdee;
+        ? Math.min(500, Math.max(150, timelineAdjustment))
+        : 0;
+
+    const estimatedTarget = boundedTimelineAdjustment !== 0
+      ? tdee + boundedTimelineAdjustment
+      : profile.goal === 'lose'
+        ? tdee - 500
+        : profile.goal === 'gain'
+          ? tdee + 300
+          : tdee;
 
     return Math.max(getMinimumDailyTarget(profile.gender), Math.round(estimatedTarget));
   }, [profile]);
@@ -450,6 +471,7 @@ export default function App({ onLogout }: UserAppProps) {
           height: Number(profileResult.data?.height || 0),
           weight: currentWeight,
           targetWeight: Number(goalsResult.data?.targetWeight || 0),
+          targetDate: typeof goalsResult.data?.targetDate === 'string' ? goalsResult.data.targetDate.slice(0, 10) : '',
           startingWeight: Number(profileResult.data?.startingWeight || weightHistory[0]?.weight || currentWeight),
           weightHistory,
           hasCompletedSetup: Boolean(profileResult.data?.hasCompletedSetup),
@@ -512,6 +534,7 @@ export default function App({ onLogout }: UserAppProps) {
             body: JSON.stringify({
               dailyCalories: baseTarget,
               targetWeight: profile.targetWeight,
+              targetDate: profile.targetDate || null,
               goal: profile.goal,
               activityLevel: profile.activityLevel,
             }),
@@ -812,7 +835,13 @@ export default function App({ onLogout }: UserAppProps) {
                     notifications.map(n => (
                       <div
                         key={n.id}
-                        className={`p-6 border-b border-white/5 hover:bg-white/5 transition-colors relative group ${n.isRead ? 'opacity-60' : ''}`}
+                        onClick={() => {
+                          if (isWeightCheckinNotification(n.data)) {
+                            setActiveTab('settings');
+                            setShowNotifications(false);
+                          }
+                        }}
+                        className={`p-6 border-b border-white/5 hover:bg-white/5 transition-colors relative group ${isWeightCheckinNotification(n.data) ? 'cursor-pointer' : ''} ${n.isRead ? 'opacity-60' : ''}`}
                       >
                         {!n.isRead && (
                           <span className="absolute top-7 left-2 w-1.5 h-1.5 rounded-full bg-brand-orange" aria-hidden />
@@ -823,7 +852,10 @@ export default function App({ onLogout }: UserAppProps) {
                           {formatNotificationTime(n.sentAt)}
                         </p>
                         <button
-                          onClick={() => removeNotification(n.id)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            removeNotification(n.id);
+                          }}
                           className="absolute top-6 right-6 text-text-muted hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
                           title="Đánh dấu đã đọc"
                         >

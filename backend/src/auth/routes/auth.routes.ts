@@ -12,7 +12,7 @@ import {
 } from '../controllers/auth.controller';
 
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 30 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,

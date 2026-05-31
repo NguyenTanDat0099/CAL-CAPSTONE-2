@@ -23,6 +23,7 @@ const inputClasses =
 
 const labelClasses = 'mb-2 block text-[0.72rem] font-semibold text-brand-orange';
 const authErrorMessages: Record<string, string> = {
+  ACCOUNT_SUSPENDED: 'Your account has been suspended.',
   INVALID_CREDENTIALS: 'Email hoặc mật khẩu không đúng.',
   EMAIL_ALREADY_EXISTS: 'Email này đã được đăng ký.',
   EMAIL_NOT_VERIFIED: 'Tài khoản chưa xác minh. Vui lòng hoàn tất bước OTP đăng ký.',
@@ -528,11 +529,6 @@ export default function AuthApp({ onLoginSuccess }: AuthAppProps) {
           <div className="mt-4 space-y-2">
             {error && <p className="text-center text-[0.72rem] text-red-400">{error}</p>}
             {info && <p className="text-center text-[0.72rem] text-brand-orange">{info}</p>}
-            {view === 'login' && (
-              <p className="text-center text-[0.68rem] text-white/40">
-                Default admin: admin@calai.local / Admin123! | Demo user: user@calai.local / User123!
-              </p>
-            )}
           </div>
         )}
       </div>

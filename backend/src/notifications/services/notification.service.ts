@@ -54,6 +54,36 @@ export const createNotification = async (
   return result.insertId;
 };
 
+export const createAdminNotifications = async (
+  input: Omit<CreateNotificationInput, 'userId' | 'dedupeKey'> & { dedupeKey?: string | null }
+): Promise<number> => {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT u.user_id
+      FROM users u
+      INNER JOIN accountroles ar ON ar.account_id = u.account_id
+      INNER JOIN roles r ON r.role_id = ar.role_id
+      INNER JOIN accounts a ON a.account_id = u.account_id
+      WHERE LOWER(r.role_name) = 'admin'
+        AND COALESCE(a.status, 'active') = 'active'
+    `
+  );
+
+  let created = 0;
+  for (const row of rows) {
+    const id = await createNotification({
+      userId: Number(row.user_id),
+      type: input.type,
+      title: input.title,
+      message: input.message,
+      data: input.data,
+      dedupeKey: input.dedupeKey ? `${input.dedupeKey}:${row.user_id}` : null,
+    });
+    if (id) created += 1;
+  }
+  return created;
+};
+
 export interface ListNotificationsOptions {
   limit?: number;
   unreadOnly?: boolean;

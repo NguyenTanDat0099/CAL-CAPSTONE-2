@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS usergoals (
     target_carbs INT,
     target_fat INT,
     target_weight DECIMAL(5,2),
+    target_date DATE NULL,
     goal_type ENUM('weight_loss', 'muscle_gain', 'maintenance', 'general') DEFAULT 'general',
     activity_level VARCHAR(50) DEFAULT 'moderate',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
